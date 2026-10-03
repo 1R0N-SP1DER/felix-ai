@@ -21,6 +21,37 @@ class GeminiError(Exception):
     pass
 
 
+def _http_error(response) -> "GeminiError":
+    """Build the error for a non-200 reply. For quota errors, append the
+    quota metric id and retry delay (short, safe fields) so a 429 says
+    WHICH limit was hit."""
+    extra = ""
+    try:
+        ids, delays = set(), set()
+
+        def walk(o):
+            if isinstance(o, dict):
+                for k, v in o.items():
+                    if k in ("quotaId", "quotaMetric") and isinstance(v, str):
+                        ids.add(v)
+                    elif k == "retryDelay" and isinstance(v, str):
+                        delays.add(v)
+                    else:
+                        walk(v)
+            elif isinstance(o, list):
+                for v in o:
+                    walk(v)
+
+        walk(response.json())
+        if ids:
+            extra += " quota=" + ",".join(sorted(ids))
+        if delays:
+            extra += " retry=" + sorted(delays)[0]
+    except ValueError:
+        pass
+    return GeminiError(f"Gemini API returned {response.status_code}: {response.text[:300]}{extra}")
+
+
 def _to_gemini_contents(conversation_messages: list) -> list:
     contents = []
     for msg in conversation_messages:
@@ -103,7 +134,7 @@ def ask_gemini(system_message: str, conversation_messages: list, tools_schema: l
         raise GeminiError(f"Network error calling Gemini: {e}")
 
     if response.status_code != 200:
-        raise GeminiError(f"Gemini API returned {response.status_code}: {response.text[:300]}")
+        raise _http_error(response)
 
     return _extract_result(response.json())
 
@@ -131,7 +162,7 @@ def ask_gemini_stream(system_message: str, conversation_messages: list, tools_sc
         raise GeminiError(f"Network error calling Gemini: {e}")
 
     if response.status_code != 200:
-        raise GeminiError(f"Gemini API returned {response.status_code}: {response.text[:300]}")
+        raise _http_error(response)
 
     got_anything = False
     for line in response.iter_lines(decode_unicode=True):

@@ -1,15 +1,12 @@
 {
   "assistant_name": "Faze",
   "wake_phrase": "Faze, you there?",
-
   "memory_owner": false,
-
   "llm": {
     "host": "127.0.0.1",
     "port": 8080,
     "endpoint": "/v1/chat/completions"
   },
-
   "device_overrides": {
     "pc": {
       "proactivity": "low",
@@ -19,5 +16,8 @@
       "proactivity": "normal",
       "always_confirm": false
     }
+  },
+  "lfm": {
+    "model_path": "/data/data/com.termux/files/home/models/LFM2.5-230M-Q4_K_M.gguf"
   }
 }

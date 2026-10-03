@@ -80,8 +80,12 @@ def summarize_error(err) -> str:
     m = re.search(r"(?:returned|status)\s+(\d{3})", text)
     if m:
         code = int(m.group(1))
+        if code == 429:
+            q = re.search(r"quota=(\S+)", text)
+            r = re.search(r"retry=(\S+)", text)
+            detail = ([q.group(1)] if q else []) + ([f"retry in {r.group(1)}"] if r else [])
+            return "Gemini quota exceeded (429" + (": " + ", ".join(detail) if detail else "") + ")"
         names = {
-            429: "Gemini quota exceeded (429)",
             400: "bad request (400)",
             401: "Gemini key rejected (401)",
             403: "Gemini access denied (403)",

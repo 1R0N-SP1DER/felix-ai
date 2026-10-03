@@ -185,6 +185,19 @@ class TestRegistryAndReplies(unittest.TestCase):
         self.assertEqual(f("vibrate", "Vibrated."), "Done, phone vibrated.")
         self.assertEqual(f("set_volume", "x", {"level": 7}), "Volume set to 7.")
 
+    def test_quota_error_names_the_limit(self):
+        import gemini_client
+
+        class R:
+            status_code = 429
+            text = '{"error": {"code": 429, "details": [{"violations": [{"quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}]}, {"retryDelay": "36s"}]}}'
+
+            def json(self):
+                return json.loads(self.text)
+        err = gemini_client._http_error(R())
+        self.assertEqual(tool_replies.summarize_error(err),
+                         "Gemini quota exceeded (429: GenerateRequestsPerMinutePerProjectPerModel-FreeTier, retry in 36s)")
+
     def test_error_summary_hides_body(self):
         msg = tool_replies.summarize_error(ToolExecutionError(BODY429))
         self.assertEqual(msg, "Gemini quota exceeded (429)")
@@ -203,6 +216,19 @@ class TestIntents(unittest.TestCase):
         self.assertEqual(match_intent("search whats chatgpt latest model")["parameters"]["query"],
                          "whats chatgpt latest model")
         self.assertIsNone(match_intent("yo whats up"))
+
+    def test_leading_filler_and_more_verbs(self):
+        q = lambda m: match_intent(m)["parameters"]
+        self.assertEqual(q("okay, search the web whats mrwhosetheboss latest video"),
+                         {"query": "whats mrwhosetheboss latest video"})
+        self.assertEqual(q("yo ask gemini, who is tara strong?"), {"request": "who is tara strong?"})
+        self.assertEqual(q("can you search for tara strong"), {"query": "tara strong"})
+        self.assertEqual(q("look up tara strong"), {"query": "tara strong"})
+        self.assertEqual(q("Google the fastest camaro"), {"query": "the fastest camaro"})
+        self.assertEqual(q("so ask gemini x"), {"request": "x"})
+        for miss in ("I want to search the web", "searching is fun", "do you know who to ask gemini about",
+                     "search", "ask gemini"):
+            self.assertIsNone(match_intent(miss), miss)
 
 
 # ---------------------------------------------------------------- memory context
