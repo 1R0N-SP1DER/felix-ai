@@ -40,7 +40,7 @@ _discover_sections()
 # Cache for stable sections
 _STABLE_CACHE = None
 
-def build_system_message(user_message: str) -> str:
+def build_system_message(user_message: str, include_memories: bool = True) -> str:
     global _STABLE_CACHE
     
     if _STABLE_CACHE is None:
@@ -57,11 +57,29 @@ def build_system_message(user_message: str) -> str:
     context = {"user_message": user_message}
     for section in _SECTIONS:
         if not section.stable:
+            if section.name == "memories" and not include_memories:
+                continue
             content = section.render(context)
             if content:
                 parts.append(content)
                 
     return "\n".join(parts)
+
+
+def build_static_system_message() -> str:
+    """Persona, rules and style with NO per-turn memories, so the
+    prompt prefix is identical every turn and llama-server's KV cache
+    stays warm."""
+    return build_system_message("", include_memories=False)
+
+
+def build_turn_context(user_message: str) -> str:
+    """The retrieved-memories block for this one message, or ''. It is
+    attached to the user turn, never the system prompt."""
+    for section in _SECTIONS:
+        if section.name == "memories":
+            return section.render({"user_message": user_message}) or ""
+    return ""
 
 
 if __name__ == "__main__":

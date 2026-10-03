@@ -1,45 +1,64 @@
 """
-felix-ai Core — orchestrator.py
-Phase 4: real tool-calling loop, now handling MULTIPLE tool calls in a
-single turn.
+felix-ai Core -- orchestrator.py
 
-Routing order per message:
-  1. direct_tool_router (regex)  -- free, instant, known-safe phrasings
-  2. needle_router (Needle model) -- catches tool-shaped requests regex
-     missed; only trusted above a confidence threshold
-  3. LFM2.5 tool-calling loop      -- fallback for everything else
-     (will become the Gemini handoff once wired in)
+Routing, per message:
+  1. Deterministic code first: explicit intents ("ask gemini ...",
+     "search ..."), then the regex router. Tool results are turned into
+     replies by templates in tool_replies.py -- no model narration, so
+     real data can't be mangled.
+  2. Needle (auto mode only).
+  3. Forced backend (/model), or auto: local Qwen with tools, falling
+     back to Gemini.
+
+Rules this file keeps:
+  - No silent failures: every failure ends in a one-line message that
+    names the real cause (never a key or a response body).
+  - Retrieved memories ride on the user turn, never the system prompt,
+    so the cached prompt prefix stays byte-identical turn to turn.
+  - A forced backend never silently falls back to another one.
 """
 
-import re
+import atexit
+import http.client
 import json
-import requests
+import os
 import subprocess
 import time
-import os
+
+import requests
+
 from action_log import log_action
 from config_loader import load_config, get_llm_url
 from memory_store import init_db, log_message
-from prompt_assembler import build_system_message
-from tool_schema import validate_tool_call, ToolCallValidationError, TOOL_REGISTRY
+from memory_recall import setup_fts
+from prompt_assembler import build_static_system_message, build_turn_context
+from tool_schema import validate_tool_call, ToolCallValidationError
 from permission_policy import get_permission_tier, UnknownToolError
 from tool_executor import execute_tool, ToolExecutionError
+from tool_replies import format_reply, summarize_error, numbers_preserved
 from direct_tool_router import try_direct_route
-from action_log import log_action
+from intents import match_intent
 from needle_router import ask_needle
 from gemini_client import ask_gemini, GeminiError
-from gemini_tools import build_gemini_tools_schema
+from gemini_tools import build_gemini_tools_schema, build_local_tools_schema
 
 GEMINI_TOOLS_SCHEMA = build_gemini_tools_schema()
-LOCAL_TOOLS_SCHEMA = GEMINI_TOOLS_SCHEMA  # same OpenAI-style shape works for llama-server
+LOCAL_TOOLS_SCHEMA = build_local_tools_schema()
 
 DEVICE = "phone"
 MAX_TOOL_CALLS_PER_TURN = 5
+MAX_HISTORY_MESSAGES = 20
+FORCEABLE_MODELS = ("qwen", "gemini", "lfm")
+
+# Tools where the model's paraphrase of the request is replaced by the
+# user's exact words (a 0.8B model turned "camero" into "camera").
+RAW_TEXT_TOOLS = {"delegate_to_gemini": "request", "search_web": "query"}
 
 TOOL_INSTRUCTIONS = """
 TOOLS (call ONLY if the user is asking for one of these things right now):
 - get_current_datetime() : no params
 - get_battery_status() : no params
+- get_wifi_status() : no params
 - read_clipboard() : no params
 - write_clipboard(text) : text=string to save
 - vibrate() : no params
@@ -66,42 +85,30 @@ RULES:
   quickly and correctly.
 """
 
-def _log_action(actor: str, tool_name: str, args: dict):
-    print(f"[{actor} -> {tool_name}]: {args}")
+GEMINI_TOOL_NOTE = (
+    "\nYou can call these tools: "
+    + ", ".join(t["function"]["name"] for t in GEMINI_TOOLS_SCHEMA)
+    + ". Call a tool only when the user asks for it right now. If a tool "
+      "fails, do not retry it: answer from your own knowledge or say you "
+      "could not check. Never invent tool results.\n"
+)
 
 
-def extract_tool_calls(reply: str) -> list:
-    calls = []
-    matches = re.findall(
-        r"<\|tool_call_start\|>\s*\[(.*?)\]\s*<\|tool_call_end\|>",
-        reply,
-        re.DOTALL
-    )
-    for match in matches:
-        call_strings = re.findall(r"(\w+)\((.*?)\)", match)
-        for func_name, args_str in call_strings:
-            parameters = {}
-            if args_str.strip():
-                arg_pairs = re.findall(r'(\w+)\s*=\s*("(?:[^"\\]|\\.)*"|\d+\.?\d*|true|false)', args_str)
-                for key, value in arg_pairs:
-                    value = value.strip()
-                    if value.startswith('"') and value.endswith('"'):
-                        value = value[1:-1]
-                    elif value.lower() == "true":
-                        value = True
-                    elif value.lower() == "false":
-                        value = False
-                    else:
-                        try:
-                            value = int(value)
-                        except ValueError:
-                            try:
-                                value = float(value)
-                            except ValueError:
-                                pass
-                    parameters[key] = value
-            calls.append({"tool": func_name, "parameters": parameters})
-    return calls
+class LocalModelError(Exception):
+    """A local llama-server call failed (connection, HTTP or mid-stream)."""
+
+
+class RouteError(Exception):
+    """Every backend in the chain failed; the message is user-facing."""
+
+
+def _local_error(err, url: str) -> str:
+    if isinstance(err, requests.exceptions.ConnectionError):
+        return f"can't reach llama-server at {url}"
+    if isinstance(err, requests.exceptions.Timeout):
+        return "llama-server timed out"
+    return summarize_error(err)
+
 
 class Conversation:
     def __init__(self, config: dict):
@@ -110,451 +117,503 @@ class Conversation:
         self.forced_model = None
         self.forced_remaining = 0
         self.lfm_process = None
-        system_message = build_system_message("hi") + "\n" + TOOL_INSTRUCTIONS
-        self.messages = [{"role": "system", "content": system_message}]
+        self.last_reply_streamed = False
+        self._turn_context = ""
+        self._last_user_message = ""
+        if config.get("gemini_enabled", True) is False:
+            os.environ["FAZE_GEMINI_DISABLED"] = "1"
+        self.system_static = build_static_system_message()
+        self.messages = [{"role": "system",
+                          "content": self.system_static + "\n" + TOOL_INSTRUCTIONS}]
+        atexit.register(self.stop_lfm)
+
+    # ------------------------------------------------------------------
+    # history / request building
+    # ------------------------------------------------------------------
 
     def _trim_history(self):
-        """Keep the system message plus the most recent messages, so
-        the conversation never grows unbounded and never re-approaches
-        the context ceiling no matter how long the session runs."""
-        MAX_HISTORY_MESSAGES = 20
         system_msg = self.messages[0]
         rest = self.messages[1:]
         if len(rest) > MAX_HISTORY_MESSAGES:
             rest = rest[-MAX_HISTORY_MESSAGES:]
         self.messages = [system_msg] + rest
 
-    def _call_llm(self, allow_thinking: bool = False, tools: list = None) -> dict:
-        """Streams the reply token by token, printing content live and
-        printing reasoning_content (if any) prefixed so it's clearly
-        labeled as thinking, not the final answer. Returns a dict:
-        {"content": str, "tool_calls": list or None} so the caller can
-        tell a plain reply apart from a tool-call request."""
+    def _request_messages(self) -> list:
+        """History for a model request, with this turn's retrieved
+        memories attached to the newest user message."""
         self._trim_history()
+        msgs = list(self.messages)
+        if self._turn_context and msgs and msgs[-1]["role"] == "user":
+            msgs[-1] = {"role": "user",
+                        "content": f"{self._turn_context}\n\n{msgs[-1]['content']}"}
+        return msgs
+
+    # ------------------------------------------------------------------
+    # local model (llama-server)
+    # ------------------------------------------------------------------
+
+    def _call_llm(self, messages: list, allow_thinking: bool = False,
+                  tools: list = None, url: str = None) -> dict:
+        """Streams a reply, printing tokens live. Returns
+        {"content", "tool_calls", "streamed"}. Raises LocalModelError on
+        any connection, HTTP or mid-stream failure."""
+        url = url or self.url
         payload = {
-            "messages": self.messages,
+            "messages": messages,
             "chat_template_kwargs": {"enable_thinking": allow_thinking},
             "stream": True,
             "temperature": 0.3,
             "top_p": 0.9,
             "repeat_penalty": 1.1,
-            "max_tokens": 200,
+            "max_tokens": 1500 if allow_thinking else 200,
         }
         if tools:
             payload["tools"] = tools
 
         try:
-            response = requests.post(self.url, json=payload, timeout=120, stream=True)
+            response = requests.post(url, json=payload, timeout=120, stream=True)
             response.raise_for_status()
-        except (requests.exceptions.RequestException, Exception) as e:
-            # Catching Exception to handle http.client.IncompleteRead which might wrap or propagate
-            print(f"[orchestrator] Error connecting/streaming: {e}")
-            return {"content": f"I'm having trouble connecting to my local brain right now (Error: {type(e).__name__}). Try again in a moment.", "tool_calls": None}
-            
+        except requests.exceptions.RequestException as e:
+            raise LocalModelError(_local_error(e, url)) from e
         response.encoding = "utf-8"
 
         full_content = ""
         tool_calls_acc = {}
         shown_thinking_label = False
+        streamed = False
 
-        for line in response.iter_lines(decode_unicode=True):
-            if not line or not line.startswith("data: "):
-                continue
-            raw = line[len("data: "):]
-            if raw.strip() == "[DONE]":
-                break
-            try:
-                chunk = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-
-            delta = chunk.get("choices", [{}])[0].get("delta", {})
-
-            reasoning_piece = delta.get("reasoning_content")
-            if reasoning_piece:
-                if not shown_thinking_label:
-                    print("[thinking] ", end="", flush=True)
-                    shown_thinking_label = True
-                print(reasoning_piece, end="", flush=True)
-
-            content_piece = delta.get("content")
-            if content_piece:
-                if shown_thinking_label:
-                    print("\n[answer] ", end="", flush=True)
-                    shown_thinking_label = False
-                print(content_piece, end="", flush=True)
-                full_content += content_piece
-
-            for tc in delta.get("tool_calls", []) or []:
-                idx = tc.get("index", 0)
-                if idx not in tool_calls_acc:
-                    tool_calls_acc[idx] = {"id": tc.get("id", ""), "name": "", "arguments": ""}
-                fn = tc.get("function", {})
-                if fn.get("name"):
-                    tool_calls_acc[idx]["name"] += fn["name"]
-                if fn.get("arguments"):
-                    tool_calls_acc[idx]["arguments"] += fn["arguments"]
-
-        print()
-        tool_calls = list(tool_calls_acc.values()) if tool_calls_acc else None
-        return {"content": full_content, "tool_calls": tool_calls}
-
-    def _run_direct_call(self, direct_call: dict) -> str:
-        """Validate, permission-check, execute a tool call from the
-        regex router or Needle, then narrate the raw result through
-        LFM2.5 so it reads as natural Faze conversation, not a data
-        dump. LFM2.5 is only ever asked to REPHRASE a real, already-
-        known result -- never to originate or guess at the fact
-        itself, so this can't reintroduce the old hallucination bug."""
-        tool_name = direct_call["tool"]
         try:
-            validate_tool_call(direct_call)
-            tier = get_permission_tier(tool_name, DEVICE, self.config)
+            for line in response.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data: "):
+                    continue
+                raw = line[len("data: "):]
+                if raw.strip() == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+
+                choices = chunk.get("choices") or [{}]
+                delta = choices[0].get("delta", {})
+
+                reasoning_piece = delta.get("reasoning_content")
+                if reasoning_piece:
+                    if not shown_thinking_label:
+                        print("[thinking] ", end="", flush=True)
+                        shown_thinking_label = True
+                    print(reasoning_piece, end="", flush=True)
+
+                content_piece = delta.get("content")
+                if content_piece:
+                    if shown_thinking_label:
+                        print("\n[answer] ", end="", flush=True)
+                        shown_thinking_label = False
+                    print(content_piece, end="", flush=True)
+                    full_content += content_piece
+                    streamed = True
+
+                for tc in delta.get("tool_calls", []) or []:
+                    idx = tc.get("index", 0)
+                    if idx not in tool_calls_acc:
+                        tool_calls_acc[idx] = {"id": tc.get("id", ""), "name": "", "arguments": ""}
+                    fn = tc.get("function", {})
+                    if fn.get("name"):
+                        tool_calls_acc[idx]["name"] += fn["name"]
+                    if fn.get("arguments"):
+                        tool_calls_acc[idx]["arguments"] += fn["arguments"]
+        except (requests.exceptions.RequestException, http.client.HTTPException, OSError) as e:
+            if streamed:
+                print()
+            raise LocalModelError(f"stream interrupted ({type(e).__name__})") from e
+
+        if streamed:
+            print()
+        tool_calls = list(tool_calls_acc.values()) if tool_calls_acc else None
+        return {"content": full_content, "tool_calls": tool_calls, "streamed": streamed}
+
+    def _call_local_with_tools(self, max_rounds: int = 3, allow_thinking: bool = False) -> str:
+        """One model call picks a tool (or just answers). Tool results are
+        turned into replies in code. enable_thinking_mode re-runs the
+        same turn with thinking on."""
+        for _ in range(max_rounds):
+            result = self._call_llm(self._request_messages(), allow_thinking,
+                                    tools=LOCAL_TOOLS_SCHEMA)
+            calls = result["tool_calls"]
+
+            if not calls:
+                text = (result["content"] or "").strip()
+                if not text:
+                    raise LocalModelError("local model returned an empty reply")
+                self.last_reply_streamed = result["streamed"]
+                return text
+
+            replies = []
+            thinking_requested = False
+            for tc in calls[:MAX_TOOL_CALLS_PER_TURN]:
+                name = tc["name"]
+                try:
+                    args = json.loads(tc["arguments"]) if tc["arguments"] else {}
+                    if not isinstance(args, dict):
+                        args = {}
+                except json.JSONDecodeError:
+                    args = {}
+
+                if name == "enable_thinking_mode":
+                    log_action("qwen", name, args, "re-running with thinking on", 0)
+                    thinking_requested = True
+                    continue
+
+                extra = None
+                if name in RAW_TEXT_TOOLS:
+                    key = RAW_TEXT_TOOLS[name]
+                    model_arg = args.get(key)
+                    args = {key: self._last_user_message}
+                    if model_arg != self._last_user_message:
+                        extra = f"model paraphrase replaced with raw text: {model_arg!r}"
+                replies.append(self._run_direct_call({"tool": name, "parameters": args},
+                                                     "qwen", extra))
+
+            if replies:
+                self.last_reply_streamed = False
+                return "\n".join(replies)
+            if thinking_requested:
+                allow_thinking = True
+                continue
+            raise LocalModelError("local model requested no usable tool")
+
+        raise LocalModelError("local model kept requesting tools without answering")
+
+    # ------------------------------------------------------------------
+    # tools
+    # ------------------------------------------------------------------
+
+    def _execute_tool(self, name: str, args: dict, layer: str, extra: str = None):
+        """Validate, permission-check and run one tool. Returns
+        (ok, text): the raw result on success, a short real error on
+        failure. Always logged."""
+        call = {"tool": name, "parameters": args}
+        start = time.time()
+        try:
+            validate_tool_call(call)
+            tier = get_permission_tier(name, DEVICE, self.config)
             if tier == "block":
-                return f"[Tool '{tool_name}' is blocked and cannot be run.]"
+                raise ToolExecutionError(f"'{name}' is blocked by permission policy")
             if tier == "confirm":
-                print(f"[Would ask for confirmation to run '{tool_name}' — auto-proceeding for now]")
-            start_time = time.time()
-            raw_result = execute_tool(tool_name, direct_call.get("parameters", {}))
-            ms = int((time.time() - start_time) * 1000)
-            log_action("regex", tool_name, direct_call.get("parameters", {}), raw_result, ms)
+                print(f"[Would ask for confirmation to run '{name}' -- auto-proceeding for now]")
+            result = execute_tool(name, args)
+            ok = True
         except (ToolCallValidationError, UnknownToolError, ToolExecutionError) as e:
-            log_action("regex", tool_name, direct_call.get("parameters", {}), f"Error: {e}", int((time.time() - start_time) * 1000))
-            return f"[Tool error: {e}]"
+            ok, result = False, summarize_error(e)
+            prefix = f"{type(e).__name__}: "
+            if result.startswith(prefix):
+                result = result[len(prefix):]
+        except Exception as e:  # executor bug or missing termux binary
+            ok, result = False, summarize_error(e)
+        ms = int((time.time() - start) * 1000)
+        log_action(layer, name, args, result if ok else f"ERROR {result}", ms, extra)
+        return ok, result
 
-        result = self._narrate_tool_result(tool_name, raw_result)
-        # P1 template check for direct calls (regex-routed tools)
-        template = TOOL_REGISTRY.get(tool_name, {}).get("template")
-        if template:
-            # Simple format based on regex-routed tool results
-            if tool_name == "get_battery_status":
-                # Expect raw_result to contain battery % and status
-                # Example: battery_level: 19%, charging: True
-                # Parse percent and status
-                pct = re.search(r"battery_level:\s*(\d+)", raw_result)
-                chg = re.search(r"charging:\s*(True|False)", raw_result)
-                pct_val = pct.group(1) if pct else "unknown"
-                chg_status = "charging" if (chg and chg.group(1) == "True") else "discharging"
-                result = template.format(percent=pct_val, status=chg_status)
-            elif tool_name == "get_current_datetime":
-                # Example raw_result format (assume ISO or similar)
-                # Let's use simple formatting or pass through if too complex
-                # For simplicity, if we cannot parse, we just use raw_result.
-                result = template.format(time=raw_result, date="")
-            elif tool_name == "vibrate":
-                result = template.format()
-            elif tool_name == "read_clipboard":
-                result = template.format(text=raw_result)
-            elif tool_name == "write_clipboard":
-                result = template.format()
-            elif tool_name == "set_volume":
-                # parameters has level
-                level = direct_call.get("parameters", {}).get("level", "unknown")
-                result = template.format(level=level)
-        
-        if not result:
-            print(f"[{tool_name}]: <empty result>")
-            log_message(DEVICE, "system", f"Fallback triggered for empty tool result: {tool_name}")
-            return f"[{tool_name} returned no result.]"
-        return result
+    def _tool_reply(self, name: str, args: dict, ok: bool, result: str) -> str:
+        if not ok:
+            return f"{name} failed: {result}"
+        reply = format_reply(name, result, args)
+        if reply is None:
+            reply = f"{name}: done."
+        if self.config.get("narrate_tool_results") and name not in ("search_web", "delegate_to_gemini"):
+            narrated = self._narrate_tool_result(result)
+            if narrated and numbers_preserved(result, narrated):
+                return narrated
+        return reply
 
-    def _narrate_tool_result(self, tool_name: str, raw_result: str) -> str:
-        """Ask LFM2.5 to rephrase a real tool result naturally, using a
-        tiny persona prompt instead of the full memory system message
-        so a 230M model can answer fast. Falls back to the raw result
-        on any failure, and prints why so failures are visible."""
-        name = self.config.get('assistant_name', 'Faze')
-        persona = (
-            f'You are {name}, a casual, friendly assistant talking to '
-            f'your friend Felix. Reply in one short, natural sentence.'
-        )
-        narration_prompt = (
-            f'Tool result: {raw_result}\n'
-            f'Tell Felix this in your own casual words. Use only the '
-            f'facts in the tool result. Do not add anything new.'
-        )
-        narration_messages = [
-            {'role': 'system', 'content': persona},
-            {'role': 'user', 'content': narration_prompt},
+    def _run_direct_call(self, call: dict, layer: str, extra: str = None) -> str:
+        name = call["tool"]
+        args = call.get("parameters", {})
+        ok, result = self._execute_tool(name, args, layer, extra)
+        return self._tool_reply(name, args, ok, result)
+
+    def _narrate_tool_result(self, raw_result: str):
+        """Optional (config narrate_tool_results): rephrase a real result
+        with a minimal prompt and no history. Returns None on failure."""
+        messages = [
+            {"role": "system", "content": "Restate this tool result in one casual sentence. Keep every number exactly."},
+            {"role": "user", "content": str(raw_result)},
         ]
         try:
-            payload = {
-                'messages': narration_messages,
-                'max_tokens': 60,
-                'chat_template_kwargs': {'enable_thinking': False},
-                "temperature": 0.3,
-                "top_p": 0.9,
-                "repeat_penalty": 1.1,
-            }
+            payload = {"messages": messages, "max_tokens": 60, "temperature": 0.3,
+                       "chat_template_kwargs": {"enable_thinking": False}}
             response = requests.post(self.url, json=payload, timeout=30)
             response.raise_for_status()
-            narrated = response.json()['choices'][0]['message']['content'].strip()
-            return narrated if narrated else raw_result
-        except (requests.RequestException, KeyError, IndexError) as e:
-            print(f'[narration failed, using raw result]: {e}')
-            return raw_result
+            return response.json()["choices"][0]["message"]["content"].strip() or None
+        except (requests.exceptions.RequestException, KeyError, IndexError, ValueError):
+            return None
 
-    def send(self, user_message: str) -> str:
-        """
-        Offline-first: regex, then Needle, then the local model with
-        real tool-calling. Gemini is now the LAST resort.
-        """
-        self.messages.append({"role": "user", "content": user_message})
-        log_message(DEVICE, "user", user_message)
+    # ------------------------------------------------------------------
+    # Gemini
+    # ------------------------------------------------------------------
 
-        direct_call = try_direct_route(user_message)
-        route_label = None
-        if direct_call is not None:
-            route_label = "regex"
-        else:
-            needle_call = ask_needle(user_message)
-            if needle_call is not None:
-                direct_call = needle_call
-                route_label = "needle"
+    def _call_gemini_with_tools(self, max_rounds: int = 2) -> str:
+        """Gemini picks tools from its own schema (never delegate_to_gemini).
+        Identical repeated calls are not re-run, tool errors go back as
+        text, and the last request is sent with tools off so it must
+        answer."""
+        system_message = self.system_static + GEMINI_TOOL_NOTE
+        history = [m for m in self._request_messages()[1:]
+                   if m["role"] in ("user", "assistant")]
+        allowed = {t["function"]["name"] for t in GEMINI_TOOLS_SCHEMA}
+        seen = set()
 
-        if direct_call is not None:
-            print(f"[Routed via {route_label}]: {direct_call}")
-            reply = self._run_direct_call(direct_call)
-            if not reply:
-                reply = f"[{route_label} call completed but returned no result.]"
-                print(reply)
+        for round_no in range(max_rounds + 1):
+            final_round = round_no == max_rounds
+            start = time.time()
+            result = ask_gemini(system_message, history,
+                                tools_schema=None if final_round else GEMINI_TOOLS_SCHEMA)
+            if result["type"] == "text":
+                log_action("gemini", "reply", {}, f"{len(result['content'])} chars",
+                           int((time.time() - start) * 1000))
+                return result["content"]
+
+            name, args = result["name"], result["args"]
+            key = (name, json.dumps(args, sort_keys=True, default=str))
+            if name not in allowed:
+                tool_text = f"Tool '{name}' is not available. Available: {', '.join(sorted(allowed))}."
+                log_action("gemini", name, args, "ERROR not offered to Gemini", 0)
+            elif key in seen:
+                tool_text = "You already made this exact call. Do not repeat it; answer now with what you have."
+                log_action("gemini", name, args, "duplicate call skipped", 0)
             else:
-                print(reply)
-            self.messages.append({"role": "assistant", "content": reply})
-            log_message(DEVICE, "assistant", reply)
-            return reply
+                seen.add(key)
+                ok, res = self._execute_tool(name, args, "gemini")
+                tool_text = res if ok else (
+                    f"{name} failed: {res}. Do not retry; answer from your own "
+                    f"knowledge or say you could not check.")
 
-        # Handle forced model routing
-        if self.forced_model:
-            model_to_use = self.forced_model
-            if self.forced_remaining > 0:
-                self.forced_remaining -= 1
-                if self.forced_remaining == 0:
-                    self.forced_model = None
-                    print("Forced model expired, reverting to auto")
-            
-            try:
-                if model_to_use == "gemini":
-                    reply = self._call_gemini_with_tools()
-                elif model_to_use == "qwen":
-                    reply = self._call_local_with_tools()
-                elif model_to_use == "lfm":
-                    return "[LFM mode not yet implemented]"
-                else:
-                    return f"[Unknown forced model: {model_to_use}]"
-            except Exception as e:
-                print(f"[Forced model {model_to_use} failed]: {e}")
-                return f"[Forced model {model_to_use} failed: {e}]"
-            
-            self.messages.append({"role": "assistant", "content": reply})
-            log_message(DEVICE, "assistant", reply)
-            return reply
+            history.append({"role": "assistant", "content": f"[called {name}]"})
+            history.append({"role": "user", "content": f"[tool result from {name}] {tool_text}"})
 
+        raise GeminiError("Gemini returned no final answer")
+
+    # ------------------------------------------------------------------
+    # LFM (second llama-server, chat only)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _healthy(health_url: str) -> bool:
         try:
-            reply = self._call_local_with_tools()
-        except Exception as e:
-            print(f"[Local model failed, falling back to Gemini]: {e}")
-            try:
-                reply = self._call_gemini_with_tools()
-            except GeminiError as ge:
-                print(f"[Gemini also unavailable]: {ge}")
-                reply = ("Sorry, I couldn't reach either my local model or "
-                         "Gemini right now — try again in a moment.")
+            return requests.get(health_url, timeout=2).status_code == 200
+        except requests.exceptions.RequestException:
+            return False
 
+    def _ensure_lfm(self) -> str:
+        lfm = self.config.get("lfm") or {}
+        model = os.path.expanduser(lfm.get("model_path", ""))
+        if not model or not os.path.isfile(model):
+            raise LocalModelError("LFM not configured: set lfm.model_path in config/profile.json to the LFM2.5 .gguf file")
+        port = int(lfm.get("port", 8081))
+        url = f"http://127.0.0.1:{port}/v1/chat/completions"
+        health = f"http://127.0.0.1:{port}/health"
+        if self._healthy(health):
+            return url
+
+        binary = os.path.expanduser(lfm.get("server_bin", "~/llama.cpp/build/bin/llama-server"))
+        if not os.path.isfile(binary):
+            raise LocalModelError(f"llama-server binary not found at {binary}")
+        log_path = os.path.expanduser(lfm.get("log", "~/felix-ai/llama-lfm.log"))
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        log_file = open(log_path, "ab")
+        print("[lfm] starting server...")
+        self.lfm_process = subprocess.Popen(
+            [binary, "-m", model, "--port", str(port), "-c", str(lfm.get("ctx", 2048)),
+             "-t", str(lfm.get("threads", 4)), "--host", "127.0.0.1"],
+            stdout=log_file, stderr=subprocess.STDOUT)
+        log_file.close()  # the child keeps its own copy of the descriptor
+        deadline = time.time() + float(lfm.get("start_timeout", 60))
+        while time.time() < deadline:
+            code = self.lfm_process.poll()
+            if code is not None:
+                self.lfm_process = None
+                raise LocalModelError(f"LFM server exited early (code {code}); see {log_path}")
+            if self._healthy(health):
+                return url
+            time.sleep(0.5)
+        self.stop_lfm()
+        raise LocalModelError(f"LFM server not ready after {lfm.get('start_timeout', 60)}s; see {log_path}")
+
+    def stop_lfm(self):
+        proc = self.lfm_process
+        self.lfm_process = None
+        if proc is None or proc.poll() is not None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+    def _call_lfm(self) -> str:
+        url = self._ensure_lfm()
+        recent = [m for m in self._request_messages()[1:]
+                  if m["role"] in ("user", "assistant")][-6:]
+        messages = [{"role": "system", "content": self.system_static}] + recent
+        result = self._call_llm(messages, tools=None, url=url)
+        text = (result["content"] or "").strip()
+        if not text:
+            raise LocalModelError("LFM returned an empty reply")
+        self.last_reply_streamed = result["streamed"]
+        return text
+
+    # ------------------------------------------------------------------
+    # /model
+    # ------------------------------------------------------------------
+
+    def handle_command(self, line: str):
+        """Slash commands, typed by the user only. Returns the text to
+        print, or None if `line` is not a command."""
+        parts = line.strip().split()
+        if not parts or not parts[0].startswith("/"):
+            return None
+        if parts[0].lower() != "/model":
+            return f"Unknown command {parts[0]}. Available: /model"
+        if len(parts) == 1:
+            if not self.forced_model:
+                return "Current mode: auto"
+            left = f" ({self.forced_remaining} turns left)" if self.forced_remaining else ""
+            return f"Current mode: {self.forced_model}{left}"
+        mode = parts[1].lower()
+        if mode == "auto":
+            self.forced_model, self.forced_remaining = None, 0
+            self.stop_lfm()
+            return "Switched to auto routing"
+        if mode in FORCEABLE_MODELS:
+            turns = 0
+            if len(parts) > 2:
+                try:
+                    turns = int(parts[2])
+                    if turns < 1:
+                        raise ValueError
+                except ValueError:
+                    return "Usage: /model gemini|qwen|lfm [n]"
+            self.forced_model, self.forced_remaining = mode, turns
+            if mode != "lfm":
+                self.stop_lfm()
+            return f"Forcing {mode} for {'next ' + str(turns) + ' turns' if turns else 'session'}"
+        return "Invalid mode. Use auto, qwen, gemini, or lfm"
+
+    def _consume_forced(self):
+        model = self.forced_model
+        if model and self.forced_remaining > 0:
+            self.forced_remaining -= 1
+            if self.forced_remaining == 0:
+                self.forced_model = None
+                print("[Forced model expires after this reply; back to auto]")
+        return model
+
+    # ------------------------------------------------------------------
+    # send
+    # ------------------------------------------------------------------
+
+    def _finish(self, reply: str) -> str:
+        reply = (reply or "").strip() or "[no reply produced]"
         self.messages.append({"role": "assistant", "content": reply})
         log_message(DEVICE, "assistant", reply)
         return reply
 
-    def _call_local_with_tools(self, max_rounds: int = 3, allow_thinking: bool = False) -> str:
-        """
-        Calls the local model with the real tool schema. Thinking off
-        by default. If the model calls enable_thinking_mode, this
-        re-runs the SAME turn with allow_thinking=True instead of
-        treating it as a normal tool result. Raises on failure so
-        send() can fall back to Gemini.
-        """
-        local_history = list(self.messages)
+    def _fail(self, message: str) -> str:
+        """A turn with no real answer: keep the error out of history."""
+        if self.messages and self.messages[-1]["role"] == "user":
+            self.messages.pop()
+        self.last_reply_streamed = False
+        log_action("orchestrator", "failure", {}, message, 0, echo=False)
+        return message
 
-        for _ in range(max_rounds):
-            # DEBUG: Log the messages sent to the model on each round
-            # print(f"[DEBUG] Round {_} messages: {[{'role': m['role']} for m in local_history if 'role' in m]}")
-            result = self._call_llm(allow_thinking=allow_thinking, tools=LOCAL_TOOLS_SCHEMA)
-            # DEBUG: Log raw response
-            # print(f"[DEBUG] Raw result: {result}")
-
-            if not result["tool_calls"]:
-                if not result["content"]:
-                    # DEBUG: print(f"[DEBUG] Empty response detected!")
-                    raise RuntimeError("Local model returned an empty response.")
-                return result["content"]
-
-            # If we get here, it means we have tool calls.
-            # We must ensure we don't return an empty reply in the next loop iteration if the model gives no content after the tool call.
-            
-            thinking_requested = False
-
-            for tc in result["tool_calls"]:
-                tool_name = tc["name"]
-                try:
-                    args = json.loads(tc["arguments"]) if tc["arguments"] else {}
-                except json.JSONDecodeError:
-                    args = {}
-
-                _log_action("qwen", tool_name, args)
-                call = {"tool": tool_name, "parameters": args}
-                try:
-                    validate_tool_call(call)
-                    tier = get_permission_tier(tool_name, DEVICE, self.config)
-                    if tier == "block":
-                        tool_result = f"Tool '{tool_name}' is blocked and cannot be run."
-                    else:
-                        if tier == "confirm":
-                            print(f"[Would ask for confirmation to run '{tool_name}' — auto-proceeding for now]")
-                        tool_result = execute_tool(tool_name, args)
-                except (ToolCallValidationError, UnknownToolError, ToolExecutionError) as e:
-                    # Provide clearer error surfacing than just the exception text
-                    tool_result = f"Error running {tool_name}: {str(e)[:100]}"
-
-                if tool_name == "enable_thinking_mode" and tool_result == "THINKING_MODE_REQUESTED":
-                    thinking_requested = True
-                    continue
-
-                local_history.append({
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [{"id": tc["id"], "type": "function", "function": {"name": tool_name, "arguments": tc["arguments"]}}],
-                })
-                local_history.append({"role": "tool", "tool_call_id": tc["id"], "content": tool_result})
-
-            if thinking_requested:
-                allow_thinking = True
-                continue
-            
-            # Safety net: If content is still empty after tool calls, try to return something useful
-            if not result.get("content", "").strip():
-                # Try to use the last tool result as the reply if we are out of rounds or content is empty
-                # For now, just return a default fallback string to avoid silence.
-                return "I completed the action you asked for."
-
-            self.messages = local_history
-
-        raise RuntimeError("Local model kept calling tools without giving a final answer.")
-
-    def _call_gemini_with_tools(self, max_rounds: int = 3) -> str:
-        """Calls Gemini with the real tool schema -- now the fallback."""
-        system_message = self.messages[0]["content"]
-        gemini_history = list(self.messages[1:])
-
-        for _ in range(max_rounds):
-            result = ask_gemini(system_message, gemini_history, tools_schema=GEMINI_TOOLS_SCHEMA)
-
-            if result["type"] == "text":
-                print(f"[Routed via gemini]: {result['content']!r}")
-                return result["content"]
-
-            tool_name = result["name"]
-            args = result["args"]
-            _log_action("gemini", tool_name, args)
-
-            call = {"tool": tool_name, "parameters": args}
+    def _run_auto(self) -> str:
+        try:
+            return self._call_local_with_tools()
+        except Exception as e:
+            cause = summarize_error(e) if not isinstance(e, LocalModelError) else str(e)
+            log_action("local", "fallback", {}, f"{cause} -> trying gemini", 0)
             try:
-                validate_tool_call(call)
-                tier = get_permission_tier(tool_name, DEVICE, self.config)
-                if tier == "block":
-                    tool_result = f"Tool '{tool_name}' is blocked and cannot be run."
-                else:
-                    if tier == "confirm":
-                        print(f"[Would ask for confirmation to run '{tool_name}' — auto-proceeding for now]")
-                    tool_result = execute_tool(tool_name, args)
-            except (ToolCallValidationError, UnknownToolError, ToolExecutionError) as e:
-                tool_result = f"Tool error: {e}"
+                return self._call_gemini_with_tools()
+            except Exception as ge:
+                raise RouteError(f"local model: {cause}; gemini: {summarize_error(ge)}")
 
-            gemini_history.append({"role": "assistant", "content": f"[called {tool_name}]"})
-            gemini_history.append({"role": "tool", "name": tool_name, "content": tool_result})
+    def send(self, user_message: str) -> str:
+        self.last_reply_streamed = False
+        self._last_user_message = user_message
+        self.messages.append({"role": "user", "content": user_message})
+        log_message(DEVICE, "user", user_message)
 
-        raise GeminiError("Gemini kept calling tools without giving a final answer.")
+        try:
+            self._turn_context = build_turn_context(user_message)
+        except Exception as e:
+            self._turn_context = ""
+            log_action("memory", "recall", {}, f"ERROR {summarize_error(e)}", 0)
 
-    def _execute_and_record(self, tool_calls: list):
-        result_lines = []
+        # 1. Deterministic routes: free, instant, never a model guess.
+        call = match_intent(user_message)
+        layer = "intent"
+        if call is None:
+            call, layer = try_direct_route(user_message), "regex"
+        if call is None and not self.forced_model:
+            call, layer = ask_needle(user_message), "needle"
+        if call is not None:
+            return self._finish(self._run_direct_call(call, layer))
 
-        for tool_call in tool_calls:
-            tool_name = tool_call.get("tool", "<unknown>")
+        # 2. Model routes.
+        forced = self._consume_forced()
+        try:
+            if forced == "gemini":
+                reply = self._call_gemini_with_tools()
+            elif forced == "qwen":
+                reply = self._call_local_with_tools()
+            elif forced == "lfm":
+                reply = self._call_lfm()
+            else:
+                reply = self._run_auto()
+        except RouteError as e:
+            return self._fail(f"[couldn't answer -- {e}]")
+        except Exception as e:
+            cause = str(e) if isinstance(e, LocalModelError) else summarize_error(e)
+            return self._fail(f"[{forced or 'auto'} failed: {cause}]")
 
-            try:
-                validate_tool_call(tool_call)
-            except ToolCallValidationError as e:
-                result_lines.append(f"[{tool_name}] rejected: {e}")
-                continue
-
-            try:
-                tier = get_permission_tier(tool_name, DEVICE, self.config)
-            except UnknownToolError as e:
-                result_lines.append(f"[{tool_name}] rejected: {e}")
-                continue
-
-            if tier == "block":
-                result_lines.append(f"[{tool_name}] blocked, cannot run.")
-                continue
-
-            if tier == "confirm":
-                print(f"[Would ask for confirmation to run '{tool_name}' — auto-proceeding for now]")
-
-            try:
-                result = execute_tool(tool_name, tool_call.get("parameters", {}))
-                result_lines.append(f"[{tool_name}]: {result}")
-            except ToolExecutionError as e:
-                result_lines.append(f"[{tool_name}] execution failed: {e}")
-
-        combined = "\n".join(result_lines)
-        self.messages.append({
-            "role": "user",
-            "content": f"Tool results:\n{combined}\nNow answer the user's original question using this real data, in plain text."
-        })
+        if forced and self.forced_model != "lfm":
+            self.stop_lfm()
+        return self._finish(reply)
 
 
 if __name__ == "__main__":
     init_db()
+    try:
+        setup_fts()
+    except Exception as e:
+        print(f"[memory index unavailable: {summarize_error(e)}]")
     config = load_config()
     convo = Conversation(config)
 
-    print(f"felix-ai Core — {config['assistant_name']}")
+    print(f"felix-ai Core -- {config['assistant_name']}")
     print(f"Talking to: {convo.url}")
     print("Type 'quit' to exit.\n")
 
     while True:
-        user_input = input("You: ").strip()
+        try:
+            user_input = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
         if user_input.lower() in ("quit", "exit"):
             break
         if not user_input:
             continue
-        
-        # Handle /model command
-        if user_input.startswith("/model"):
-            parts = user_input.split()
-            if len(parts) == 1:
-                print(f"Current mode: {convo.forced_model or 'auto'}")
-                continue
-            
-            mode = parts[1].lower()
-            if mode == "auto":
-                convo.forced_model = None
-                convo.forced_remaining = 0
-                print("Switched to auto routing")
-            elif mode in ("qwen", "gemini", "lfm"):
-                convo.forced_model = mode
-                if len(parts) > 2:
-                    try:
-                        convo.forced_remaining = int(parts[2])
-                    except ValueError:
-                        print("Usage: /model gemini|qwen|lfm [n]")
-                        continue
-                else:
-                    convo.forced_remaining = 0
-                print(f"Forcing {mode} for {'next ' + str(convo.forced_remaining) + ' turns' if convo.forced_remaining else 'session'}")
-            else:
-                print("Invalid mode. Use auto, qwen, gemini, or lfm")
+        if user_input.startswith("/"):
+            print(convo.handle_command(user_input))
             continue
 
         print(f"{config['assistant_name']}: ", end="", flush=True)
-        reply = convo.send(user_input)
+        try:
+            reply = convo.send(user_input)
+        except Exception as e:  # last line of defence: never crash the loop
+            reply = f"[unexpected error: {summarize_error(e)}]"
+            log_action("orchestrator", "crash-guard", {}, reply, 0, echo=False)
+        if not convo.last_reply_streamed:
+            print(reply)
         print()

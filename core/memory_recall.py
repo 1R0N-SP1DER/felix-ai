@@ -1,8 +1,15 @@
+import os
 import sqlite3
 import re
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "felix_ai_memory.db"
+DB_PATH = Path(os.environ.get("FELIX_DB") or (Path(__file__).parent / "felix_ai_memory.db"))
+
+PERSONAL_QUERY = re.compile(
+    r"\b(who am i|about me|know about me|my name|what.?s my name|tell me about myself)\b",
+    re.IGNORECASE,
+)
+
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -39,13 +46,17 @@ def search_memories(user_message, limit=5):
         except sqlite3.OperationalError:
             pass
             
-    # Fallback to recent memories if no hits
-    if not rows:
-        rows = conn.execute("""
-            SELECT * FROM memories
-            WHERE active = 1
-            ORDER BY created_at DESC LIMIT ?
-        """, (limit // 2,)).fetchall()
-        
+    # No keyword hit: only fall back for questions about Felix himself
+    # ("who am i", "what do you know about me"); never for greetings.
+    if not rows and PERSONAL_QUERY.search(user_message):
+        try:
+            rows = conn.execute("""
+                SELECT * FROM memories
+                WHERE active = 1 AND category = 'me'
+                ORDER BY created_at DESC LIMIT ?
+            """, (limit,)).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+
     conn.close()
     return [dict(row) for row in rows]

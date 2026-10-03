@@ -11,13 +11,13 @@ schema validation) is in place from the start rather than bolted on later.
 # Empty for now — Phase 4 will populate this with real Android/PC tools.
 # Format: "tool_name": {"param_name": expected_python_type, ...}
 TOOL_REGISTRY = {
-    "get_current_datetime": {"template": "The current time is {time} on {date}."},
-    "get_battery_status": {"template": "Battery is {percent}% and {status}."},
-    "set_volume": {"template": "Volume set to {level}."},
+    "get_current_datetime": {},
+    "get_battery_status": {},
+    "set_volume": {"level": int},
     "get_wifi_status": {},
-    "read_clipboard": {"template": "Clipboard: {text}"},
-    "write_clipboard": {"template": "Text copied to clipboard."},
-    "vibrate": {"template": "Phone vibrated."},
+    "read_clipboard": {},
+    "write_clipboard": {"text": str},
+    "vibrate": {},
     "delegate_to_gemini": {"request": str},
     "search_web": {"query": str},
     "enable_thinking_mode": {},

@@ -22,6 +22,12 @@ PERMISSION_REGISTRY = {
     "read_clipboard": "confirm",
     "write_clipboard": "confirm",
     "vibrate": "safe",
+    # Escape hatches: these were never registered, so the policy refused
+    # to run them ("no registered permission tier") and every call
+    # surfaced as a generic tool failure.
+    "delegate_to_gemini": "safe",
+    "search_web": "safe",
+    "enable_thinking_mode": "safe",
 }
 
 VALID_TIERS = ("safe", "confirm", "block")

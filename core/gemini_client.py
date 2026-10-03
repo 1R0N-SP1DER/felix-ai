@@ -75,6 +75,8 @@ def _extract_result(data: dict):
 
 
 def ask_gemini(system_message: str, conversation_messages: list, tools_schema: list = None, use_search_grounding: bool = False, timeout: int = 30) -> dict:
+    if os.environ.get("FAZE_GEMINI_DISABLED") == "1":
+        raise GeminiError("Gemini layer is disabled in config (gemini_enabled=false).")
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise GeminiError("GEMINI_API_KEY is not set in the environment.")

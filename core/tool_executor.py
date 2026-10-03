@@ -188,6 +188,7 @@ TOOL_EXECUTORS = {
     "get_current_datetime": get_current_datetime,
     "get_battery_status": get_battery_status,
     "set_volume": set_volume,
+    "get_wifi_status": get_wifi_status,
     "read_clipboard": read_clipboard,
     "write_clipboard": write_clipboard,
     "vibrate": vibrate,

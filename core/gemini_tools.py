@@ -17,6 +17,7 @@ TOOL_DESCRIPTIONS = {
     "write_clipboard": "Call this whenever the user asks to copy, save, or put text into clipboard. Saves text.",
     "vibrate": "Call this whenever the user asks to vibrate the phone or get attention physically. No arguments.",
     "delegate_to_gemini": "Call this for reasoning, knowledge, or judgment beyond your ability. Pass a clear description of needed help.",
+    "enable_thinking_mode": "Call this ONLY if delegate_to_gemini or search_web just failed and the question still needs careful step-by-step reasoning. No arguments.",
     "search_web": "Call this for current, real-world information like news or live facts. Performs grounded web search. Never answer from memory.",
 }
 
@@ -39,10 +40,15 @@ def _type_to_json_schema(python_type):
     return {"type": "string"}
 
 
-def build_gemini_tools_schema() -> list:
+# Tools Gemini must never be offered: it cannot delegate to itself, and
+# thinking mode is a local-model-only signal.
+GEMINI_EXCLUDED = {"delegate_to_gemini", "enable_thinking_mode"}
+
+
+def build_tools_schema(exclude=()) -> list:
     schema = []
     for name, params in TOOL_REGISTRY.items():
-        if name == "delegate_to_gemini":
+        if name in exclude:
             continue
         properties = {}
         for param_name, param_type in params.items():
@@ -63,3 +69,12 @@ def build_gemini_tools_schema() -> list:
             },
         })
     return schema
+
+
+def build_gemini_tools_schema() -> list:
+    return build_tools_schema(GEMINI_EXCLUDED)
+
+
+def build_local_tools_schema() -> list:
+    """The local model gets every tool, including delegate_to_gemini."""
+    return build_tools_schema()
