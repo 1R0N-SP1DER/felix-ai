@@ -239,20 +239,48 @@ class TestMemoryContext(unittest.TestCase):
         self.assertNotIn("Redmi", static)
         self.assertEqual(static, prompt_assembler.build_static_system_message())
         ctx = prompt_assembler.build_turn_context("whats my phone?")
-        self.assertIn("Felix: My phone is a Redmi 10C.", ctx)
+        self.assertIn("- Felix's phone is a Redmi 10C.", ctx)
+        self.assertNotIn("My phone", ctx)
         self.assertEqual(prompt_assembler.build_turn_context("hi"), "")
         self.assertEqual(prompt_assembler.build_turn_context("whats up"), "")
         self.assertIn("Naruto", prompt_assembler.build_turn_context("anime!!!"))
         self.assertIn("Goes by Felix", prompt_assembler.build_turn_context("who am i?"))
 
     def test_greeting_gets_no_memories_in_full_prompt(self):
-        self.assertNotIn("BACKGROUND INFO", prompt_assembler.build_system_message("hi"))
+        self.assertNotIn("FACTS ABOUT FELIX", prompt_assembler.build_system_message("hi"))
 
     def test_p8_greeting_lengths_do_not_grow(self):
         a = len(prompt_assembler.build_system_message("hi"))
         b = len(prompt_assembler.build_system_message("what's up"))
         self.assertEqual(a, len(prompt_assembler.build_static_system_message()))
         self.assertEqual(a, b)
+
+
+class TestPronouns(unittest.TestCase):
+    def test_facts_become_third_person(self):
+        from pronouns import to_third_person as t
+        cases = {
+            "My phone is a Redmi 10C.": "Felix's phone is a Redmi 10C.",
+            "Some of my favorite anime include Naruto.": "Some of his favorite anime include Naruto.",
+            "Attack on Titan is probably the best anime I've watched.": "Attack on Titan is probably the best anime he has watched.",
+            "Dandadan is an anime I strongly relate to.": "Dandadan is an anime he strongly relates to.",
+            "I like anime with strong characters.": "Felix likes anime with strong characters.",
+            "I often ask about anime without wanting spoilers.": "Felix often asks about anime without wanting spoilers.",
+            "I'm into custom ROMs and I don't like bloat.": "Felix is into custom ROMs and he doesn't like bloat.",
+            "Goes by Felix.": "Goes by Felix.",
+        }
+        for src, want in cases.items():
+            self.assertEqual(t(src), want, src)
+
+    def test_no_first_person_left_in_prompt_context(self):
+        import re
+        for q in ("anime!!!", "whats my phone?", "who am i?"):
+            ctx = prompt_assembler.build_turn_context(q)
+            self.assertIsNone(re.search(r"\b(I|my|me|I'm|I've)\b", ctx.split("\n", 1)[1]), ctx)
+
+    def test_persona_states_who_is_who(self):
+        static = prompt_assembler.build_static_system_message()
+        self.assertIn("when you say 'I' or 'my' you mean yourself, Faze", static)
 
 
 # ---------------------------------------------------------------- deterministic routes (no model)
@@ -322,7 +350,7 @@ class TestLocal(Base):
         req1, req2 = self.llama.requests
         self.assertEqual(req1["messages"][0], req2["messages"][0])  # byte-identical system prompt
         self.assertNotIn("Redmi", req1["messages"][0]["content"])
-        self.assertIn("Felix: My phone is a Redmi 10C.", req1["messages"][-1]["content"])
+        self.assertIn("Felix's phone is a Redmi 10C.", req1["messages"][-1]["content"])
         self.assertIn("Naruto", req2["messages"][-1]["content"])
         self.assertEqual(c.messages[1]["content"], "whats my phone?")  # context not stored in history
         self.assertEqual(req1["temperature"], 0.3)

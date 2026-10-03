@@ -1,5 +1,6 @@
 from prompt.section_base import PromptSection
 from memory_recall import search_memories
+from pronouns import to_third_person
 
 class MemoriesSection(PromptSection):
     def __init__(self):
@@ -10,7 +11,7 @@ class MemoriesSection(PromptSection):
         memories = search_memories(user_message)
         if not memories:
             return None
-        parts = ["\nBACKGROUND INFO ABOUT FELIX (retrieved for this turn):"]
+        parts = ["\nFACTS ABOUT FELIX (the person you are talking to; you are Faze, not Felix):"]
         for memory in memories:
-            parts.append(f"Felix: {memory['fact']}")
+            parts.append(f"- {to_third_person(memory['fact'])}")
         return "\n".join(parts)
