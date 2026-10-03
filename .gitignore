@@ -1,0 +1,13 @@
+*.db
+*.db.bak
+*.sqlite*
+memory_snapshot.txt
+logs/
+*.log
+.env
+*.key
+__pycache__/
+*.pyc
+*.gguf
+core/android-arm64/
+core/bootstrap_import.py

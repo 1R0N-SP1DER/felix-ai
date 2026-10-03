@@ -1,0 +1,23 @@
+{
+  "assistant_name": "Faze",
+  "wake_phrase": "Faze, you there?",
+
+  "memory_owner": false,
+
+  "llm": {
+    "host": "127.0.0.1",
+    "port": 8080,
+    "endpoint": "/v1/chat/completions"
+  },
+
+  "device_overrides": {
+    "pc": {
+      "proactivity": "low",
+      "always_confirm": true
+    },
+    "phone": {
+      "proactivity": "normal",
+      "always_confirm": false
+    }
+  }
+}
