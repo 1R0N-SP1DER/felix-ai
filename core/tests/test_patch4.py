@@ -69,6 +69,7 @@ def wait_for(cond, timeout=15.0):
 
 class BootBase(unittest.TestCase):
     def setUp(self):
+        os.environ["FAZE_SETTINGS"] = os.path.join(TMP, f"b-{time.time_ns()}.json")
         os.environ.pop("FAZE_GEMINI_DISABLED", None)
         self.needle = mock.patch("orchestrator.ask_needle", return_value=None)
         self.needle.start()
@@ -232,7 +233,7 @@ class TestTagsAndStatus(BootBase):
 
     def test_status_command(self):
         c = self.convo(qwen_delay=0.1, lfm=True)
-        self.assertEqual(c.handle_command("/status"), "qwen: running (not managed) | lfm: idle | gemini: on | mode: auto")
+        self.assertEqual(c.handle_command("/status"), "qwen: running (not managed) | lfm: idle | gemini: on | mode: auto | think: auto")
         c.start_background()
         self.assertTrue(wait_for(lambda: c.local.state == "ready"))
         c.handle_command("/model qwen")
@@ -247,7 +248,7 @@ class TestSettings(unittest.TestCase):
         os.environ.pop("FAZE_GEMINI_DISABLED", None)
 
     def tearDown(self):
-        os.environ.pop("FAZE_SETTINGS", None)
+        os.environ["FAZE_SETTINGS"] = os.path.join(TMP, "settings-default.json")
         os.environ.pop("FAZE_GEMINI_DISABLED", None)
 
     def test_defaults_then_user_layer(self):

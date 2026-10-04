@@ -27,6 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import action_log
+import stt
 from icons import make_icon
 from tool_replies import summarize_error
 
@@ -82,6 +83,7 @@ class FazeServer(ThreadingHTTPServer):
         self.config = config
         self.token = token
         self.chat_lock = threading.Lock()
+        self.stt_lock = threading.Lock()
         self.bound_host = address[0]
         self.port = self.server_address[1]
 
@@ -152,6 +154,24 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return data
 
+    def _read_audio(self):
+        """Raw WAV body, or None after sending the error response."""
+        if self.headers.get("Content-Type", "").split(";")[0].strip() != "audio/wav":
+            self._error(415, "Content-Type must be audio/wav")
+            return None
+        origin = self.headers.get("Origin")
+        if origin and origin != f"http://{self.headers.get('Host', '')}":
+            self._error(403, "cross-origin request refused")
+            return None
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = -1
+        if length <= 0 or length > stt.MAX_WAV_BYTES:
+            self._error(413, "recording is empty or too long")
+            return None
+        return self.rfile.read(length)
+
     # ---- routing ---------------------------------------------------------
 
     def do_GET(self):
@@ -180,6 +200,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, self._status())
             if path == "/api/settings":
                 return self._json(200, {"settings": self.server.convo.settings_list()})
+            if path == "/api/commands":
+                return self._json(200, {"commands": self.server.convo.commands()})
             return self._error(404, "unknown endpoint")
         return self._error(404, "not found")
 
@@ -191,9 +213,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(404, "not found")
         if not self._authorized():
             return self._error(401, "missing or wrong token")
+        if path == "/api/transcribe":
+            return self._transcribe()
         data = self._read_json()
         if data is None:
             return
+        if path == "/api/cancel":
+            self.server.convo.cancel()
+            return self._json(200, {"ok": True})
         if path == "/api/chat":
             return self._chat(data)
         if path == "/api/command":
@@ -210,7 +237,7 @@ class Handler(BaseHTTPRequestHandler):
         lfm = ("running" if convo.lfm_process and convo.lfm_process.poll() is None
                else "idle" if convo._lfm_configured() else "not configured")
         return {
-            "name": self.server.config.get("assistant_name", "Faze"),
+            "name": convo._names()[0],
             "qwen": {"state": local.state, "detail": local.detail, "note": local.status_note()},
             "lfm": lfm,
             "gemini": convo._gemini_on(),
@@ -218,7 +245,27 @@ class Handler(BaseHTTPRequestHandler):
             "busy": self.server.chat_lock.locked(),
             "notices": convo.drain_notices(),
             "show_tag": bool(self.server.config["ui"].get("show_model_tag", True)),
+            "user_name": convo._names()[1],
+            "forced_turns": convo.forced_remaining,
+            "think": convo.config["reasoning"]["mode"],
+            "stt": {"server": stt.available(convo.config), "pref": convo.config["voice"]["stt"],
+                    "reason": stt.missing_reason(convo.config)},
         }
+
+    def _transcribe(self):
+        data = self._read_audio()
+        if data is None:
+            return
+        if not self.server.stt_lock.acquire(blocking=False):
+            return self._error(409, "still transcribing the last clip")
+        try:
+            text = stt.transcribe_wav(data, self.server.convo.config)
+            action_log.log_action("stt", "transcribe", {"bytes": len(data)}, f"{len(text)} chars", 0, echo=False)
+            self._json(200, {"text": text})
+        except stt.TranscribeError as e:
+            self._error(422, str(e))
+        finally:
+            self.server.stt_lock.release()
 
     def _command(self, data):
         line = str(data.get("line", "")).strip()
@@ -267,7 +314,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode())
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError, OSError):
-                alive = False  # client left; let the turn finish quietly
+                alive = False  # client left: stop generating, nobody is reading
+                server.convo.cancel()
 
         convo = server.convo
         tracer = lambda line: emit("trace", {"line": line})  # noqa: E731

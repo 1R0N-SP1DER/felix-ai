@@ -56,26 +56,26 @@ def _at_sentence_start(s: str, pos: int) -> bool:
     return not before or before[-1] in ".!?\n"
 
 
-def to_third_person(fact: str) -> str:
+def to_third_person(fact: str, user: str = "Felix") -> str:
     s = fact
 
     for pattern, verb in _CONTRACTIONS:
         s = re.sub(pattern,
-                   lambda m, v=verb: ("Felix " if _at_sentence_start(m.string, m.start()) else "he ") + v,
+                   lambda m, v=verb: (f"{user} " if _at_sentence_start(m.string, m.start()) else "he ") + v,
                    s)
 
     def subject_verb(m):
-        subj = "Felix" if _at_sentence_start(m.string, m.start()) else "he"
+        subj = user if _at_sentence_start(m.string, m.start()) else "he"
         adverbs, verb = m.group(1) or "", m.group(2)
         return f"{subj}{adverbs} {_third(verb)}"
 
     s = re.sub(rf"\bI((?:\s+(?:{_ADVERBS}))*)\s+([A-Za-z']+)", subject_verb, s)
     s = re.sub(r"\bI\b",
-               lambda m: "Felix" if _at_sentence_start(m.string, m.start()) else "he", s)
+               lambda m: user if _at_sentence_start(m.string, m.start()) else "he", s)
 
     s = re.sub(r"\bmyself\b", "himself", s, flags=re.IGNORECASE)
     s = re.sub(r"\bmine\b", "his", s, flags=re.IGNORECASE)
     s = re.sub(r"\bme\b", "him", s, flags=re.IGNORECASE)
     s = re.sub(r"\b[Mm]y\b",
-               lambda m: "Felix's" if _at_sentence_start(m.string, m.start()) else "his", s)
+               lambda m: f"{user}'s" if _at_sentence_start(m.string, m.start()) else "his", s)
     return s

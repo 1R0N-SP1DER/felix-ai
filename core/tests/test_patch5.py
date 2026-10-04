@@ -67,7 +67,7 @@ class WebBase(unittest.TestCase):
         self.llama.close()
         self.needle.stop()
         self.convo.stop_lfm()
-        os.environ.pop("FAZE_SETTINGS", None)
+        os.environ["FAZE_SETTINGS"] = os.path.join(TMP, "settings-default.json")
         os.environ.pop("FAZE_GEMINI_DISABLED", None)
 
     def request(self, method, path, body=None, token=TOKEN, headers=None, host=None):

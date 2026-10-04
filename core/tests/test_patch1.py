@@ -12,6 +12,7 @@ import stat
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
@@ -22,6 +23,7 @@ sys.path.insert(0, CORE)
 TMP = tempfile.mkdtemp()
 os.environ["FELIX_DB"] = os.path.join(TMP, "t.db")
 os.environ["FELIX_LOG_DIR"] = os.path.join(TMP, "logs")
+os.environ["FAZE_SETTINGS"] = os.path.join(TMP, "settings-default.json")
 os.environ.pop("FAZE_GEMINI_DISABLED", None)
 
 import sqlite3  # noqa: E402
@@ -140,6 +142,7 @@ def fake_exec(table):
 
 class Base(unittest.TestCase):
     def setUp(self):
+        os.environ["FAZE_SETTINGS"] = os.path.join(TMP, f"s-{time.time_ns()}.json")
         os.environ.pop("FAZE_GEMINI_DISABLED", None)
         self.llama = FakeLlama()
         self.needle = mock.patch("orchestrator.ask_needle", return_value=None)
@@ -280,7 +283,8 @@ class TestPronouns(unittest.TestCase):
 
     def test_persona_states_who_is_who(self):
         static = prompt_assembler.build_static_system_message()
-        self.assertIn("when you say 'I' or 'my' you mean yourself, Faze", static)
+        self.assertIn("When you say 'I' or 'my', that means you, Faze", static)
+        self.assertIn("You are Faze, not Felix", static)
 
 
 # ---------------------------------------------------------------- deterministic routes (no model)

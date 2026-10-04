@@ -10,7 +10,9 @@ class StyleSection(PromptSection):
         style = get_style_profile()
         if not style:
             return None
-        parts = ["\nFELIX'S SPEECH STYLE:"]
+        a = context.get("assistant", "Faze")
+        u = context.get("user", "Felix")
+        parts = [f"\nHOW {u.upper()} TALKS (mirror the tone, but you are still {a}):"]
         if style.get("tone_notes"):
             parts.append(f"- Tone: {style['tone_notes']}")
         if style.get("formality_level"):
@@ -19,7 +21,7 @@ class StyleSection(PromptSection):
             try:
                 phrases = json.loads(style["common_phrases"])
                 if phrases:
-                    parts.append(f"- Common phrases Felix uses: {', '.join(phrases)}")
+                    parts.append(f"- Phrases {u} often uses: {', '.join(phrases)}")
             except json.JSONDecodeError:
                 pass
         return "\n".join(parts)

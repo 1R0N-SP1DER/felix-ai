@@ -11,7 +11,9 @@ class MemoriesSection(PromptSection):
         memories = search_memories(user_message)
         if not memories:
             return None
-        parts = ["\nFACTS ABOUT FELIX (the person you are talking to; you are Faze, not Felix):"]
+        a = context.get("assistant", "Faze")
+        u = context.get("user", "Felix")
+        parts = [f"\nFACTS ABOUT {u.upper()} (the person you are talking to; you are {a}, not {u}):"]
         for memory in memories:
-            parts.append(f"- {to_third_person(memory['fact'])}")
+            parts.append(f"- {to_third_person(memory['fact'], u)}")
         return "\n".join(parts)

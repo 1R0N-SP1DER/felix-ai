@@ -39,6 +39,19 @@ _discover_sections()
 
 # Cache for stable sections
 _STABLE_CACHE = None
+_NAMES = {"assistant": "Faze", "user": "Felix"}
+
+
+def set_names(assistant: str, user: str) -> None:
+    """Change who 'you' and 'I' are in every prompt section. Clears the
+    stable-prefix cache, so the next prompt is rebuilt with the new names."""
+    global _STABLE_CACHE
+    _NAMES["assistant"], _NAMES["user"] = assistant, user
+    _STABLE_CACHE = None
+
+
+def _context(user_message: str = "") -> dict:
+    return {"user_message": user_message, "assistant": _NAMES["assistant"], "user": _NAMES["user"]}
 
 def build_system_message(user_message: str, include_memories: bool = True) -> str:
     global _STABLE_CACHE
@@ -47,14 +60,14 @@ def build_system_message(user_message: str, include_memories: bool = True) -> st
         _STABLE_CACHE = []
         for section in _SECTIONS:
             if section.stable:
-                content = section.render({})
+                content = section.render(_context())
                 if content:
                     _STABLE_CACHE.append(content)
         _STABLE_CACHE = "\n".join(_STABLE_CACHE)
     
     parts = [_STABLE_CACHE]
     
-    context = {"user_message": user_message}
+    context = _context(user_message)
     for section in _SECTIONS:
         if not section.stable:
             if section.name == "memories" and not include_memories:
@@ -78,7 +91,7 @@ def build_turn_context(user_message: str) -> str:
     attached to the user turn, never the system prompt."""
     for section in _SECTIONS:
         if section.name == "memories":
-            return section.render({"user_message": user_message}) or ""
+            return section.render(_context(user_message)) or ""
     return ""
 
 

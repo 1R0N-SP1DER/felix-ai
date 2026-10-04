@@ -36,7 +36,8 @@ from config_loader import (load_config, get_llm_url, describe_settings,
 from local_server import ServerManager
 from memory_store import init_db, log_message
 from memory_recall import setup_fts
-from prompt_assembler import build_static_system_message, build_turn_context
+from identity import fix_identity
+from prompt_assembler import build_static_system_message, build_turn_context, set_names
 from tool_schema import validate_tool_call, ToolCallValidationError
 from permission_policy import get_permission_tier, UnknownToolError
 from tool_executor import execute_tool, ToolExecutionError
@@ -54,6 +55,36 @@ DEVICE = "phone"
 MAX_TOOL_CALLS_PER_TURN = 5
 MAX_HISTORY_MESSAGES = 20
 FORCEABLE_MODELS = ("qwen", "gemini", "lfm")
+
+# Slash commands: the single list used by /help, the terminal's tab
+# completion and the web app's command menu. `args` are the choices for the
+# first argument; `complete` False means the command still needs an argument.
+COMMANDS = [
+    {"name": "model", "description": "Choose which model answers",
+     "usage": "/model [auto|qwen|lfm|gemini] [messages]",
+     "args": [
+         {"value": "auto", "description": "Qwen when ready, LFM while it boots, Gemini as backup"},
+         {"value": "qwen", "description": "Local Qwen with tools"},
+         {"value": "lfm", "description": "Local LFM, fast chat without tools"},
+         {"value": "gemini", "description": "Gemini online helper"},
+     ]},
+    {"name": "think", "description": "Turn Qwen's thinking on or off",
+     "usage": "/think [auto|on|off]",
+     "args": [
+         {"value": "auto", "description": "Qwen thinks only when it asks to"},
+         {"value": "on", "description": "Think before every reply (slow)"},
+         {"value": "off", "description": "Never think"},
+     ]},
+    {"name": "reset", "description": "Start a new chat and clear the history", "usage": "/reset", "args": []},
+    {"name": "status", "description": "Show what is running", "usage": "/status", "args": []},
+    {"name": "settings", "description": "View or change settings",
+     "usage": "/settings [set <key> <value> | unset <key>]", "needs_args": True,
+     "args": [
+         {"value": "set", "description": "Change a setting"},
+         {"value": "unset", "description": "Go back to a setting's default"},
+     ]},
+    {"name": "help", "description": "List every command", "usage": "/help", "args": []},
+]
 
 # Tools where the model's paraphrase of the request is replaced by the
 # user's exact words (a 0.8B model turned "camero" into "camera").
@@ -108,6 +139,10 @@ class LocalModelError(Exception):
         self.server_down = server_down
 
 
+class TurnCancelled(Exception):
+    """The user pressed stop (or left); the turn ends without a fallback."""
+
+
 class RouteError(Exception):
     """Every backend in the chain failed; the message is user-facing."""
 
@@ -124,8 +159,12 @@ class Conversation:
     def __init__(self, config: dict):
         self.config = config
         self.url = get_llm_url(config)
-        self.forced_model = None
-        self.forced_remaining = 0
+        saved = config.get("model", {}).get("forced", "auto")
+        self._persisted_force = saved if saved in FORCEABLE_MODELS else None
+        self.forced_model = self._persisted_force   # None = auto
+        self.forced_remaining = 0                    # 0 = until turned off
+        self._cancel = threading.Event()
+        self._active_response = None
         self.lfm_process = None
         self._lfm_lock = threading.Lock()
         self.on_route = None          # hook(tag, note): called when a backend is chosen
@@ -136,6 +175,8 @@ class Conversation:
         self._last_user_message = ""
         if config.get("gemini_enabled", True) is False:
             os.environ["FAZE_GEMINI_DISABLED"] = "1"
+        names = config["assistant"]
+        set_names(names["name"], names["user_name"])
         self.system_static = build_static_system_message()
         self.messages = [{"role": "system",
                           "content": self.system_static + "\n" + TOOL_INSTRUCTIONS}]
@@ -210,6 +251,29 @@ class Conversation:
     # history / request building
     # ------------------------------------------------------------------
 
+    def cancel(self):
+        """Stop the turn in progress. Closing the stream also makes
+        llama-server stop generating."""
+        self._cancel.set()
+        response = self._active_response
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+
+    def reset(self):
+        """New chat: forget the history (the system prompt stays)."""
+        self.messages = [self.messages[0]]
+        self._turn_context = ""
+
+    def _rebuild_system(self):
+        self.system_static = build_static_system_message()
+        self.messages[0] = {"role": "system", "content": self.system_static + "\n" + TOOL_INSTRUCTIONS}
+
+    def _names(self):
+        return self.config["assistant"]["name"], self.config["assistant"]["user_name"]
+
     def _trim_history(self):
         system_msg = self.messages[0]
         rest = self.messages[1:]
@@ -255,6 +319,7 @@ class Conversation:
         except requests.exceptions.RequestException as e:
             raise LocalModelError(_local_error(e, url), server_down=True) from e
         response.encoding = "utf-8"
+        self._active_response = response
 
         full_content = ""
         tool_calls_acc = {}
@@ -276,6 +341,9 @@ class Conversation:
 
         try:
             for line in response.iter_lines(decode_unicode=True):
+                if self._cancel.is_set():
+                    response.close()
+                    raise TurnCancelled()
                 if not line or not line.startswith("data: "):
                     continue
                 raw = line[len("data: "):]
@@ -309,10 +377,13 @@ class Conversation:
                     if fn.get("arguments"):
                         tool_calls_acc[idx]["arguments"] += fn["arguments"]
         except (requests.exceptions.RequestException, http.client.HTTPException, OSError) as e:
+            if self._cancel.is_set():
+                raise TurnCancelled() from e
             if streamed and not self.on_token:
                 print()
             raise LocalModelError(f"stream interrupted ({type(e).__name__})", server_down=True) from e
 
+        self._active_response = None
         if streamed and not self.on_token:
             print()
         tool_calls = list(tool_calls_acc.values()) if tool_calls_acc else None
@@ -322,6 +393,9 @@ class Conversation:
         """One model call picks a tool (or just answers). Tool results are
         turned into replies in code. enable_thinking_mode re-runs the
         same turn with thinking on."""
+        mode = self.config.get("reasoning", {}).get("mode", "auto")
+        if mode == "on":
+            allow_thinking = True
         for _ in range(max_rounds):
             result = self._call_llm(self._request_messages(), allow_thinking,
                                     tools=LOCAL_TOOLS_SCHEMA)
@@ -346,6 +420,10 @@ class Conversation:
                     args = {}
 
                 if name == "enable_thinking_mode":
+                    if mode == "off":
+                        log_action("qwen", name, args, "refused: reasoning is off", 0)
+                        replies.append("[thinking is turned off. Use /think auto to allow it]")
+                        continue
                     log_action("qwen", name, args, "re-running with thinking on", 0)
                     thinking_requested = True
                     continue
@@ -562,37 +640,82 @@ class Conversation:
         parts = line.strip().split()
         if not parts or not parts[0].startswith("/"):
             return None
-        cmd = parts[0].lower()
+        cmd, args = parts[0].lower(), parts[1:]
         if cmd == "/settings":
-            return self._settings_command(parts[1:])
+            return self._settings_command(args)
         if cmd == "/status":
             return self._status_text()
-        if cmd != "/model":
-            return f"Unknown command {parts[0]}. Available: /model /settings /status"
-        if len(parts) == 1:
-            if not self.forced_model:
-                return "Current mode: auto"
-            left = f" ({self.forced_remaining} turns left)" if self.forced_remaining else ""
-            return f"Current mode: {self.forced_model}{left}"
-        mode = parts[1].lower()
+        if cmd == "/reset":
+            self.reset()
+            return "Conversation cleared"
+        if cmd == "/think":
+            return self._think_command(args)
+        if cmd == "/model":
+            return self._model_command(args)
+        if cmd == "/help":
+            return "\n".join(f"/{c['name']:<9} {c['description']}" for c in COMMANDS)
+        return f"Unknown command {parts[0]}. Type /help for the list"
+
+    def commands(self) -> list:
+        return COMMANDS
+
+    def _mode_text(self) -> str:
+        if not self.forced_model:
+            return "auto"
+        if self.forced_remaining:
+            return f"{self.forced_model} ({self.forced_remaining} turns left)"
+        return f"{self.forced_model} (until you turn it off)"
+
+    def _persist(self, key: str, value) -> None:
+        """Save a choice so it survives restarts; never let a disk problem break chat."""
+        try:
+            if value is None:
+                unset_user_setting(key)
+            else:
+                set_user_setting(key, str(value))
+        except (ValueError, OSError) as e:
+            log_action("settings", "persist", {"key": key}, f"ERROR {e}", 0, echo=False)
+
+    def _model_command(self, args: list) -> str:
+        if not args:
+            return "Current mode: " + self._mode_text()
+        mode = args[0].lower()
         if mode == "auto":
+            self._persisted_force = None
             self.forced_model, self.forced_remaining = None, 0
+            self.config.setdefault("model", {})["forced"] = "auto"
+            self._persist("model.forced", None)
             self.stop_lfm()
             return "Switched to auto routing"
-        if mode in FORCEABLE_MODELS:
-            turns = 0
-            if len(parts) > 2:
-                try:
-                    turns = int(parts[2])
-                    if turns < 1:
-                        raise ValueError
-                except ValueError:
-                    return "Usage: /model gemini|qwen|lfm [n]"
-            self.forced_model, self.forced_remaining = mode, turns
-            if mode != "lfm":
-                self.stop_lfm()
-            return f"Forcing {mode} for {'next ' + str(turns) + ' turns' if turns else 'session'}"
-        return "Invalid mode. Use auto, qwen, gemini, or lfm"
+        if mode not in FORCEABLE_MODELS:
+            return "Invalid mode. Use auto, qwen, gemini, or lfm"
+        turns = 0
+        if len(args) > 1:
+            try:
+                turns = int(args[1])
+                if turns < 1:
+                    raise ValueError
+            except ValueError:
+                return "Usage: /model gemini|qwen|lfm [n]"
+        self.forced_model, self.forced_remaining = mode, turns
+        if turns == 0:  # no count: stays until turned off, and across restarts
+            self._persisted_force = mode
+            self.config.setdefault("model", {})["forced"] = mode
+            self._persist("model.forced", mode)
+        if mode != "lfm":
+            self.stop_lfm()
+        return f"Forcing {mode} " + (f"for next {turns} turns" if turns else "until you turn it off")
+
+    def _think_command(self, args: list) -> str:
+        if not args:
+            return "Reasoning: " + self.config["reasoning"]["mode"]
+        try:
+            value, _ = self.change_setting("reasoning.mode", args[0])
+        except ValueError:
+            return "Usage: /think auto|on|off"
+        note = {"on": " (Qwen thinks before every reply; slow on this phone)",
+                "off": " (Qwen never thinks)", "auto": " (Qwen thinks only when it asks to)"}[value]
+        return f"Reasoning: {value}{note}"
 
     def _status_text(self) -> str:
         local = self.local.state if self.local.state != "unmanaged" else "running (not managed)"
@@ -602,7 +725,8 @@ class Conversation:
             "idle" if self._lfm_configured() else "not configured")
         mode = self.forced_model or "auto"
         gem = "on" if self._gemini_on() else "off"
-        return f"qwen: {local} | lfm: {lfm} | gemini: {gem} | mode: {mode}"
+        think = self.config["reasoning"]["mode"]
+        return f"qwen: {local} | lfm: {lfm} | gemini: {gem} | mode: {mode} | think: {think}"
 
     def change_setting(self, key: str, raw: str):
         """Validate, persist and apply one setting. Returns (value,
@@ -663,14 +787,23 @@ class Conversation:
                 os.environ["FAZE_GEMINI_DISABLED"] = "1"
         if key == "ui.show_trace":
             action_log.set_console(bool(value))
+        if key in ("assistant.name", "assistant.user_name"):
+            name, user = self._names()
+            set_names(name, user)
+            self.config["assistant_name"] = name
+            self._rebuild_system()
+        if key == "model.forced":
+            self._persisted_force = value if value in FORCEABLE_MODELS else None
+            if self.forced_remaining == 0:
+                self.forced_model = self._persisted_force
 
     def _consume_forced(self):
         model = self.forced_model
         if model and self.forced_remaining > 0:
             self.forced_remaining -= 1
             if self.forced_remaining == 0:
-                self.forced_model = None
-                print("[Forced model expires after this reply; back to auto]")
+                self.forced_model = self._persisted_force
+                print(f"[Forced model expires after this reply; back to {self._persisted_force or 'auto'}]")
         return model
 
     # ------------------------------------------------------------------
@@ -723,6 +856,8 @@ class Conversation:
             self._announce(tag)
             try:
                 return call()
+            except TurnCancelled:
+                raise
             except Exception as e:
                 cause = str(e) if isinstance(e, LocalModelError) else summarize_error(e)
                 errors.append(f"{tag}: {cause}")
@@ -733,6 +868,7 @@ class Conversation:
 
     def send(self, user_message: str) -> str:
         self.last_reply_streamed = False
+        self._cancel.clear()
         self._last_user_message = user_message
         if (self.local.state == "ready" and self.lfm_process and self.forced_model != "lfm"
                 and self.config["lfm"].get("stop_when_qwen_ready", True)):
@@ -770,6 +906,8 @@ class Conversation:
                 reply = self._call_lfm()
             else:
                 reply = self._run_auto()
+        except TurnCancelled:
+            return self._fail("[stopped]")
         except RouteError as e:
             return self._fail(f"[couldn't answer -- {e}]")
         except Exception as e:
@@ -778,7 +916,7 @@ class Conversation:
 
         if forced and self.forced_model != "lfm":
             self.stop_lfm()
-        return self._finish(reply)
+        return self._finish(fix_identity(reply, *self._names()))
 
 
 def make_prefix_hook(name: str, show_tag: bool):
@@ -817,10 +955,23 @@ if __name__ == "__main__":
         serve(convo, config)
         raise SystemExit(0)
 
+    try:  # tab-complete slash commands in the terminal where readline exists
+        import readline
+        words = ["/" + c["name"] for c in COMMANDS]
+
+        def _complete(text, state):
+            matches = [w for w in words if w.startswith(text)] if text.startswith("/") else []
+            return matches[state] if state < len(matches) else None
+        readline.set_completer(_complete)
+        readline.set_completer_delims(" \t\n")
+        readline.parse_and_bind("tab: complete")
+    except (ImportError, OSError):
+        pass
+
     name = config["assistant_name"]
     print(f"felix-ai Core -- {name}")
     print(f"Talking to: {convo.url}")
-    print("Commands: /model /settings /status. Type 'quit' to exit.\n")
+    print("Type /help for commands (Tab completes them), 'quit' to exit.\n")
 
     while True:
         for note in convo.drain_notices():

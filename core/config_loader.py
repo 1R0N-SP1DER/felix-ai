@@ -12,12 +12,24 @@ Secrets (the Gemini key) never live in any of these files.
 import copy
 import json
 import os
+import re
 from pathlib import Path
 
 CONFIG_PATH = Path(__file__).parent / "config" / "profile.json"
 
 DEFAULTS = {
-    "assistant_name": "Faze",
+    "assistant_name": "Faze",   # kept in sync with assistant.name
+    "assistant": {"name": "Faze", "user_name": "Felix"},
+    "model": {"forced": "auto"},          # auto | qwen | gemini | lfm  (persisted /model choice)
+    "reasoning": {"mode": "auto"},        # auto | on | off  (Qwen thinking mode)
+    "voice": {"stt": "auto"},             # auto | server | browser
+    "stt": {
+        "bin": "~/whisper.cpp/build/bin/whisper-cli",
+        "model_path": "~/models/ggml-tiny.en.bin",
+        "threads": 4,
+        "language": "en",
+        "timeout": 60,
+    },
     "llm": {"host": "127.0.0.1", "port": 8080, "endpoint": "/v1/chat/completions"},
     "boot": {
         "mode": "background",              # background | blocking
@@ -52,6 +64,16 @@ DEFAULTS = {
 
 # Settings editable with /settings: key -> (type, allowed values or None)
 SETTINGS = {
+    "assistant.name": (str, None),
+    "assistant.user_name": (str, None),
+    "model.forced": (str, ("auto", "qwen", "gemini", "lfm")),
+    "reasoning.mode": (str, ("auto", "on", "off")),
+    "voice.stt": (str, ("auto", "server", "browser")),
+    "stt.bin": (str, None),
+    "stt.model_path": (str, None),
+    "stt.threads": (int, None),
+    "stt.language": (str, None),
+    "stt.timeout": (int, None),
     "boot.mode": (str, ("background", "blocking")),
     "boot.chat_while_booting": (str, ("lfm", "gemini", "wait")),
     "boot.warmup": (bool, None),
@@ -116,6 +138,7 @@ def load_config() -> dict:
     cfg = copy.deepcopy(DEFAULTS)
     _deep_merge(cfg, _read_json(CONFIG_PATH))
     _deep_merge(cfg, load_user_overrides())
+    cfg["assistant_name"] = cfg["assistant"]["name"]
     return cfg
 
 
@@ -140,12 +163,20 @@ def _put(data: dict, key: str, value) -> None:
 
 
 def _drop(data: dict, key: str) -> bool:
+    """Remove a nested key, and any parent dicts it leaves empty."""
     parts = key.split(".")
+    chain = [data]
     for part in parts[:-1]:
-        data = data.get(part)
-        if not isinstance(data, dict):
+        nxt = chain[-1].get(part)
+        if not isinstance(nxt, dict):
             return False
-    return data.pop(parts[-1], None) is not None
+        chain.append(nxt)
+    removed = chain[-1].pop(parts[-1], None) is not None
+    if removed:
+        for i in range(len(parts) - 1, 0, -1):
+            if not chain[i]:
+                chain[i - 1].pop(parts[i - 1], None)
+    return removed
 
 
 def _coerce(key: str, raw: str):
@@ -167,6 +198,9 @@ def _coerce(key: str, raw: str):
             raise ValueError(f"{key} must be at least 1")
     else:
         value = text
+        if key in ("assistant.name", "assistant.user_name"):
+            if not re.fullmatch(r"[\w .'\-]{1,24}", value):
+                raise ValueError(f"{key} must be 1-24 letters, numbers, spaces, . ' or -")
         if allowed and value.lower() not in allowed:
             raise ValueError(f"{key} must be one of: {', '.join(allowed)}")
         if allowed:
