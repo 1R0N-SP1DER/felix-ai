@@ -17,7 +17,18 @@ logger.setLevel(logging.INFO)
 logger.addHandler(handler)
 
 _console = True
+_listeners = []
 _inline_open = False  # a "Faze [tag]: " prefix is waiting on the current line
+
+
+def add_listener(fn) -> None:
+    """fn(line) is called with every trace line (used by the web UI)."""
+    _listeners.append(fn)
+
+
+def remove_listener(fn) -> None:
+    if fn in _listeners:
+        _listeners.remove(fn)
 
 
 def set_console(enabled: bool) -> None:
@@ -38,6 +49,12 @@ def log_action(layer, tool, args, result, ms, extra=None, echo=True):
     if extra:
         log_line += f" | {extra}"
     logger.info(log_line)
+    if echo:
+        for fn in list(_listeners):
+            try:
+                fn(log_line)
+            except Exception:
+                pass
     if echo and _console:
         global _inline_open
         if _inline_open:

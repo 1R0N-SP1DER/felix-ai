@@ -44,6 +44,7 @@ DEFAULTS = {
         "start_timeout": 60,
         "stop_when_qwen_ready": True,
     },
+    "server": {"host": "127.0.0.1", "port": 8787, "open_on_start": False},
     "gemini_enabled": True,
     "narrate_tool_results": False,
     "ui": {"show_model_tag": True, "show_trace": True},
@@ -68,6 +69,9 @@ SETTINGS = {
     "lfm.threads": (int, None),
     "lfm.stop_when_qwen_ready": (bool, None),
     "llm.port": (int, None),
+    "server.host": (str, None),
+    "server.port": (int, None),
+    "server.open_on_start": (bool, None),
     "gemini_enabled": (bool, None),
     "narrate_tool_results": (bool, None),
     "ui.show_model_tag": (bool, None),
@@ -76,7 +80,7 @@ SETTINGS = {
 
 # Changes to these only apply when Faze restarts.
 _RESTART_PREFIXES = ("local.", "lfm.model_path", "lfm.server_bin", "lfm.port", "lfm.ctx",
-                     "lfm.threads", "llm.", "boot.mode", "boot.warmup")
+                     "lfm.threads", "llm.", "boot.mode", "boot.warmup", "server.")
 
 
 def user_settings_path() -> Path:

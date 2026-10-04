@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0e1116">
+  <meta name="color-scheme" content="dark">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <title>Faze</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header>
+    <h1>Faze</h1>
+    <div id="chips" aria-label="Status"></div>
+    <button id="stop-speech" class="icon" hidden aria-label="Stop speaking">&#9632;</button>
+    <button id="open-settings" class="icon" aria-label="Settings">&#9881;</button>
+  </header>
+
+  <div id="banner" hidden></div>
+  <main id="log" aria-live="polite"></main>
+
+  <form id="composer" autocomplete="off">
+    <textarea id="input" rows="1" placeholder="Message Faze" enterkeyhint="send"></textarea>
+    <button type="button" id="mic" class="icon" hidden aria-label="Speak">&#127908;</button>
+    <button type="submit" id="send">Send</button>
+  </form>
+
+  <div id="sheet" hidden>
+    <div class="sheet-body">
+      <div class="sheet-head">
+        <h2>Settings</h2>
+        <button id="close-settings" class="icon" aria-label="Close">&#10005;</button>
+      </div>
+      <section>
+        <h3>This device</h3>
+        <label class="row"><span>Speak replies aloud</span><input type="checkbox" id="opt-speak"></label>
+        <label class="row" id="row-mic"><span>Mic button</span><input type="checkbox" id="opt-mic"></label>
+        <label class="row" id="row-ondevice"><span>Mic: on-device only<small>Off lets Chrome use Google's cloud recognizer</small></span><input type="checkbox" id="opt-ondevice"></label>
+        <button id="install" class="wide" hidden>Install app</button>
+        <p class="hint" id="install-hint">Install: Chrome menu &rarr; Install app.</p>
+      </section>
+      <section>
+        <h3>Faze</h3>
+        <div id="settings-list"></div>
+        <p class="hint">Settings marked * apply after Faze restarts.</p>
+      </section>
+    </div>
+  </div>
+
+  <div id="pair" hidden>
+    <div class="pair-body">
+      <h2>Pair with Faze</h2>
+      <p>Open the link Faze printed in Termux, or paste the token here.</p>
+      <input id="pair-input" type="password" autocomplete="off" spellcheck="false" placeholder="token">
+      <button id="pair-go" class="wide">Connect</button>
+    </div>
+  </div>
+
+  <div id="toast" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>

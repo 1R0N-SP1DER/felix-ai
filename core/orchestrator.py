@@ -23,6 +23,7 @@ import http.client
 import json
 import os
 import subprocess
+import sys
 import threading
 import time
 
@@ -128,6 +129,7 @@ class Conversation:
         self.lfm_process = None
         self._lfm_lock = threading.Lock()
         self.on_route = None          # hook(tag, note): called when a backend is chosen
+        self.on_token = None          # hook(kind, text): streamed pieces; kind is 'thinking' or 'answer'
         self.last_route = ""
         self.last_reply_streamed = False
         self._turn_context = ""
@@ -259,6 +261,19 @@ class Conversation:
         shown_thinking_label = False
         streamed = False
 
+        def emit(kind: str, text: str):
+            nonlocal shown_thinking_label
+            if self.on_token:
+                self.on_token(kind, text)
+                return
+            if kind == "thinking" and not shown_thinking_label:
+                print("[thinking] ", end="", flush=True)
+                shown_thinking_label = True
+            elif kind == "answer" and shown_thinking_label:
+                print("\n[answer] ", end="", flush=True)
+                shown_thinking_label = False
+            print(text, end="", flush=True)
+
         try:
             for line in response.iter_lines(decode_unicode=True):
                 if not line or not line.startswith("data: "):
@@ -276,17 +291,11 @@ class Conversation:
 
                 reasoning_piece = delta.get("reasoning_content")
                 if reasoning_piece:
-                    if not shown_thinking_label:
-                        print("[thinking] ", end="", flush=True)
-                        shown_thinking_label = True
-                    print(reasoning_piece, end="", flush=True)
+                    emit("thinking", reasoning_piece)
 
                 content_piece = delta.get("content")
                 if content_piece:
-                    if shown_thinking_label:
-                        print("\n[answer] ", end="", flush=True)
-                        shown_thinking_label = False
-                    print(content_piece, end="", flush=True)
+                    emit("answer", content_piece)
                     full_content += content_piece
                     streamed = True
 
@@ -300,11 +309,11 @@ class Conversation:
                     if fn.get("arguments"):
                         tool_calls_acc[idx]["arguments"] += fn["arguments"]
         except (requests.exceptions.RequestException, http.client.HTTPException, OSError) as e:
-            if streamed:
+            if streamed and not self.on_token:
                 print()
             raise LocalModelError(f"stream interrupted ({type(e).__name__})", server_down=True) from e
 
-        if streamed:
+        if streamed and not self.on_token:
             print()
         tool_calls = list(tool_calls_acc.values()) if tool_calls_acc else None
         return {"content": full_content, "tool_calls": tool_calls, "streamed": streamed}
@@ -595,6 +604,35 @@ class Conversation:
         gem = "on" if self._gemini_on() else "off"
         return f"qwen: {local} | lfm: {lfm} | gemini: {gem} | mode: {mode}"
 
+    def change_setting(self, key: str, raw: str):
+        """Validate, persist and apply one setting. Returns (value,
+        needs_restart); raises ValueError with a user-facing message."""
+        value, restart = set_user_setting(key, raw)
+        self._apply_setting(key, value)
+        return value, restart
+
+    def reset_setting(self, key: str) -> bool:
+        removed = unset_user_setting(key)
+        if removed:
+            cur = load_config()
+            for part in key.split("."):
+                cur = cur[part]
+            self._apply_setting(key, cur)
+        return removed
+
+    def settings_list(self) -> list:
+        """Rows for a settings UI: key, value, type, choices, user override?, restart?"""
+        from config_loader import load_user_overrides, _dig, _RESTART_PREFIXES
+        overrides = load_user_overrides()
+        rows = []
+        for key, (kind, allowed) in SETTINGS.items():
+            rows.append({"key": key, "value": _dig(self.config, key),
+                         "type": {bool: "bool", int: "int", str: "str"}[kind],
+                         "choices": list(allowed) if allowed else None,
+                         "user": _dig(overrides, key) is not None,
+                         "restart": key.startswith(_RESTART_PREFIXES)})
+        return rows
+
     def _settings_command(self, args: list) -> str:
         if not args:
             return describe_settings(self.config)
@@ -602,17 +640,10 @@ class Conversation:
         try:
             if action == "set" and len(args) >= 3:
                 key, raw = args[1], " ".join(args[2:])
-                value, restart = set_user_setting(key, raw)
-                self._apply_setting(key, value)
+                value, restart = self.change_setting(key, raw)
                 return f"{key} = {value}" + (" (takes effect after restart)" if restart else "")
             if action == "unset" and len(args) == 2:
-                removed = unset_user_setting(args[1])
-                if removed:
-                    fresh = load_config()
-                    cur = fresh
-                    for part in args[1].split("."):
-                        cur = cur[part]
-                    self._apply_setting(args[1], cur)
+                removed = self.reset_setting(args[1])
                 return f"{args[1]} reset to default" if removed else f"{args[1]} had no user override"
         except ValueError as e:
             return f"Setting not changed: {e}"
@@ -780,6 +811,11 @@ if __name__ == "__main__":
     action_log.set_console(config["ui"].get("show_trace", True))
     convo = Conversation(config)
     convo.start_background()
+
+    if "--serve" in sys.argv[1:]:
+        from web_server import serve
+        serve(convo, config)
+        raise SystemExit(0)
 
     name = config["assistant_name"]
     print(f"felix-ai Core -- {name}")
