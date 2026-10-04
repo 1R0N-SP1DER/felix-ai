@@ -16,6 +16,20 @@ logger = logging.getLogger("action_logger")
 logger.setLevel(logging.INFO)
 logger.addHandler(handler)
 
+_console = True
+_inline_open = False  # a "Faze [tag]: " prefix is waiting on the current line
+
+
+def set_console(enabled: bool) -> None:
+    global _console
+    _console = bool(enabled)
+
+
+def set_inline_open(is_open: bool) -> None:
+    global _inline_open
+    _inline_open = bool(is_open)
+
+
 def log_action(layer, tool, args, result, ms, extra=None, echo=True):
     result = str(result).replace("\n", " ")
     if len(result) > 200:
@@ -24,5 +38,9 @@ def log_action(layer, tool, args, result, ms, extra=None, echo=True):
     if extra:
         log_line += f" | {extra}"
     logger.info(log_line)
-    if echo:
+    if echo and _console:
+        global _inline_open
+        if _inline_open:
+            print()
+            _inline_open = False
         print(log_line)

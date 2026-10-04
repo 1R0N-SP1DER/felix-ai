@@ -23,12 +23,16 @@ import http.client
 import json
 import os
 import subprocess
+import threading
 import time
 
 import requests
 
+import action_log
 from action_log import log_action
-from config_loader import load_config, get_llm_url
+from config_loader import (load_config, get_llm_url, describe_settings,
+                           set_user_setting, unset_user_setting, SETTINGS)
+from local_server import ServerManager
 from memory_store import init_db, log_message
 from memory_recall import setup_fts
 from prompt_assembler import build_static_system_message, build_turn_context
@@ -95,7 +99,12 @@ GEMINI_TOOL_NOTE = (
 
 
 class LocalModelError(Exception):
-    """A local llama-server call failed (connection, HTTP or mid-stream)."""
+    """A local llama-server call failed (connection, HTTP or mid-stream).
+    server_down=True means the server itself is gone, not just a bad reply."""
+
+    def __init__(self, message, server_down: bool = False):
+        super().__init__(message)
+        self.server_down = server_down
 
 
 class RouteError(Exception):
@@ -117,6 +126,9 @@ class Conversation:
         self.forced_model = None
         self.forced_remaining = 0
         self.lfm_process = None
+        self._lfm_lock = threading.Lock()
+        self.on_route = None          # hook(tag, note): called when a backend is chosen
+        self.last_route = ""
         self.last_reply_streamed = False
         self._turn_context = ""
         self._last_user_message = ""
@@ -125,7 +137,72 @@ class Conversation:
         self.system_static = build_static_system_message()
         self.messages = [{"role": "system",
                           "content": self.system_static + "\n" + TOOL_INSTRUCTIONS}]
+        self.local = ServerManager(config, self._warm_local)
         atexit.register(self.stop_lfm)
+        atexit.register(self._stop_local_on_exit)
+
+    # ------------------------------------------------------------------
+    # background boot, routing tags
+    # ------------------------------------------------------------------
+
+    def _warm_local(self):
+        """Heat llama-server's KV cache with the exact production prefix."""
+        payload = {
+            "messages": [self.messages[0], {"role": "user", "content": "hi"}],
+            "tools": LOCAL_TOOLS_SCHEMA,
+            "chat_template_kwargs": {"enable_thinking": False},
+            "max_tokens": 1,
+        }
+        response = requests.post(self.url, json=payload, timeout=240)
+        response.raise_for_status()
+
+    def _stop_local_on_exit(self):
+        if self.config["local"].get("stop_on_exit"):
+            self.local.stop()
+
+    def _lfm_configured(self) -> bool:
+        path = os.path.expanduser(self.config["lfm"].get("model_path", ""))
+        return bool(path) and os.path.isfile(path)
+
+    def _gemini_on(self) -> bool:
+        return bool(self.config.get("gemini_enabled", True)) and os.environ.get("FAZE_GEMINI_DISABLED") != "1"
+
+    def start_background(self):
+        """Boot Qwen without blocking the chat loop, and bring LFM up so
+        there is something to chat with while Qwen loads. Without this
+        call Qwen is treated as already running (tests, phone_server)."""
+        boot = self.config["boot"]
+        if boot["mode"] == "blocking":
+            print("[qwen starting; waiting for it to be ready...]")
+            self.local.start(block=True)
+            for note in self.local.drain_notices():
+                print(note)
+            return
+        print("[qwen booting in the background" +
+              (", chatting via LFM until it's ready]" if boot["chat_while_booting"] == "lfm" and self._lfm_configured()
+               else f", chat_while_booting={boot['chat_while_booting']}]"))
+        self.local.start()
+        if boot["chat_while_booting"] == "lfm" and self._lfm_configured():
+            threading.Thread(target=self._preload_lfm, daemon=True).start()
+
+    def _preload_lfm(self):
+        try:
+            self._ensure_lfm()
+        except Exception as e:
+            log_action("lfm", "preload", {}, f"ERROR {e}", 0, echo=False)
+
+    def drain_notices(self) -> list:
+        return self.local.drain_notices()
+
+    def _announce(self, tag: str, extra: str = ""):
+        self.last_route = tag
+        parts = [extra] if extra else []
+        if tag != "qwen":
+            note = self.local.status_note()
+            if note:
+                parts.append(note)
+        if self.on_route:
+            self.on_route(tag, ", ".join(parts))
 
     # ------------------------------------------------------------------
     # history / request building
@@ -174,7 +251,7 @@ class Conversation:
             response = requests.post(url, json=payload, timeout=120, stream=True)
             response.raise_for_status()
         except requests.exceptions.RequestException as e:
-            raise LocalModelError(_local_error(e, url)) from e
+            raise LocalModelError(_local_error(e, url), server_down=True) from e
         response.encoding = "utf-8"
 
         full_content = ""
@@ -225,7 +302,7 @@ class Conversation:
         except (requests.exceptions.RequestException, http.client.HTTPException, OSError) as e:
             if streamed:
                 print()
-            raise LocalModelError(f"stream interrupted ({type(e).__name__})") from e
+            raise LocalModelError(f"stream interrupted ({type(e).__name__})", server_down=True) from e
 
         if streamed:
             print()
@@ -412,6 +489,10 @@ class Conversation:
         port = int(lfm.get("port", 8081))
         url = f"http://127.0.0.1:{port}/v1/chat/completions"
         health = f"http://127.0.0.1:{port}/health"
+        with self._lfm_lock:
+            return self._start_lfm_locked(lfm, model, port, url, health)
+
+    def _start_lfm_locked(self, lfm, model, port, url, health) -> str:
         if self._healthy(health):
             return url
 
@@ -472,8 +553,13 @@ class Conversation:
         parts = line.strip().split()
         if not parts or not parts[0].startswith("/"):
             return None
-        if parts[0].lower() != "/model":
-            return f"Unknown command {parts[0]}. Available: /model"
+        cmd = parts[0].lower()
+        if cmd == "/settings":
+            return self._settings_command(parts[1:])
+        if cmd == "/status":
+            return self._status_text()
+        if cmd != "/model":
+            return f"Unknown command {parts[0]}. Available: /model /settings /status"
         if len(parts) == 1:
             if not self.forced_model:
                 return "Current mode: auto"
@@ -498,6 +584,54 @@ class Conversation:
                 self.stop_lfm()
             return f"Forcing {mode} for {'next ' + str(turns) + ' turns' if turns else 'session'}"
         return "Invalid mode. Use auto, qwen, gemini, or lfm"
+
+    def _status_text(self) -> str:
+        local = self.local.state if self.local.state != "unmanaged" else "running (not managed)"
+        if self.local.detail and self.local.state in ("down", "failed"):
+            local += f" ({self.local.detail})"
+        lfm = "running" if self.lfm_process and self.lfm_process.poll() is None else (
+            "idle" if self._lfm_configured() else "not configured")
+        mode = self.forced_model or "auto"
+        gem = "on" if self._gemini_on() else "off"
+        return f"qwen: {local} | lfm: {lfm} | gemini: {gem} | mode: {mode}"
+
+    def _settings_command(self, args: list) -> str:
+        if not args:
+            return describe_settings(self.config)
+        action = args[0].lower()
+        try:
+            if action == "set" and len(args) >= 3:
+                key, raw = args[1], " ".join(args[2:])
+                value, restart = set_user_setting(key, raw)
+                self._apply_setting(key, value)
+                return f"{key} = {value}" + (" (takes effect after restart)" if restart else "")
+            if action == "unset" and len(args) == 2:
+                removed = unset_user_setting(args[1])
+                if removed:
+                    fresh = load_config()
+                    cur = fresh
+                    for part in args[1].split("."):
+                        cur = cur[part]
+                    self._apply_setting(args[1], cur)
+                return f"{args[1]} reset to default" if removed else f"{args[1]} had no user override"
+        except ValueError as e:
+            return f"Setting not changed: {e}"
+        return "Usage: /settings | /settings set <key> <value> | /settings unset <key>"
+
+    def _apply_setting(self, key: str, value) -> None:
+        """Make a changed setting take effect now where it can."""
+        node = self.config
+        parts = key.split(".")
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = value
+        if key == "gemini_enabled":
+            if value:
+                os.environ.pop("FAZE_GEMINI_DISABLED", None)
+            else:
+                os.environ["FAZE_GEMINI_DISABLED"] = "1"
+        if key == "ui.show_trace":
+            action_log.set_console(bool(value))
 
     def _consume_forced(self):
         model = self.forced_model
@@ -526,20 +660,52 @@ class Conversation:
         log_action("orchestrator", "failure", {}, message, 0, echo=False)
         return message
 
+    def _wait_then_qwen(self) -> str:
+        print("[waiting for qwen...]")
+        if not self.local.wait_ready():
+            raise LocalModelError(f"qwen not available ({self.local.state}: {self.local.detail or 'timed out'})")
+        return self._call_local_with_tools()
+
+    def _auto_chain(self) -> list:
+        """Backends to try, in order, for this message."""
+        chat = self.config["boot"]["chat_while_booting"]
+        lfm_ok = chat == "lfm" and self._lfm_configured()
+        chain = []
+        if self.local.usable:
+            chain.append(("qwen", self._call_local_with_tools))
+            if lfm_ok:
+                chain.append(("lfm", self._call_lfm))
+        elif lfm_ok:
+            chain.append(("lfm", self._call_lfm))
+        elif chat == "wait":
+            chain.append(("qwen", self._wait_then_qwen))
+        if self._gemini_on():
+            chain.append(("gemini", self._call_gemini_with_tools))
+        return chain
+
     def _run_auto(self) -> str:
-        try:
-            return self._call_local_with_tools()
-        except Exception as e:
-            cause = summarize_error(e) if not isinstance(e, LocalModelError) else str(e)
-            log_action("local", "fallback", {}, f"{cause} -> trying gemini", 0)
+        chain = self._auto_chain()
+        if not chain:
+            raise RouteError(f"no backend available right now ({self.local.status_note() or 'all disabled'})")
+        errors = []
+        for tag, call in chain:
+            self._announce(tag)
             try:
-                return self._call_gemini_with_tools()
-            except Exception as ge:
-                raise RouteError(f"local model: {cause}; gemini: {summarize_error(ge)}")
+                return call()
+            except Exception as e:
+                cause = str(e) if isinstance(e, LocalModelError) else summarize_error(e)
+                errors.append(f"{tag}: {cause}")
+                log_action(tag, "fallback", {}, cause, 0)
+                if tag == "qwen" and isinstance(e, LocalModelError) and e.server_down:
+                    self.local.mark_down(cause)
+        raise RouteError("; ".join(errors))
 
     def send(self, user_message: str) -> str:
         self.last_reply_streamed = False
         self._last_user_message = user_message
+        if (self.local.state == "ready" and self.lfm_process and self.forced_model != "lfm"
+                and self.config["lfm"].get("stop_when_qwen_ready", True)):
+            self.stop_lfm()  # Qwen took over; free the RAM LFM was using
         self.messages.append({"role": "user", "content": user_message})
         log_message(DEVICE, "user", user_message)
 
@@ -557,11 +723,14 @@ class Conversation:
         if call is None and not self.forced_model:
             call, layer = ask_needle(user_message), "needle"
         if call is not None:
+            self._announce(layer)
             return self._finish(self._run_direct_call(call, layer))
 
         # 2. Model routes.
         forced = self._consume_forced()
         try:
+            if forced:
+                self._announce(forced, "forced")
             if forced == "gemini":
                 reply = self._call_gemini_with_tools()
             elif forced == "qwen":
@@ -581,20 +750,45 @@ class Conversation:
         return self._finish(reply)
 
 
+def make_prefix_hook(name: str, show_tag: bool):
+    """Returns (state, hook). hook(tag, note) prints 'Faze [tag | note]: '
+    when a backend is chosen, and again (on a new line) if the turn
+    falls back to another backend."""
+    state = {"printed": False}
+
+    def hook(tag: str, note: str):
+        if not show_tag:
+            return
+        label = tag + (f" | {note}" if note else "")
+        print(("\n" if state["printed"] else "") + f"{name} [{label}]: ", end="", flush=True)
+        action_log.set_inline_open(True)
+        state["printed"] = True
+    return state, hook
+
+
 if __name__ == "__main__":
     init_db()
     try:
         setup_fts()
     except Exception as e:
         print(f"[memory index unavailable: {summarize_error(e)}]")
-    config = load_config()
+    try:
+        config = load_config()
+    except ValueError as e:
+        print(f"[settings error: {e}]")
+        raise SystemExit(1)
+    action_log.set_console(config["ui"].get("show_trace", True))
     convo = Conversation(config)
+    convo.start_background()
 
-    print(f"felix-ai Core -- {config['assistant_name']}")
+    name = config["assistant_name"]
+    print(f"felix-ai Core -- {name}")
     print(f"Talking to: {convo.url}")
-    print("Type 'quit' to exit.\n")
+    print("Commands: /model /settings /status. Type 'quit' to exit.\n")
 
     while True:
+        for note in convo.drain_notices():
+            print(note)
         try:
             user_input = input("You: ").strip()
         except (EOFError, KeyboardInterrupt):
@@ -608,12 +802,15 @@ if __name__ == "__main__":
             print(convo.handle_command(user_input))
             continue
 
-        print(f"{config['assistant_name']}: ", end="", flush=True)
+        state, convo.on_route = make_prefix_hook(name, config["ui"].get("show_model_tag", True))
         try:
             reply = convo.send(user_input)
         except Exception as e:  # last line of defence: never crash the loop
             reply = f"[unexpected error: {summarize_error(e)}]"
             log_action("orchestrator", "crash-guard", {}, reply, 0, echo=False)
+        action_log.set_inline_open(False)
+        if not state["printed"]:
+            print(f"{name}: ", end="")
         if not convo.last_reply_streamed:
             print(reply)
         print()

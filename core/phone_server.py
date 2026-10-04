@@ -17,6 +17,7 @@ PHONE_SERVER_PORT = 8766
 init_db()
 config = load_config()
 convo = Conversation(config)
+convo.start_background()
 
 
 class PhoneServerHandler(BaseHTTPRequestHandler):
