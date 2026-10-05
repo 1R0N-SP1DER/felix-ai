@@ -82,11 +82,11 @@ class BootBase(unittest.TestCase):
             c.stop_lfm()
             c.local.stop()
 
-    def convo(self, qwen_delay=1.5, chat="lfm", mode="background", lfm=True, qwen_bin=None, **extra):
+    def convo(self, qwen_delay=1.5, chat="lfm", mode="background", lfm=True, qwen_bin=None, qwen="eager", **extra):
         config = load_config()
         port = free_port()
         config["llm"]["port"] = port
-        config["boot"].update({"mode": mode, "chat_while_booting": chat})
+        config["boot"].update({"mode": mode, "chat_while_booting": chat, "qwen": qwen})
         config["local"].update({
             "model_path": model_file("qwen.gguf"),
             "server_bin": qwen_bin or make_server("fake-qwen", "qwen says hi", qwen_delay),

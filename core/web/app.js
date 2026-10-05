@@ -211,12 +211,17 @@
   let menuSel = 0;
   let voiceMode = false;
   let misses = 0;
+  let lastWakeState = '';
+  let audio = null;
+  let audioPlaying = false;
+  let geminiVoices = null;
+  let wakeSeq = 0;
   const seenNotices = new Set();
 
   const opts = {
     speak: store.get('opt_speak', false),
     mic: store.get('opt_mic', true),
-    onDevice: store.get('opt_ondevice', true),
+    onDevice: store.get('opt_ondevice', false),
     accent: store.get('opt_accent', 'orange'),
     size: store.get('opt_size', 'm'),
     motion: store.get('opt_motion', true),
@@ -225,6 +230,7 @@
     offlineVoices: store.get('opt_offline_voices', true),
     rate: store.get('opt_rate', 1),
     pitch: store.get('opt_pitch', 1),
+    font: store.get('opt_font', 'system'),
   };
 
   function saveChat() { store.set('faze_chat', chat.slice(-200)); }
@@ -242,6 +248,7 @@
     const root = document.documentElement;
     root.style.setProperty('--accent', ACCENTS[opts.accent] || ACCENTS.orange);
     root.dataset.size = opts.size;
+    root.dataset.font = opts.font;
     root.dataset.motion = opts.motion ? 'on' : 'off';
   }
 
@@ -360,6 +367,13 @@
     chips.appendChild(chip('qwen ' + st.qwen.sub, st.qwen.cls));
     if (s.lfm === 'running') chips.appendChild(chip('lfm on', 'ok'));
     if (!s.gemini) chips.appendChild(chip('gemini off', ''));
+    if (s.wake && s.wake.enabled) {
+      const c = chip('wake ' + s.wake.state, s.wake.state === 'listening' ? 'wake' : (s.wake.state === 'listening' ? '' : 'warn'));
+      if (s.wake.detail) c.title = s.wake.detail;
+      chips.appendChild(c);
+      if (s.wake.detail && s.wake.state !== lastWakeState) addMessage({ role: 'system', text: 'Wake word: ' + s.wake.detail });
+      lastWakeState = s.wake.state;
+    }
 
     $('model-label').textContent = modelLabel(s.mode, s.forced_turns);
     $('menu-think-val').textContent = s.think;
@@ -437,6 +451,7 @@
   }
 
   async function sendMessage(text) {
+    stopAudio();
     if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
     syncSpeechButton();
     if (text.startsWith('/')) return runCommand(text);
@@ -544,27 +559,120 @@
     return u;
   }
 
-  function speak(text) {
-    const wanted = (opts.speak || voiceMode) && typeof speechSynthesis !== 'undefined' && text;
-    const clean = wanted ? stripForSpeech(text) : '';
-    if (!clean) { resumeListening(); return; }
+  function stopAudio() {
+    if (audio) { audio.pause(); audio = null; }
+    audioPlaying = false;
+  }
+
+  function systemSpeak(clean) {
+    if (typeof speechSynthesis === 'undefined') { resumeListening(); return; }
     const u = makeUtterance(clean);
     u.onend = u.onerror = () => { syncSpeechButton(); resumeListening(); };
     speechSynthesis.speak(u);
     syncSpeechButton();
   }
 
+  // Natural online voice from the server; resolves false if it can't be played.
+  async function playGemini(text, voice, quiet) {
+    try {
+      const res = await api('/api/speak', { body: voice ? { text, voice } : { text } });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || ('HTTP ' + res.status));
+      }
+      const url = URL.createObjectURL(await res.blob());
+      stopAudio();
+      const a = new Audio(url);
+      audio = a;
+      audioPlaying = true;
+      const done = () => { if (audio === a) { audioPlaying = false; audio = null; } URL.revokeObjectURL(url); syncSpeechButton(); if (!quiet) resumeListening(); };
+      a.onended = a.onerror = done;
+      await a.play();
+      syncSpeechButton();
+      return true;
+    } catch (e) {
+      audioPlaying = false;
+      toast('Gemini voice unavailable: ' + e.message);
+      return false;
+    }
+  }
+
+  function speak(text) {
+    const wanted = (opts.speak || voiceMode) && text;
+    const clean = wanted ? stripForSpeech(text) : '';
+    if (!clean) { resumeListening(); return; }
+    const gemini = status && status.tts && status.tts.engine === 'gemini' && navigator.onLine;
+    if (gemini) { playGemini(clean).then((ok) => { if (!ok) systemSpeak(clean); }); return; }
+    systemSpeak(clean);
+  }
+
   // Voice mode: listen, answer out loud, then listen again until you stop it.
+  // The aura follows what Faze is doing: listening, thinking, speaking.
+  function syncAura() {
+    let state = '';
+    if (voiceMode || wakeFlash) {
+      if (recorder || recognizer) state = 'listening';
+      else if (busy) state = 'thinking';
+      else if (audioPlaying || (typeof speechSynthesis !== 'undefined' && speechSynthesis.speaking)) state = 'speaking';
+      else state = voiceMode ? 'listening' : 'listening';
+    }
+    if (document.body.dataset.aura !== state) {
+      if (state) document.body.dataset.aura = state; else delete document.body.dataset.aura;
+      $('voice-label').textContent = { listening: 'Listening', thinking: 'Thinking', speaking: 'Speaking' }[state] || '';
+    }
+    if (!recorder) document.documentElement.style.setProperty('--level', '0');
+  }
+
+  let wakeFlash = false;
+
+  // Wake word (or a Tasker call) fired: light up and start listening.
+  function onWake() {
+    wakeFlash = true;
+    setTimeout(() => { wakeFlash = false; }, 4000);
+    if (!busy && !voiceMode) setVoiceMode(true);
+    syncAura();
+  }
+
+  function connectEvents() {
+    if (!token) { setTimeout(connectEvents, 3000); return; }
+    fetch('/api/events', { headers: { Authorization: 'Bearer ' + token } }).then(async (res) => {
+      if (!res.ok) throw new Error('events ' + res.status);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parsed = parseSSE(buffer);
+        buffer = parsed.rest;
+        for (const { event, data } of parsed.events) {
+          if (event === 'wake' && data.seq !== wakeSeq) { wakeSeq = data.seq; onWake(); }
+        }
+      }
+    }).catch(() => {}).then(() => setTimeout(connectEvents, 3000));
+  }
+
+  function handleHash() {
+    const hash = location.hash.slice(1);
+    if (hash === 'voice') {
+      history.replaceState(null, '', location.pathname);
+      onWake();
+    }
+  }
+
   function setVoiceMode(on) {
     voiceMode = on;
     misses = 0;
     document.body.classList.toggle('voice', on);
     $('menu-voice-val').textContent = on ? 'on' : 'off';
+    syncAura();
     if (on) {
       if (!busy) toggleMic();
     } else {
       if (recorder) recorder.stop();
       if (recognizer) recognizer.stop();
+      stopAudio();
       if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
       syncSpeechButton();
     }
@@ -572,7 +680,7 @@
 
   function resumeListening() {
     if (!voiceMode || busy || recorder || recognizer) return;
-    setTimeout(() => { if (voiceMode && !busy && !recorder && !recognizer && !(typeof speechSynthesis !== 'undefined' && speechSynthesis.speaking)) toggleMic(); }, 400);
+    setTimeout(() => { if (voiceMode && !busy && !recorder && !recognizer && !audioPlaying && !(typeof speechSynthesis !== 'undefined' && speechSynthesis.speaking)) toggleMic(); }, 400);
   }
 
   function heardNothing() {
@@ -584,7 +692,7 @@
   }
 
   function syncSpeechButton() {
-    $('stop-speech').hidden = !(typeof speechSynthesis !== 'undefined' && speechSynthesis.speaking);
+    $('stop-speech').hidden = !(audioPlaying || (typeof speechSynthesis !== 'undefined' && speechSynthesis.speaking));
   }
 
   // ---------------------------------------------------------------- voice in
@@ -599,6 +707,8 @@
     const serverOk = status && status.stt.server && canRecord;
     if (pref === 'server') return serverOk ? 'server' : 'none-server';
     if (pref === 'browser') return Recognition ? 'browser' : 'none';
+    // Auto: Chrome's recognizer while online (it was the reliable one), whisper when offline.
+    if (Recognition && navigator.onLine && !opts.onDevice) return 'browser';
     if (serverOk) return 'server';
     return Recognition ? 'browser' : 'none';
   }
@@ -626,7 +736,9 @@
         chunks.push(new Float32Array(data));
         let sum = 0;
         for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
-        if (Math.sqrt(sum / data.length) > 0.02) { heard = true; lastLoud = Date.now(); }
+        const level = Math.sqrt(sum / data.length);
+        document.documentElement.style.setProperty('--level', Math.min(1, level * 7).toFixed(2));
+        if (level > 0.02) { heard = true; lastLoud = Date.now(); }
       };
       src.connect(node);
       node.connect(ctx.destination);
@@ -809,6 +921,65 @@
     return false;
   }
 
+  // ---------------------------------------------------------------- voice browser
+
+  async function setTts(key, value) {
+    try { await apiJson('/api/settings', { key, value }); await pollStatus(true); }
+    catch (e) { toast(e.message); }
+  }
+
+  function voiceRow(name, sub, on, tag, onPick, onPlay) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'voice-row' + (on ? ' on' : '');
+    const play = document.createElement('span');
+    play.className = 'play';
+    play.textContent = '\u25B6';
+    play.addEventListener('click', (ev) => { ev.stopPropagation(); onPlay(); });
+    const label = document.createElement('span');
+    label.className = 'name';
+    label.textContent = name;
+    if (tag) { const t = document.createElement('span'); t.className = 'tag'; t.textContent = tag; label.appendChild(t); }
+    const small = document.createElement('small');
+    small.textContent = sub;
+    label.appendChild(small);
+    const check = document.createElement('span');
+    check.className = 'check';
+    check.textContent = '\u2713';
+    row.append(play, label, check);
+    row.addEventListener('click', onPick);
+    return row;
+  }
+
+  async function renderVoices() {
+    const q = $('voice-search').value.trim().toLowerCase();
+    if (!geminiVoices) {
+      try { geminiVoices = (await apiJson('/api/voices')).gemini; } catch (e) { geminiVoices = []; }
+    }
+    const t = (status && status.tts) || { engine: 'system', voice: '' };
+    const g = $('gemini-voices');
+    g.textContent = '';
+    for (const v of geminiVoices.filter((x) => !q || (x.label + ' ' + x.style).toLowerCase().includes(q))) {
+      g.appendChild(voiceRow(v.label, v.style, t.engine === 'gemini' && t.voice === v.name, '',
+        async () => { await setTts('tts.voice', v.name); await setTts('tts.engine', 'gemini'); renderVoices(); },
+        () => playGemini('Hi, I am ' + v.label + '. This is how I sound.', v.name, true)));
+    }
+    if (!geminiVoices.length) g.textContent = 'Could not load the voice list.';
+
+    const d = $('device-voices');
+    d.textContent = '';
+    const lang = (navigator.language || 'en').slice(0, 2).toLowerCase();
+    const list = (typeof speechSynthesis !== 'undefined' ? speechSynthesis.getVoices() : [])
+      .filter((v) => !q || (v.name + ' ' + v.lang).toLowerCase().includes(q))
+      .sort((a, b) => (b.lang.toLowerCase().startsWith(lang) - a.lang.toLowerCase().startsWith(lang)) || a.name.localeCompare(b.name));
+    for (const v of list) {
+      d.appendChild(voiceRow(v.name, v.lang, t.engine === 'system' && opts.voice === v.voiceURI, v.localService ? '' : 'online',
+        async () => { saveOpt('voice', v.voiceURI); await setTts('tts.engine', 'system'); loadVoices(); renderVoices(); },
+        () => { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance('Hi, this is ' + v.name + '.'); u.voice = v; u.lang = v.lang; speechSynthesis.speak(u); }));
+    }
+    if (!list.length) d.textContent = 'No device voices found.';
+  }
+
   // ---------------------------------------------------------------- settings sheet
 
   async function loadSettings() {
@@ -887,6 +1058,8 @@
     $('pitch-val').textContent = Number(opts.pitch).toFixed(2);
     $('stt-pick').value = status ? status.stt.pref : 'auto';
     for (const b of $('size-seg').children) b.classList.toggle('on', b.dataset.v === opts.size);
+    for (const b of $('font-seg').children) b.classList.toggle('on', b.dataset.v === opts.font);
+    for (const b of $('engine-seg').children) b.classList.toggle('on', b.dataset.v === ((status && status.tts && status.tts.engine) || 'system'));
     for (const b of $('swatches').children) b.classList.toggle('on', b.dataset.v === opts.accent);
     loadVoices();
   }
@@ -943,6 +1116,13 @@
       catch (err) { toast(err.message); }
     });
     for (const b of $('size-seg').children) b.addEventListener('click', () => { saveOpt('size', b.dataset.v); applyLook(); syncSettingsControls(); });
+    for (const b of $('font-seg').children) b.addEventListener('click', () => { saveOpt('font', b.dataset.v); applyLook(); syncSettingsControls(); });
+    for (const b of $('engine-seg').children) b.addEventListener('click', async () => { await setTts('tts.engine', b.dataset.v); syncSettingsControls(); });
+    on('browse-voices', 'click', () => { $('voice-sheet').hidden = false; renderVoices(); });
+    on('close-voices', 'click', () => { $('voice-sheet').hidden = true; });
+    on('voice-search', 'input', renderVoices);
+    $('voice-sheet').addEventListener('click', (ev) => { if (ev.target === $('voice-sheet')) $('voice-sheet').hidden = true; });
+    if (typeof speechSynthesis !== 'undefined') speechSynthesis.addEventListener('voiceschanged', () => { if (!$('voice-sheet').hidden) renderVoices(); });
     for (const [name, color] of Object.entries(ACCENTS)) {
       const b = document.createElement('button');
       b.type = 'button'; b.dataset.v = name; b.style.background = color; b.setAttribute('aria-label', name);
@@ -986,8 +1166,9 @@
       if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); if (!busy) $('composer').requestSubmit(); }
     });
     $('mic').addEventListener('click', toggleMic);
-    $('stop-speech').addEventListener('click', () => { speechSynthesis.cancel(); syncSpeechButton(); resumeListening(); });
+    $('stop-speech').addEventListener('click', () => { stopAudio(); if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel(); syncSpeechButton(); resumeListening(); });
     $('menu-voice').addEventListener('click', () => { $('menu').hidden = true; setVoiceMode(!voiceMode); });
+    $('voice-stop').addEventListener('click', () => { wakeFlash = false; setVoiceMode(false); syncAura(); });
     $('new-chat').addEventListener('click', newChat);
     $('model-chip').addEventListener('click', openModelSheet);
     $('plus').addEventListener('click', (ev) => { ev.stopPropagation(); $('menu').hidden = !$('menu').hidden; });
@@ -1032,6 +1213,10 @@
 
     loadCommands();
     loadSettingRows();
+    connectEvents();
+    window.addEventListener('hashchange', handleHash);
+    setInterval(syncAura, 250);
+    setTimeout(handleHash, 600);
     pollStatus(true);
     setInterval(pollStatus, 3000);
     document.addEventListener('visibilitychange', () => pollStatus(true));

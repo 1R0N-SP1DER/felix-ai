@@ -22,6 +22,7 @@ import atexit
 import http.client
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -45,6 +46,7 @@ from tool_replies import format_reply, summarize_error, numbers_preserved
 from direct_tool_router import try_direct_route
 from intents import match_intent
 from needle_router import ask_needle
+import gemini_client
 from gemini_client import ask_gemini, GeminiError
 from gemini_tools import build_gemini_tools_schema, build_local_tools_schema
 
@@ -177,6 +179,8 @@ class Conversation:
             os.environ["FAZE_GEMINI_DISABLED"] = "1"
         names = config["assistant"]
         set_names(names["name"], names["user_name"])
+        gemini_client.configure(chat=config["gemini"]["model"], search=config["gemini"]["search_model"])
+        self._gemini_down_until = 0.0
         self.system_static = build_static_system_message()
         self.messages = [{"role": "system",
                           "content": self.system_static + "\n" + TOOL_INSTRUCTIONS}]
@@ -215,6 +219,14 @@ class Conversation:
         there is something to chat with while Qwen loads. Without this
         call Qwen is treated as already running (tests, phone_server)."""
         boot = self.config["boot"]
+        if boot.get("qwen", "lazy") == "lazy" and boot["mode"] != "blocking":
+            if self.local._healthy():
+                self.local.start()  # already running from last time: attach and warm
+                print("[qwen already running; attaching]")
+            else:
+                self.local.go_idle()
+                print("[qwen starts on demand (boot.qwen = lazy); nothing heavy runs at launch]")
+            return
         if boot["mode"] == "blocking":
             print("[qwen starting; waiting for it to be ready...]")
             self.local.start(block=True)
@@ -792,6 +804,8 @@ class Conversation:
             set_names(name, user)
             self.config["assistant_name"] = name
             self._rebuild_system()
+        if key in ("gemini.model", "gemini.search_model"):
+            gemini_client.configure(chat=self.config["gemini"]["model"], search=self.config["gemini"]["search_model"])
         if key == "model.forced":
             self._persisted_force = value if value in FORCEABLE_MODELS else None
             if self.forced_remaining == 0:
@@ -830,10 +844,55 @@ class Conversation:
             raise LocalModelError(f"qwen not available ({self.local.state}: {self.local.detail or 'timed out'})")
         return self._call_local_with_tools()
 
+    def _forced_qwen(self) -> str:
+        self.local.ensure_started()
+        if not self.local.usable:
+            return self._wait_then_qwen()
+        return self._call_local_with_tools()
+
+    @staticmethod
+    def _gemini_unreachable(e: Exception) -> bool:
+        """Network trouble, quota or server errors: worth falling back to a local model.
+        Bad keys, bad requests and a disabled layer are NOT, so they stay loud."""
+        text = str(e)
+        return isinstance(e, GeminiError) and (
+            text.startswith("Network error") or " returned 429" in text or bool(re.search(r" returned 5\d\d", text)))
+
+    def _forced_gemini(self) -> str:
+        """Gemini stays on until you turn it off; if it can't be reached the
+        reply comes from a local model instead, and Gemini is retried in a minute."""
+        order = [t for t in self.config["fallback"]["order"].split(",") if t in ("lfm", "qwen")]
+        now = time.monotonic()
+        try:
+            if now < self._gemini_down_until:
+                raise GeminiError(f"Network error: Gemini unreachable, retrying in {int(self._gemini_down_until - now)}s")
+            return self._call_gemini_with_tools()
+        except TurnCancelled:
+            raise
+        except Exception as e:
+            if not order or not self._gemini_unreachable(e):
+                raise
+            cause = summarize_error(e)
+            self._gemini_down_until = max(self._gemini_down_until, now + 60)
+            log_action("gemini", "fallback", {}, f"{cause} -> {','.join(order)}", 0)
+            errors = [f"gemini: {cause}"]
+            for tag in order:
+                if tag == "lfm" and not self._lfm_configured():
+                    continue
+                self._announce(tag, "offline fallback")
+                try:
+                    return self._call_lfm() if tag == "lfm" else self._forced_qwen()
+                except TurnCancelled:
+                    raise
+                except Exception as fe:
+                    errors.append(f"{tag}: {str(fe) if isinstance(fe, LocalModelError) else summarize_error(fe)}")
+            raise RouteError("; ".join(errors))
+
     def _auto_chain(self) -> list:
         """Backends to try, in order, for this message."""
         chat = self.config["boot"]["chat_while_booting"]
         lfm_ok = chat == "lfm" and self._lfm_configured()
+        self.local.ensure_started()  # no-op unless Qwen is idle or down
         chain = []
         if self.local.usable:
             chain.append(("qwen", self._call_local_with_tools))
@@ -899,9 +958,9 @@ class Conversation:
             if forced:
                 self._announce(forced, "forced")
             if forced == "gemini":
-                reply = self._call_gemini_with_tools()
+                reply = self._forced_gemini()
             elif forced == "qwen":
-                reply = self._call_local_with_tools()
+                reply = self._forced_qwen()
             elif forced == "lfm":
                 reply = self._call_lfm()
             else:

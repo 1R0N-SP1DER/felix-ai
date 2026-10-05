@@ -4,7 +4,7 @@ Owns the main local llama-server (Qwen): starts it in the background,
 warms its cache, restarts it if Android kills it, and reports its state
 so the orchestrator can chat through LFM (or Gemini) in the meantime.
 
-States: unmanaged (never started by us; callers just try it) -> down ->
+States: unmanaged (never started by us; callers just try it) -> idle (lazy) -> down ->
 starting -> warming -> ready, or failed.
 """
 
@@ -71,6 +71,10 @@ class ServerManager:
         if self.state in ("starting", "warming"):
             return f"qwen {self.state} {int(time.time() - self._boot_started)}s"
         return f"qwen {self.state}"
+
+    def go_idle(self) -> None:
+        """Lazy mode: Qwen is not started until something needs it."""
+        self.state = "idle"
 
     # ---- lifecycle -------------------------------------------------------
 
@@ -141,6 +145,10 @@ class ServerManager:
                 return
             time.sleep(0.5)
         raise ServerError(f"llama-server not ready after {int(timeout)}s; see {self.config['local']['log']}")
+
+    def ensure_started(self) -> None:
+        if self.state in ("idle", "down"):
+            self.start()
 
     def mark_down(self, reason: str) -> None:
         """Called when a request to Qwen failed. Restarts it in the

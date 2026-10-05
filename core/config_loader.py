@@ -23,6 +23,14 @@ DEFAULTS = {
     "model": {"forced": "auto"},          # auto | qwen | gemini | lfm  (persisted /model choice)
     "reasoning": {"mode": "auto"},        # auto | on | off  (Qwen thinking mode)
     "voice": {"stt": "auto"},             # auto | server | browser
+    "tts": {"engine": "system", "voice": "kore", "model": "gemini-3.1-flash-tts-preview"},
+    "wake": {
+        "enabled": False,
+        "phrase": "",                      # empty = "hey <assistant name>"
+        "mic_cmd": "parec --raw --format=s16le --rate=16000 --channels=1 --latency-msec=100",
+        "cooldown": 6,                     # seconds to ignore the wake word after it fires
+        "open_app": True,                  # open the app when it wakes and the app isn't open
+    },
     "stt": {
         "bin": "~/whisper.cpp/build/bin/whisper-cli",
         "model_path": "~/models/ggml-tiny.en.bin",
@@ -35,6 +43,7 @@ DEFAULTS = {
         "mode": "background",              # background | blocking
         "chat_while_booting": "lfm",       # lfm | gemini | wait
         "warmup": True,
+        "qwen": "lazy",                    # lazy: start Qwen only when needed | eager: start it at launch
     },
     "local": {
         "model_path": "~/models/Qwen3.5-0.8B-Q4_K_M.gguf",
@@ -57,6 +66,8 @@ DEFAULTS = {
         "stop_when_qwen_ready": True,
     },
     "server": {"host": "127.0.0.1", "port": 8787, "open_on_start": False},
+    "gemini": {"model": "gemini-3.1-flash-lite", "search_model": "gemini-3.1-flash-lite"},
+    "fallback": {"order": "lfm,qwen"},     # used when forced Gemini can't be reached: lfm,qwen | qwen,lfm | lfm | qwen | off
     "gemini_enabled": True,
     "narrate_tool_results": False,
     "ui": {"show_model_tag": True, "show_trace": True},
@@ -69,6 +80,14 @@ SETTINGS = {
     "model.forced": (str, ("auto", "qwen", "gemini", "lfm")),
     "reasoning.mode": (str, ("auto", "on", "off")),
     "voice.stt": (str, ("auto", "server", "browser")),
+    "tts.engine": (str, ("system", "gemini")),
+    "tts.voice": (str, __import__("tts").VOICE_NAMES),
+    "tts.model": (str, None),
+    "wake.enabled": (bool, None),
+    "wake.phrase": (str, None),
+    "wake.mic_cmd": (str, None),
+    "wake.cooldown": (int, None),
+    "wake.open_app": (bool, None),
     "stt.bin": (str, None),
     "stt.model_path": (str, None),
     "stt.threads": (int, None),
@@ -77,6 +96,10 @@ SETTINGS = {
     "boot.mode": (str, ("background", "blocking")),
     "boot.chat_while_booting": (str, ("lfm", "gemini", "wait")),
     "boot.warmup": (bool, None),
+    "boot.qwen": (str, ("lazy", "eager")),
+    "fallback.order": (str, ("lfm,qwen", "qwen,lfm", "lfm", "qwen", "off")),
+    "gemini.model": (str, None),
+    "gemini.search_model": (str, None),
     "local.model_path": (str, None),
     "local.server_bin": (str, None),
     "local.ctx": (int, None),
@@ -198,6 +221,10 @@ def _coerce(key: str, raw: str):
             raise ValueError(f"{key} must be at least 1")
     else:
         value = text
+        if key in ("gemini.model", "gemini.search_model", "tts.model") and not re.fullmatch(r"[\w.\-]{3,60}", value):
+            raise ValueError(f"{key} must be a model name like gemini-3.1-flash-lite")
+        if key == "wake.phrase" and value and not re.fullmatch(r"[\w .'\-]{2,40}", value):
+            raise ValueError("wake.phrase must be 2-40 letters, numbers, spaces, . ' or -")
         if key in ("assistant.name", "assistant.user_name"):
             if not re.fullmatch(r"[\w .'\-]{1,24}", value):
                 raise ValueError(f"{key} must be 1-24 letters, numbers, spaces, . ' or -")

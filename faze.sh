@@ -37,5 +37,11 @@ else
     echo "[needle] ready"
 fi
 
+# Mic source for the wake word (only if PulseAudio is installed).
+if command -v pulseaudio > /dev/null 2>&1; then
+    pulseaudio --check 2> /dev/null || pulseaudio --start --exit-idle-time=-1 2> /dev/null || true
+    pactl list short sources 2> /dev/null | grep -q sles || pactl load-module module-sles-source > /dev/null 2>&1 || true
+fi
+
 cd "$CORE_DIR"
 exec python orchestrator.py "$@"

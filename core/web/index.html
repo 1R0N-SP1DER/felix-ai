@@ -90,6 +90,8 @@
         <div class="row"><span>Accent</span><div id="swatches" class="swatches"></div></div>
         <div class="row"><span>Text size</span>
           <div class="seg small" id="size-seg"><button type="button" data-v="s">S</button><button type="button" data-v="m">M</button><button type="button" data-v="l">L</button></div></div>
+        <div class="row"><span>Font</span>
+          <div class="seg small" id="font-seg"><button type="button" data-v="system">System</button><button type="button" data-v="serif">Serif</button><button type="button" data-v="mono">Mono</button></div></div>
         <label class="row"><span>Animations</span><input type="checkbox" id="opt-motion"></label>
         <label class="row"><span>Show greeting</span><input type="checkbox" id="opt-greeting"></label>
       </section>
@@ -97,14 +99,17 @@
       <section>
         <h3>Voice</h3>
         <label class="row"><span>Speak replies aloud</span><input type="checkbox" id="opt-speak"></label>
-        <div class="row"><span>Voice</span><select id="voice-pick"></select></div>
+        <div class="row"><span>Voice engine<small>Gemini voices sound natural but need internet</small></span>
+          <div class="seg small" id="engine-seg"><button type="button" data-v="system">Device</button><button type="button" data-v="gemini">Gemini</button></div></div>
+        <button id="browse-voices" type="button" class="wide ghost">Browse voices</button>
+        <div class="row"><span>Device voice</span><select id="voice-pick"></select></div>
         <label class="row"><span>Offline voices only</span><input type="checkbox" id="opt-offline-voices"></label>
         <div class="row"><span>Speed <small id="rate-val"></small></span><input type="range" id="voice-rate" min="0.6" max="1.6" step="0.05"></div>
         <div class="row"><span>Pitch <small id="pitch-val"></small></span><input type="range" id="voice-pitch" min="0.6" max="1.6" step="0.05"></div>
         <button id="voice-test" type="button" class="wide ghost">Test voice</button>
         <label class="row" id="row-mic"><span>Mic button</span><input type="checkbox" id="opt-mic"></label>
         <div class="row"><span>Mic engine<small id="stt-note"></small></span>
-          <select id="stt-pick"><option value="auto">Auto</option><option value="server">Offline (whisper)</option><option value="browser">Chrome</option></select></div>
+          <select id="stt-pick"><option value="auto">Auto (Chrome online, whisper offline)</option><option value="server">Offline (whisper)</option><option value="browser">Chrome</option></select></div>
         <label class="row" id="row-ondevice"><span>Chrome: on-device only<small>Off lets Chrome use Google's cloud</small></span><input type="checkbox" id="opt-ondevice"></label>
       </section>
 
@@ -121,6 +126,19 @@
     </div>
   </div>
 
+  <div class="overlay" id="voice-sheet" hidden>
+    <div class="sheet-body">
+      <div class="grab"></div>
+      <div class="sheet-head"><h2>Voices</h2><button id="close-voices" class="icon" aria-label="Close">&#10005;</button></div>
+      <input id="voice-search" type="search" placeholder="Search voices" autocomplete="off">
+      <h3>Gemini voices (online)</h3>
+      <div id="gemini-voices"></div>
+      <h3>On this device</h3>
+      <div id="device-voices"></div>
+      <p class="hint">Tap a voice to use it, the play button to hear it. More device voices: Android Settings, Text-to-speech, or install a neural engine like VoxSherpa and set it as the default.</p>
+    </div>
+  </div>
+
   <div class="overlay center" id="pair" hidden>
     <div class="pair-body">
       <h2>Pair with Faze</h2>
@@ -128,6 +146,13 @@
       <input id="pair-input" type="password" autocomplete="off" spellcheck="false" placeholder="token">
       <button id="pair-go" class="wide">Connect</button>
     </div>
+  </div>
+
+  <div id="aura" aria-hidden="true"></div>
+  <div id="voicebar" aria-live="polite">
+    <div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <span id="voice-label">Listening</span>
+    <button id="voice-stop" type="button" aria-label="Stop voice mode">&#10005;</button>
   </div>
 
   <div id="toast" hidden></div>

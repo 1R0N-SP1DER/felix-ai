@@ -14,7 +14,19 @@ import json
 import requests
 
 GEMINI_MODEL = "gemini-3.1-flash-lite"
-BASE_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}"
+_MODELS = {"chat": GEMINI_MODEL, "search": GEMINI_MODEL}
+
+
+def configure(chat: str = None, search: str = None) -> None:
+    """Pick the model for normal requests and for Google Search grounding."""
+    if chat:
+        _MODELS["chat"] = chat
+    if search:
+        _MODELS["search"] = search
+
+
+def _base_url(grounded: bool = False) -> str:
+    return f"https://generativelanguage.googleapis.com/v1beta/models/{_MODELS['search' if grounded else 'chat']}"
 
 
 class GeminiError(Exception):
@@ -125,7 +137,7 @@ def ask_gemini(system_message: str, conversation_messages: list, tools_schema: l
 
     try:
         response = requests.post(
-            f"{BASE_URL}:generateContent",
+            f"{_base_url(use_search_grounding)}:generateContent",
             headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
             json=body,
             timeout=timeout,
@@ -152,7 +164,7 @@ def ask_gemini_stream(system_message: str, conversation_messages: list, tools_sc
 
     try:
         response = requests.post(
-            f"{BASE_URL}:streamGenerateContent?alt=sse",
+            f"{_base_url()}:streamGenerateContent?alt=sse",
             headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
             json=body,
             stream=True,

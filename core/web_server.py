@@ -19,15 +19,19 @@ import hmac
 import json
 import mimetypes
 import os
+import queue
 import secrets
 import shutil
 import subprocess
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import action_log
 import stt
+import tts
+import wake
 from icons import make_icon
 from tool_replies import summarize_error
 
@@ -84,8 +88,80 @@ class FazeServer(ThreadingHTTPServer):
         self.token = token
         self.chat_lock = threading.Lock()
         self.stt_lock = threading.Lock()
+        self.tts_lock = threading.Lock()
         self.bound_host = address[0]
         self.port = self.server_address[1]
+        self._subs = []
+        self._subs_lock = threading.Lock()
+        self.wake_seq = 0
+        self._wake_last = 0.0
+        self.wake = None
+        self._wake_cmd = None
+
+    # ---- push events to open apps (Server-Sent Events) ------------------
+
+    def subscribe(self):
+        q = queue.Queue(maxsize=50)
+        with self._subs_lock:
+            self._subs.append(q)
+        return q
+
+    def unsubscribe(self, q):
+        with self._subs_lock:
+            if q in self._subs:
+                self._subs.remove(q)
+
+    def publish(self, event: str, payload: dict):
+        with self._subs_lock:
+            subs = list(self._subs)
+        for q in subs:
+            try:
+                q.put_nowait((event, payload))
+            except queue.Full:
+                pass
+
+    # ---- wake word --------------------------------------------------------
+
+    def trigger_wake(self, source: str, phrase: str = "") -> bool:
+        """Tell open apps to start listening. Returns False if it fired a moment ago."""
+        now = time.monotonic()
+        if now - self._wake_last < 1.0:
+            return False
+        self._wake_last = now
+        self.wake_seq += 1
+        action_log.log_action("wake", "trigger", {"source": source}, f"#{self.wake_seq}", 0, echo=False)
+        app_open = bool(self._subs)
+        self.publish("wake", {"seq": self.wake_seq, "source": source, "phrase": phrase})
+        wake_cfg = self.config["wake"]
+        if not app_open and wake_cfg.get("open_app", True) and shutil.which("termux-open-url"):
+            subprocess.Popen(["termux-open-url", f"http://localhost:{self.port}/#voice"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+
+    def sync_wake(self):
+        """Start, stop or restart the listener so it matches the settings."""
+        cfg = self.config["wake"]
+        want, cmd = bool(cfg.get("enabled")), cfg.get("mic_cmd")
+        if self.wake and (not want or cmd != self._wake_cmd):
+            self.wake.stop()
+            self.wake = None
+        if want and not self.wake:
+            self._wake_cmd = cmd
+            self.wake = wake.WakeListener(
+                self.config, on_wake=lambda phrase, text: self.trigger_wake("voice", phrase),
+                is_busy=lambda: self.chat_lock.locked())
+            self.wake.start()
+
+    def stop_wake(self):
+        if self.wake:
+            self.wake.stop()
+            self.wake = None
+
+    def wake_status(self) -> dict:
+        if self.wake:
+            return {"enabled": True, "seq": self.wake_seq, **self.wake.status()}
+        return {"enabled": False, "seq": self.wake_seq, "state": "off", "detail": "",
+                "phrase": wake.phrase_for(self.config)}
 
     def allowed_hosts(self):
         if not _loopback(self.bound_host):
@@ -202,6 +278,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"settings": self.server.convo.settings_list()})
             if path == "/api/commands":
                 return self._json(200, {"commands": self.server.convo.commands()})
+            if path == "/api/events":
+                return self._events()
+            if path == "/api/voices":
+                return self._json(200, {"gemini": [{"name": n.lower(), "label": n, "style": st} for n, st in tts.VOICES]})
             return self._error(404, "unknown endpoint")
         return self._error(404, "not found")
 
@@ -218,6 +298,11 @@ class Handler(BaseHTTPRequestHandler):
         data = self._read_json()
         if data is None:
             return
+        if path == "/api/speak":
+            return self._speak(data)
+        if path == "/api/wake":
+            fired = self.server.trigger_wake("api")
+            return self._json(200, {"ok": True, "fired": fired})
         if path == "/api/cancel":
             self.server.convo.cancel()
             return self._json(200, {"ok": True})
@@ -245,12 +330,49 @@ class Handler(BaseHTTPRequestHandler):
             "busy": self.server.chat_lock.locked(),
             "notices": convo.drain_notices(),
             "show_tag": bool(self.server.config["ui"].get("show_model_tag", True)),
+            "wake": self.server.wake_status(),
+            "tts": dict(convo.config["tts"]),
             "user_name": convo._names()[1],
             "forced_turns": convo.forced_remaining,
             "think": convo.config["reasoning"]["mode"],
             "stt": {"server": stt.available(convo.config), "pref": convo.config["voice"]["stt"],
                     "reason": stt.missing_reason(convo.config)},
         }
+
+    def _events(self):
+        server = self.server
+        q = server.subscribe()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        try:
+            self.wfile.write(b"event: hello\ndata: {}\n\n")
+            self.wfile.flush()
+            while True:
+                try:
+                    event, payload = q.get(timeout=15)
+                    self.wfile.write(f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode())
+                except queue.Empty:
+                    self.wfile.write(b": keepalive\n\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            server.unsubscribe(q)
+
+    def _speak(self, data):
+        cfg = self.server.convo.config["tts"]
+        if not self.server.tts_lock.acquire(blocking=False):
+            return self._error(409, "still speaking the last reply")
+        try:
+            wav = tts.synthesize(str(data.get("text", "")), str(data.get("voice") or cfg["voice"]), cfg["model"])
+            self._send(200, wav, "audio/wav", {"Cache-Control": "no-store"})
+        except tts.TtsError as e:
+            self._error(422, str(e))
+        finally:
+            self.server.tts_lock.release()
 
     def _transcribe(self):
         data = self._read_audio()
@@ -272,6 +394,7 @@ class Handler(BaseHTTPRequestHandler):
         text = self.server.convo.handle_command(line) if line.startswith("/") else None
         if text is None:
             return self._error(400, "not a slash command")
+        self.server.sync_wake()
         self._json(200, {"text": text})
 
     def _settings(self, data):
@@ -280,8 +403,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if data.get("unset"):
                 removed = convo.reset_setting(key)
+                self.server.sync_wake()
                 return self._json(200, {"ok": True, "removed": removed, "settings": convo.settings_list()})
             value, restart = convo.change_setting(key, str(data.get("value", "")))
+            self.server.sync_wake()
             return self._json(200, {"ok": True, "value": value, "restart": restart,
                                     "settings": convo.settings_list()})
         except ValueError as e:
@@ -354,6 +479,9 @@ def serve(convo, config):
     print("Open this link once in Chrome, then menu > Install app:")
     print(f"  {url}\n")
     print("Ctrl+C to stop.")
+    httpd.sync_wake()
+    if httpd.wake:
+        print(f"Wake word listening for: \"{wake.phrase_for(config)}\"")
     if server_cfg.get("open_on_start") and shutil.which("termux-open-url"):
         subprocess.Popen(["termux-open-url", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
@@ -361,4 +489,5 @@ def serve(convo, config):
     except KeyboardInterrupt:
         print()
     finally:
+        httpd.stop_wake()
         httpd.server_close()
