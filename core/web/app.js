@@ -520,6 +520,7 @@
     if (!busy) syncCoreModel();
     renderSidebar();
     maybeRestore(s);
+    renderWakeRow();
     $('menu-think-val').textContent = s.think;
     for (const b of $('think-seg').children) b.classList.toggle('on', b.dataset.v === s.think);
     $('stt-note').textContent = s.stt.server ? 'offline engine ready' : (s.stt.reason || '');
@@ -1343,13 +1344,58 @@
     for (const b of $('engine-seg').children) b.classList.toggle('on', b.dataset.v === ((status && status.tts && status.tts.engine) || 'system'));
     for (const b of $('swatches').children) b.classList.toggle('on', b.dataset.v === opts.accent);
     loadVoices();
+    renderWakeRow();
+  }
+
+  // Settings is a page of its own (General / Voice / Advanced), not a popup. Android's back button leaves it.
+  let settingsTab = 'general';
+
+  function showSettings(on) {
+    $('settings-view').hidden = !on;
+    document.body.classList.toggle('view-settings', on);
+    if (on) { syncSettingsControls(); selectTab(settingsTab); loadSettings(); $('settings-view').querySelector('.sv-body').scrollTop = 0; }
+  }
+
+  function selectTab(name) {
+    settingsTab = name;
+    for (const b of $('settings-tabs').children) { const on = b.dataset.tab === name; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; }
+    for (const p of $('settings-view').querySelectorAll('.panel')) p.classList.toggle('on', p.dataset.panel === name);
   }
 
   function openSettings() {
     $('menu').hidden = true;
-    syncSettingsControls();
-    $('sheet').hidden = false;
-    loadSettings();
+    closeDrawer();
+    showSettings(true);
+    if (location.hash !== '#settings') history.pushState({ settings: true }, '', '#settings');
+  }
+
+  function closeSettings() {
+    if (location.hash === '#settings') history.back();
+    else showSettings(false);
+  }
+
+  async function saveSetting(key, value, revert) {
+    try {
+      const data = await apiJson('/api/settings', { key, value: String(value) });
+      toast(key + ' = ' + data.value + (data.restart ? ' (after restart)' : ''));
+      settingRows = data.settings || settingRows;
+      loadSettings();
+      pollStatus(true);
+    } catch (e) { toast(e.message); if (revert) revert(); }
+  }
+
+  function renderWakeRow() {
+    const w = status && status.wake;
+    if (!w) return;
+    $('opt-wake').checked = !!w.enabled;
+    if (document.activeElement !== $('wake-phrase')) $('wake-phrase').value = w.phrase || '';
+    const say = '\u201C' + (w.phrase || '') + '\u201D';
+    $('wake-status').textContent = !w.enabled ? 'Off'
+      : w.state === 'listening' ? 'Listening for ' + say
+      : w.state === 'error' ? (w.detail || 'Not working')
+      : w.state === 'starting' ? 'Starting...'
+      : (w.state || 'On').charAt(0).toUpperCase() + (w.state || 'On').slice(1);
+    $('wake-status').classList.toggle('bad-text', w.state === 'error');
   }
 
   function openModelSheet() {
@@ -1617,7 +1663,8 @@
         closeLog();
         $('menu').hidden = true;
         $('tools-menu').hidden = true;
-        for (const id of ['sheet', 'model-sheet', 'voice-sheet']) $(id).hidden = true;
+        for (const id of ['model-sheet', 'voice-sheet']) $(id).hidden = true;
+        if (!$('settings-view').hidden) closeSettings();
       } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k') {
         ev.preventDefault();
         if (isWide() && opts.sidebar === 'closed') toggleSidebar();
@@ -1743,8 +1790,22 @@
     $('menu-new').addEventListener('click', newChat);
     $('menu-settings').addEventListener('click', openSettings);
     $('open-settings').addEventListener('click', openSettings);
-    $('close-settings').addEventListener('click', () => { $('sheet').hidden = true; });
-    $('sheet').addEventListener('click', (ev) => { if (ev.target === $('sheet')) $('sheet').hidden = true; });
+    $('close-settings').addEventListener('click', closeSettings);
+    for (const b of $('settings-tabs').children) b.addEventListener('click', () => selectTab(b.dataset.tab));
+    $('settings-tabs').addEventListener('keydown', (ev) => {
+      const tabs = Array.from($('settings-tabs').children);
+      const i = tabs.findIndex((b) => b.dataset.tab === settingsTab);
+      if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') {
+        const next = tabs[(i + (ev.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+        selectTab(next.dataset.tab);
+        next.focus();
+      }
+    });
+    $('opt-wake').addEventListener('change', () => saveSetting('wake.enabled', $('opt-wake').checked, () => { $('opt-wake').checked = !$('opt-wake').checked; }));
+    $('wake-phrase').addEventListener('change', () => saveSetting('wake.phrase', $('wake-phrase').value.trim(), renderWakeRow));
+    $('adv-log').addEventListener('click', openLog);
+    window.addEventListener('popstate', () => showSettings(location.hash === '#settings'));
+    if (location.hash === '#settings') showSettings(true);
     $('model-sheet').addEventListener('click', (ev) => { if (ev.target === $('model-sheet')) $('model-sheet').hidden = true; });
     $('stay-range').addEventListener('input', (ev) => { $('stay-val').textContent = stayLabel(ev.target.value); });
     $('stay-range').addEventListener('change', () => { if (status && status.mode !== 'auto') chooseModel(status.mode); });

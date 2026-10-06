@@ -75,6 +75,72 @@
         </div></div>
         <input id="file-input" type="file" multiple hidden accept="text/*,.md,.py,.js,.ts,.json,.csv,.log,.html,.css,.java,.kt,.sh,.yml,.yaml,.toml,.xml,.sql">
       </form>
+
+      <section id="settings-view" hidden aria-label="Settings">
+        <header class="sv-head">
+          <button id="close-settings" class="icon" aria-label="Back to chat">&#8592;</button>
+          <h2>Settings</h2>
+        </header>
+        <div class="tabs" id="settings-tabs" role="tablist" aria-label="Settings sections">
+          <button type="button" role="tab" data-tab="general" class="on">General</button>
+          <button type="button" role="tab" data-tab="voice">Voice</button>
+          <button type="button" role="tab" data-tab="advanced">Advanced</button>
+        </div>
+        <div class="sv-body">
+          <div class="panel on" role="tabpanel" data-panel="general">
+            <section>
+        <h3>Look</h3>
+        <div class="row"><span>Accent</span><div id="swatches" class="swatches"></div></div>
+        <div class="row"><span>Text size</span>
+          <div class="seg small" id="size-seg"><button type="button" data-v="s">S</button><button type="button" data-v="m">M</button><button type="button" data-v="l">L</button></div></div>
+        <div class="row"><span>Font</span>
+          <div class="seg small" id="font-seg"><button type="button" data-v="system">System</button><button type="button" data-v="serif">Serif</button><button type="button" data-v="mono">Mono</button></div></div>
+        <label class="row"><span>Animations</span><input type="checkbox" id="opt-motion"></label>
+        <label class="row"><span>Greeting line</span><input type="checkbox" id="opt-greeting"></label>
+      </section>
+          </div>
+          <div class="panel" role="tabpanel" data-panel="voice">
+            <section>
+          <h3>Wake word</h3>
+          <label class="row"><span>Listen for the wake word<small id="wake-status">Off</small></span><input type="checkbox" id="opt-wake"></label>
+          <div class="row"><span>Phrase<small>2 to 40 letters</small></span><input type="text" id="wake-phrase" maxlength="40" autocomplete="off" spellcheck="false"></div>
+          <p class="hint">Needs the offline speech engine (scripts/setup_whisper.sh) and a working mic. Check the mic in Termux with <code>python3 core/wake.py --check</code>.</p>
+        </section>
+            <section>
+        <h3>Voice</h3>
+        <label class="row"><span>Speak replies aloud</span><input type="checkbox" id="opt-speak"></label>
+        <div class="row"><span>Voice engine<small>Gemini voices sound natural but need internet</small></span>
+          <div class="seg small" id="engine-seg"><button type="button" data-v="system">Device</button><button type="button" data-v="gemini">Gemini</button></div></div>
+        <button id="browse-voices" type="button" class="wide ghost">Browse voices</button>
+        <div class="row"><span>Device voice</span><select id="voice-pick"></select></div>
+        <label class="row"><span>Offline voices only</span><input type="checkbox" id="opt-offline-voices"></label>
+        <div class="row"><span>Speed <small id="rate-val"></small></span><input type="range" id="voice-rate" min="0.6" max="1.6" step="0.05"></div>
+        <div class="row"><span>Pitch <small id="pitch-val"></small></span><input type="range" id="voice-pitch" min="0.6" max="1.6" step="0.05"></div>
+        <button id="voice-test" type="button" class="wide ghost">Test voice</button>
+        <label class="row" id="row-mic"><span>Mic button</span><input type="checkbox" id="opt-mic"></label>
+        <div class="row"><span>Mic engine<small id="stt-note"></small></span>
+          <select id="stt-pick"><option value="auto">Auto (Chrome online, whisper offline)</option><option value="server">Offline (whisper)</option><option value="browser">Chrome</option></select></div>
+        <label class="row" id="row-ondevice"><span>Chrome: on-device only<small>Off lets Chrome use Google's cloud</small></span><input type="checkbox" id="opt-ondevice"></label>
+      </section>
+          </div>
+          <div class="panel" role="tabpanel" data-panel="advanced">
+            <section>
+        <h3>FAZE</h3>
+        <div id="settings-list"></div>
+        <p class="hint">Settings marked * apply after FAZE restarts.</p>
+      </section>
+            <section>
+          <h3>Diagnostics</h3>
+          <button id="adv-log" class="wide ghost" type="button">Open activity log</button>
+        </section>
+            <section>
+        <button id="install" class="wide" hidden>Install app</button>
+        <p class="hint" id="install-hint">Install: Chrome menu, then Install app.</p>
+      </section>
+          </div>
+        </div>
+      </section>
+
     </section>
   </div>
 
@@ -111,55 +177,6 @@
         <button type="button" data-v="off">Off</button>
       </div>
       <p class="hint">Thinking applies to Qwen. It is slow on a phone, about 6 words a second, and you can press stop.</p>
-    </div>
-  </div>
-
-  <div class="overlay" id="sheet" hidden>
-    <div class="sheet-body" role="dialog" aria-label="Settings">
-      <div class="grab"></div>
-      <div class="sheet-head">
-        <h2>Settings</h2>
-        <button id="close-settings" class="icon" aria-label="Close">&#10005;</button>
-      </div>
-
-      <section>
-        <h3>Look</h3>
-        <div class="row"><span>Accent</span><div id="swatches" class="swatches"></div></div>
-        <div class="row"><span>Text size</span>
-          <div class="seg small" id="size-seg"><button type="button" data-v="s">S</button><button type="button" data-v="m">M</button><button type="button" data-v="l">L</button></div></div>
-        <div class="row"><span>Font</span>
-          <div class="seg small" id="font-seg"><button type="button" data-v="system">System</button><button type="button" data-v="serif">Serif</button><button type="button" data-v="mono">Mono</button></div></div>
-        <label class="row"><span>Animations</span><input type="checkbox" id="opt-motion"></label>
-        <label class="row"><span>Greeting line</span><input type="checkbox" id="opt-greeting"></label>
-      </section>
-
-      <section>
-        <h3>Voice</h3>
-        <label class="row"><span>Speak replies aloud</span><input type="checkbox" id="opt-speak"></label>
-        <div class="row"><span>Voice engine<small>Gemini voices sound natural but need internet</small></span>
-          <div class="seg small" id="engine-seg"><button type="button" data-v="system">Device</button><button type="button" data-v="gemini">Gemini</button></div></div>
-        <button id="browse-voices" type="button" class="wide ghost">Browse voices</button>
-        <div class="row"><span>Device voice</span><select id="voice-pick"></select></div>
-        <label class="row"><span>Offline voices only</span><input type="checkbox" id="opt-offline-voices"></label>
-        <div class="row"><span>Speed <small id="rate-val"></small></span><input type="range" id="voice-rate" min="0.6" max="1.6" step="0.05"></div>
-        <div class="row"><span>Pitch <small id="pitch-val"></small></span><input type="range" id="voice-pitch" min="0.6" max="1.6" step="0.05"></div>
-        <button id="voice-test" type="button" class="wide ghost">Test voice</button>
-        <label class="row" id="row-mic"><span>Mic button</span><input type="checkbox" id="opt-mic"></label>
-        <div class="row"><span>Mic engine<small id="stt-note"></small></span>
-          <select id="stt-pick"><option value="auto">Auto (Chrome online, whisper offline)</option><option value="server">Offline (whisper)</option><option value="browser">Chrome</option></select></div>
-        <label class="row" id="row-ondevice"><span>Chrome: on-device only<small>Off lets Chrome use Google's cloud</small></span><input type="checkbox" id="opt-ondevice"></label>
-      </section>
-
-      <section>
-        <h3>FAZE</h3>
-        <div id="settings-list"></div>
-        <p class="hint">Settings marked * apply after FAZE restarts.</p>
-      </section>
-
-      <section>
-        <button id="install" class="wide" hidden>Install app</button>
-        <p class="hint" id="install-hint">Install: Chrome menu, then Install app.</p>
-      </section>
     </div>
   </div>
 

@@ -355,3 +355,20 @@ body[data-aura="thinking"] .bars i { animation-duration: .7s; }
   *, *::before, *::after { animation-duration: .001s !important; animation-iteration-count: 1 !important; transition-duration: .001s !important; scroll-behavior: auto !important; }
 }
 html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="off"] *::after { animation-duration: .001s !important; animation-iteration-count: 1 !important; transition-duration: .001s !important; scroll-behavior: auto !important; }
+
+/* ---------------------------------------------------------------- settings page */
+body.view-settings #topbar, body.view-settings #banner, body.view-settings #log, body.view-settings #livebar,
+body.view-settings #cmdmenu, body.view-settings #attachments, body.view-settings #composer { display: none; }
+#settings-view { flex: 1; min-height: 0; display: flex; flex-direction: column; animation: rise .5s var(--ease) both; }
+.sv-head { display: flex; align-items: center; gap: var(--sp-2); width: min(760px, 100%); margin: 0 auto; padding: max(10px, env(safe-area-inset-top)) var(--sp-4) 0; }
+.sv-head h2 { margin: 0; font-size: 1.3rem; }
+.tabs { display: flex; gap: 4px; width: min(760px, 100%); margin: var(--sp-3) auto 0; padding: 0 var(--sp-4); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.tabs button { position: relative; padding: 10px 16px; color: var(--text-3); font-weight: 500; white-space: nowrap; transition: color var(--t-fast); }
+.tabs button:hover { color: var(--text-2); } .tabs button.on { color: var(--text); }
+.tabs button::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; border-radius: 2px; background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  box-shadow: 0 0 12px var(--glow); transform: scaleX(0); transition: transform var(--t-med) var(--spring); } .tabs button.on::after { transform: none; }
+.sv-body { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+.panel { display: none; width: min(760px, 100%); margin: 0 auto; padding: var(--sp-4) var(--sp-4) var(--sp-6); } .panel.on { display: block; animation: rise .45s var(--ease) both; }
+.panel > section { margin-bottom: var(--sp-4); padding: var(--sp-2) var(--sp-4) var(--sp-4); border: 1px solid var(--line); border-radius: var(--r-l); background: var(--glass); }
+.panel > section h3 { margin-top: var(--sp-3); } .panel .row:last-child { border-bottom: 0; }
+.bad-text { color: var(--bad) !important; } code { font-family: var(--font-mono); font-size: .9em; color: var(--accent); }

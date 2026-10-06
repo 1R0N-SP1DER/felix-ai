@@ -222,13 +222,23 @@ class TestPageStructure(unittest.TestCase):
             self.assertIn(f'<canvas id="{canvas}"', html)
 
 
-@unittest.skipUnless(subprocess.run(["node", "-e", "require('jsdom')"], capture_output=True, cwd=os.path.join(CORE, "tests")).returncode == 0,
-                     "jsdom not installed")
+HAVE_JSDOM = subprocess.run(["node", "-e", "require('jsdom')"], capture_output=True, cwd=os.path.join(CORE, "tests")).returncode == 0
+_smoke_cache = {}
+
+
+def run_smoke():
+    """One shared run of tests/ui_smoke.js (the whole UI in jsdom against a fake server)."""
+    if "res" not in _smoke_cache:
+        out = subprocess.run(["node", os.path.join(CORE, "tests", "ui_smoke.js")], capture_output=True, text=True, timeout=60)
+        _smoke_cache["res"] = json.loads(out.stdout.strip().splitlines()[-1]) if out.stdout.strip() else {"crash": out.stderr}
+    return _smoke_cache["res"]
+
+
+@unittest.skipUnless(HAVE_JSDOM, "jsdom not installed")
 class TestBrowserSmoke(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        out = subprocess.run(["node", os.path.join(CORE, "tests", "ui_smoke.js")], capture_output=True, text=True, timeout=60)
-        cls.res = json.loads(out.stdout.strip().splitlines()[-1]) if out.stdout.strip() else {"crash": out.stderr}
+        cls.res = run_smoke()
 
     def test_no_crash_and_no_page_errors(self):
         self.assertNotIn("crash", self.res, self.res.get("crash"))

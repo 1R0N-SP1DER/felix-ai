@@ -11,7 +11,7 @@ const calls = [];
 let ops = 0;
 
 const status = { name: 'Faze', qwen: { state: 'ready', detail: '', note: '' }, lfm: 'idle', gemini: true, mode: 'auto', busy: false, notices: [],
-  show_tag: true, wake: { enabled: false }, tts: { engine: 'system' }, user_name: 'Felix', forced_turns: 0, turns: 0, think: 'auto',
+  show_tag: true, wake: { enabled: true, state: 'listening', phrase: 'hey faze', detail: '' }, tts: { engine: 'system' }, user_name: 'Felix', forced_turns: 0, turns: 0, think: 'auto',
   stt: { server: false, pref: 'auto', reason: 'no whisper' } };
 
 function sse(events) {
@@ -41,7 +41,7 @@ async function fakeFetch(url, opts) {
   if (p === '/api/commands') return json({ commands: [
     { name: 'model', description: 'Choose model', usage: '/model [auto]', args: [{ value: 'auto', description: 'x' }] },
     { name: 'log', description: 'Show recent activity', usage: '/log [count]', args: [] }] });
-  if (p === '/api/settings') return json({ settings: [] });
+  if (p === '/api/settings') return json({ value: body && body.value, restart: false, settings: [] });
   if (p === '/api/log') return json({ lines: [{ ts: 1700000000, text: '[qwen -> get_battery_status] {} => 80% (12ms)' }] });
   if (p === '/api/command') return json({ text: 'ok' });
   if (p === '/api/restore') return json({ ok: true, kept: (body.messages || []).length });
@@ -161,6 +161,28 @@ async function fakeFetch(url, opts) {
   out.collapsed = { cls: d.body.classList.contains('side-closed'), stored: w.localStorage.getItem('opt_sidebar') };
   $('menu-btn').click();
   out.reopened = !d.body.classList.contains('side-closed');
+
+  // settings page
+  $('open-settings').click();
+  await sleep(30);
+  const view = $('settings-view');
+  const panelOn = () => [...view.querySelectorAll('.panel.on')].map((p) => p.dataset.panel);
+  out.settings = { open: !view.hidden, bodyClass: d.body.classList.contains('view-settings'), composerHidden: w.getComputedStyle($('composer')).display === 'none',
+    hash: w.location.hash, panel: panelOn(), tabs: [...$('settings-tabs').children].map((b) => b.textContent) };
+  d.querySelector('#settings-tabs [data-tab="voice"]').click();
+  out.settings.voicePanel = panelOn();
+  out.settings.wake = { checked: $('opt-wake').checked, phrase: $('wake-phrase').value, status: $('wake-status').textContent };
+  $('opt-wake').checked = false;
+  $('opt-wake').dispatchEvent(new w.Event('change'));
+  await sleep(30);
+  const wakeCall = calls.filter((c) => c.path === '/api/settings' && c.body && c.body.key === 'wake.enabled').pop();
+  out.settings.wakeSaved = wakeCall && wakeCall.body.value;
+  d.querySelector('#settings-tabs [data-tab="advanced"]').click();
+  out.settings.advancedPanel = panelOn();
+  $('close-settings').click();
+  await sleep(80);
+  out.settings.closed = view.hidden && !d.body.classList.contains('view-settings');
+  out.settings.hashAfter = w.location.hash;
 
   // the core itself
   const K = w.FazeCoreKit;

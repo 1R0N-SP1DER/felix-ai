@@ -13,9 +13,17 @@ import copy
 import json
 import os
 import re
+import shlex
+import sys
 from pathlib import Path
 
 CONFIG_PATH = Path(__file__).parent / "config" / "profile.json"
+
+# Termux's parec fails with "Failed to set media name", so the default reads the mic through
+# scripts/pa_record.py (libpulse directly). Any parec-style command still works as an override.
+DEFAULT_MIC_CMD = "{} {} \"\" 16000".format(
+    shlex.quote(sys.executable or "python3"),
+    shlex.quote(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts", "pa_record.py")))
 
 DEFAULTS = {
     "assistant_name": "Faze",   # kept in sync with assistant.name
@@ -27,7 +35,7 @@ DEFAULTS = {
     "wake": {
         "enabled": False,
         "phrase": "",                      # empty = "hey <assistant name>"
-        "mic_cmd": "parec --raw --format=s16le --rate=16000 --channels=1 --latency-msec=100",
+        "mic_cmd": DEFAULT_MIC_CMD,
         "cooldown": 6,                     # seconds to ignore the wake word after it fires
         "open_app": True,                  # open the app when it wakes and the app isn't open
     },
