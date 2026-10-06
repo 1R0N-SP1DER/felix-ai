@@ -14,22 +14,27 @@
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
       .replace(/(^|[\s(])\*([^*\s][^*]*)\*(?=[\s).,!?]|$)/g, '$1<em>$2</em>');
+    const block = (lang, lines) => '<div class="code"><div class="code-head"><span>' + (lang || 'code') +
+      '</span><button type="button" class="copy">Copy</button></div><pre><code>' + lines.join('\n') + '</code></pre></div>';
     const out = [];
-    let inList = false;
+    let list = '';
     let inCode = false;
+    let lang = '';
     let code = [];
-    const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+    const closeList = () => { if (list) { out.push('</' + list + '>'); list = ''; } };
     for (const line of escapeHtml(src).split('\n')) {
       if (line.trim().startsWith('```')) {
-        if (inCode) { out.push('<pre><code>' + code.join('\n') + '</code></pre>'); code = []; inCode = false; }
-        else { closeList(); inCode = true; }
+        if (inCode) { out.push(block(lang, code)); code = []; inCode = false; }
+        else { closeList(); inCode = true; lang = line.trim().slice(3).trim().split(/\s+/)[0]; }
         continue;
       }
       if (inCode) { code.push(line); continue; }
       const li = line.match(/^\s*[*\-\u2022]\s+(.*)$/);
-      if (li) {
-        if (!inList) { out.push('<ul>'); inList = true; }
-        out.push('<li>' + inline(li[1]) + '</li>');
+      const ol = li ? null : line.match(/^\s*\d+[.)]\s+(.*)$/);
+      if (li || ol) {
+        const kind = li ? 'ul' : 'ol';
+        if (list !== kind) { closeList(); out.push('<' + kind + '>'); list = kind; }
+        out.push('<li>' + inline((li || ol)[1]) + '</li>');
         continue;
       }
       closeList();
@@ -37,7 +42,7 @@
       if (h) { out.push('<div class="h">' + inline(h[1]) + '</div>'); continue; }
       out.push(line.trim() === '' ? '<div class="gap"></div>' : '<div>' + inline(line) + '</div>');
     }
-    if (inCode) out.push('<pre><code>' + code.join('\n') + '</code></pre>');
+    if (inCode) out.push(block(lang, code));
     closeList();
     return out.join('');
   }
@@ -182,9 +187,106 @@
     return rows;
   }
 
+  // ---- FAZE additions: trace parsing, live-state wording, chat grouping, attachments
+
+  const TOOL_VERBS = {
+    search_web: 'Searching', delegate_to_gemini: 'Asking Gemini', get_current_datetime: 'Checking the time',
+    get_battery_status: 'Checking battery', get_wifi_status: 'Checking Wi-Fi', read_clipboard: 'Reading clipboard',
+    vibrate: 'Vibrating', enable_thinking_mode: 'Thinking deeply',
+  };
+  // The glyph beside the model name. New models: add a line here, in MODEL_NAMES and in core.js.
+  const MODEL_GLYPH = { auto: '\u25CE', qwen: '\u25C7', lfm: '\u25C8', gemini: '\u25C9', regex: '\u2301', intent: '\u2301', needle: '\u2301' };
+
+  const MODEL_FORM_TAGS = new Set(['qwen', 'lfm', 'gemini']); // routes that count as a model for the "N models" indicator
+
+  // "[layer -> tool] {args} => result (12ms)" into its parts; null when it is not a trace line.
+  function parseTrace(line) {
+    const m = String(line).match(/^\[([^\]]+?)\s*->\s*([^\]]+?)\]\s*(.*)$/);
+    if (!m) return null;
+    const ms = m[3].match(/\((\d+)ms\)/);
+    return { layer: m[1].trim(), tool: m[2].trim(), detail: m[3], ms: ms ? Number(ms[1]) : null,
+      error: /\bERROR\b|failed/i.test(m[3]), verb: TOOL_VERBS[m[2].trim()] || '' };
+  }
+
+  // The quiet line beside the core: "FAZE is ready", "Searching > writing", "Done".
+  function liveLabel(state, verbs, name) {
+    const who = String(name || 'FAZE').toUpperCase();
+    const chain = (extra) => {
+      const seen = [];
+      for (const v of (verbs || []).concat(extra || [])) if (v && seen[seen.length - 1] !== v) seen.push(v);
+      return seen.slice(-3).map((v, i) => (i ? v.charAt(0).toLowerCase() + v.slice(1) : v)).join(' \u2192 ');
+    };
+    switch (state) {
+      case 'thinking': return '\u25CC ' + who + ' is thinking';
+      case 'tool': return '\u25CC ' + (chain() || who + ' is working');
+      case 'writing': return '\u25CC ' + (chain(['writing']) || who + ' is writing');
+      case 'done': return '\u2726 Done';
+      case 'stopped': return '\u25CC Stopped';
+      case 'error': return '\u2726 Something went wrong';
+      default: return '\u2726 ' + who + ' is ready';
+    }
+  }
+
+  function titleFor(text) {
+    const t = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!t) return 'New chat';
+    return t.length > 42 ? t.slice(0, 41).trimEnd() + '\u2026' : t;
+  }
+
+  // Sidebar structure: projects first, then loose chats by age. Empty groups are dropped.
+  function groupChats(chats, now, query) {
+    const q = String(query || '').trim().toLowerCase();
+    const hit = (c) => !q || (c.title || '').toLowerCase().includes(q) || (c.project || '').toLowerCase().includes(q) ||
+      (c.messages || []).some((m) => m.role !== 'system' && String(m.text || '').toLowerCase().includes(q));
+    const sorted = chats.filter(hit).sort((a, b) => (b.updated || 0) - (a.updated || 0));
+    const groups = [];
+    const projects = {};
+    for (const c of sorted) if (c.project) (projects[c.project] = projects[c.project] || []).push(c);
+    for (const name of Object.keys(projects).sort((a, b) => a.localeCompare(b))) groups.push({ title: name, project: true, items: projects[name] });
+    const day = 86400000;
+    const start = new Date(now); start.setHours(0, 0, 0, 0);
+    const buckets = [['Today', []], ['Yesterday', []], ['Previous 7 days', []], ['Older', []]];
+    for (const c of sorted) {
+      if (c.project) continue;
+      const age = start.getTime() - (c.updated || 0);
+      buckets[age <= 0 ? 0 : age <= day ? 1 : age <= 7 * day ? 2 : 3][1].push(c);
+    }
+    for (const [title, items] of buckets) if (items.length) groups.push({ title, project: false, items });
+    return groups;
+  }
+
+  function clipFile(name, content, max) {
+    max = max || 3000;
+    const text = String(content || '');
+    return { name: String(name || 'file'), content: text.slice(0, max), truncated: text.length > max };
+  }
+
+  function composeMessage(text, files) {
+    let out = String(text || '').trim();
+    for (const f of files || []) {
+      out += '\n\n[Attached: ' + f.name + (f.truncated ? ' (truncated)' : '') + ']\n```\n' + f.content.replace(/```/g, "'''") + '\n```';
+    }
+    return out;
+  }
+
+  // What the server needs to rebuild its context when an old chat is reopened.
+  function restorePayload(messages) {
+    const out = [];
+    for (const m of messages || []) {
+      if (m.role === 'user' && (m.sent || m.text)) out.push({ role: 'user', content: m.sent || m.text });
+      else if (m.role === 'faze' && m.text && !m.failed && !m.pending) out.push({ role: 'assistant', content: m.text });
+    }
+    // keep the newest turns that fit the server's request limit
+    let kept = out.slice(-20).map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }));
+    let total = kept.reduce((n, m) => n + m.content.length, 0);
+    while (kept.length > 1 && total > 48000) total -= kept.shift().content.length;
+    return kept;
+  }
+
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { escapeHtml, renderMarkdown, parseSSE, stripForSpeech, greetingFor, GREETINGS,
-      modelLabel, stayLabel, resampleMean, encodeWav, commandSuggestions };
+      modelLabel, stayLabel, resampleMean, encodeWav, commandSuggestions,
+      parseTrace, liveLabel, titleFor, groupChats, clipFile, composeMessage, restorePayload, TOOL_VERBS, MODEL_GLYPH, MODEL_NAMES };
     return;
   }
 
@@ -196,10 +298,15 @@
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* storage full or blocked */ } },
   };
 
-  const ACCENTS = { orange: '#d97757', blue: '#58a6ff', green: '#5fb878', purple: '#a78bfa', pink: '#f472b6' };
+  // name: [light, deeper edge]. Colour is only ever set through --accent / --accent-2.
+  const ACCENTS = { cyan: ['#5cc8ff', '#3d7bff'], ice: ['#b8d8ff', '#7a9bd6'], violet: ['#a99bff', '#6a5cff'], mint: ['#5ce6c0', '#2fa98c'], amber: ['#ffc46b', '#e0873a'] };
 
   let token = store.get('faze_token', '');
-  let chat = store.get('faze_chat', []);
+  let chats = store.get('faze_chats', null);
+  if (!Array.isArray(chats) || !chats.length) chats = [makeChat(store.get('faze_chat', []))];
+  let activeId = store.get('faze_active', '');
+  if (!chats.some((c) => c.id === activeId)) activeId = chats[0].id;
+  let chat = chats.find((c) => c.id === activeId).messages;
   let busy = false;
   let showTag = true;
   let installEvent = null;
@@ -222,7 +329,8 @@
     speak: store.get('opt_speak', false),
     mic: store.get('opt_mic', true),
     onDevice: store.get('opt_ondevice', false),
-    accent: store.get('opt_accent', 'orange'),
+    accent: store.get('opt_accent', 'cyan'),
+    sidebar: store.get('opt_sidebar', 'open'),
     size: store.get('opt_size', 'm'),
     motion: store.get('opt_motion', true),
     greeting: store.get('opt_greeting', true),
@@ -233,7 +341,6 @@
     font: store.get('opt_font', 'system'),
   };
 
-  function saveChat() { store.set('faze_chat', chat.slice(-200)); }
   function saveOpt(key, value) { opts[key] = value; store.set('opt_' + key.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase()), value); }
 
   function toast(text) {
@@ -246,10 +353,14 @@
 
   function applyLook() {
     const root = document.documentElement;
-    root.style.setProperty('--accent', ACCENTS[opts.accent] || ACCENTS.orange);
+    const pair = ACCENTS[opts.accent] || ACCENTS.cyan;
+    root.style.setProperty('--accent', pair[0]);
+    root.style.setProperty('--accent-2', pair[1]);
     root.dataset.size = opts.size;
     root.dataset.font = opts.font;
     root.dataset.motion = opts.motion ? 'on' : 'off';
+    document.body.classList.toggle('side-closed', opts.sidebar === 'closed');
+    if (window.FazeCoreKit) { window.FazeCoreKit.refreshTheme(); window.FazeCoreKit.setReduced(reducedMotion()); }
   }
 
   // ---------------------------------------------------------------- api
@@ -278,58 +389,88 @@
 
   // ---------------------------------------------------------------- rendering
 
-  function bubbleHtml(m) {
-    let html = '';
-    if (m.role === 'faze' && showTag && m.tag) {
-      html += '<div class="tag">[' + escapeHtml(m.tag + (m.note ? ' | ' + m.note : '')) + ']</div>';
+  function stepsHtml(trace) {
+    const rows = [];
+    for (const line of trace || []) {
+      const t = parseTrace(line);
+      if (!t) continue;
+      rows.push('<div class="step' + (t.error ? ' bad' : '') + '" title="' + escapeHtml(line) + '"><i></i><b>' +
+        escapeHtml(t.verb || t.tool.replace(/_/g, ' ')) + '</b><span>' + escapeHtml(t.layer) + '</span>' +
+        (t.ms !== null ? '<em>' + t.ms + 'ms</em>' : '') + '</div>');
     }
-    if (m.role === 'system') return '<div class="body">' + escapeHtml(m.text) + '</div>';
-    if (m.pending && !m.text) {
-      html += '<div class="body"><span class="dots"><i></i><i></i><i></i></span></div>';
-    } else {
-      html += '<div class="body">' + renderMarkdown(m.text || '') + '</div>';
-    }
-    if (m.thinking) {
-      const open = m.pending && !m.text ? ' open' : '';
-      html += '<details' + open + '><summary>thinking</summary><pre>' + escapeHtml(m.thinking) + '</pre></details>';
-    }
-    if (m.trace && m.trace.length) html += '<details><summary>trace</summary><pre>' + escapeHtml(m.trace.join('\n')) + '</pre></details>';
-    return html;
+    if (!rows.length) return '';
+    return '<details class="steps"><summary>' + rows.length + (rows.length === 1 ? ' step' : ' steps') + '</summary>' + rows.join('') + '</details>';
   }
 
+  function viaHtml(m) {
+    const bits = [];
+    if (showTag && m.tag) {
+      bits.push('<span class="via" title="' + escapeHtml(m.note || '') + '">' + (MODEL_GLYPH[m.tag] || '\u25CB') + ' ' + escapeHtml(MODEL_NAMES[m.tag] || m.tag) + '</span>');
+    }
+    if (m.models > 1) bits.push('<span class="via">' + m.models + ' models</span>');
+    return bits.join('');
+  }
+
+  function turnHtml(m) {
+    if (m.role === 'system') return '<div class="body">' + escapeHtml(m.text) + '</div>';
+    if (m.role === 'user') {
+      let h = '<div class="who">YOU</div><div class="text">' + escapeHtml(m.text) + '</div>';
+      if (m.files && m.files.length) h += '<div class="files">' + m.files.map((f) => '<span>\uD83D\uDCCE ' + escapeHtml(f) + '</span>').join('') + '</div>';
+      return h;
+    }
+    let h = '<div class="who"><i class="gl"></i><span>' + escapeHtml(String(names.ai || 'Faze').toUpperCase()) + '</span>' + viaHtml(m) + '</div>';
+    if (m.thinking) {
+      h += '<details class="think"' + (m.pending && !m.text ? ' open' : '') + '><summary>thinking</summary><pre>' + escapeHtml(m.thinking) + '</pre></details>';
+    }
+    h += stepsHtml(m.trace);
+    if (m.pending && !m.text) h += '<div class="skeleton"><i></i><i></i><i></i></div>';
+    else h += '<div class="body">' + renderMarkdown(m.text || '') + '</div>';
+    if (!m.pending && m.text && !m.failed) {
+      h += '<div class="acts"><button type="button" class="act-copy">Copy</button><button type="button" class="act-speak">Listen</button></div>';
+    }
+    return h;
+  }
+
+  // Repainting while tokens stream must not close sections the reader opened.
   function renderMessage(m, el) {
     el = el || document.createElement('div');
-    el.className = 'msg ' + m.role + (m.failed ? ' failed' : '') + (m.pending && m.text ? ' typing' : '');
-    if (m.role === 'user') el.textContent = m.text;
-    else el.innerHTML = bubbleHtml(m);
+    const open = Array.from(el.querySelectorAll('details')).map((d) => d.open);
+    el._m = m;
+    el.className = 'turn ' + m.role + (m.failed ? ' failed' : '') + (m.pending ? ' pending' : '') + (m.pending && m.text ? ' typing' : '');
+    el.innerHTML = turnHtml(m);
+    Array.from(el.querySelectorAll('details')).forEach((d, i) => { if (open[i] !== undefined && !(m.pending && !m.text)) d.open = open[i]; });
     return el;
   }
 
-  function scrollDown() { const log = $('log'); log.scrollTop = log.scrollHeight; }
+  function scrollDown(force) {
+    const log = $('log');
+    if (force || log.scrollHeight - log.scrollTop - log.clientHeight < 160) log.scrollTop = log.scrollHeight;
+  }
 
   function syncHero() {
     $('log').classList.toggle('empty', chat.length === 0);
-    $('hero').classList.toggle('hidden', !opts.greeting);
+    cores.forEach((c) => c.resize());
   }
 
   function newGreeting() {
-    $('greeting').textContent = greetingFor(new Date().getHours(), names.user, names.ai);
+    const fancy = opts.greeting && Math.random() < 0.5;
+    $('sub').textContent = fancy ? greetingFor(new Date().getHours(), names.user, names.ai) : 'Ask anything. Build anything.';
   }
 
   function renderAll() {
-    const log = $('log');
-    for (const el of Array.from(log.querySelectorAll('.msg'))) el.remove();
-    for (const m of chat) log.appendChild(renderMessage(m));
+    const thread = $('thread');
+    thread.textContent = '';
+    for (const m of chat) thread.appendChild(renderMessage(m));
     syncHero();
-    scrollDown();
+    scrollDown(true);
   }
 
   function addMessage(m) {
     chat.push(m);
     const el = renderMessage(m);
-    $('log').appendChild(el);
+    $('thread').appendChild(el);
     syncHero();
-    scrollDown();
+    scrollDown(true);
     return el;
   }
 
@@ -358,7 +499,7 @@
     names = { ai: s.name, user: s.user_name };
     showTag = s.show_tag;
     document.title = s.name;
-    $('input').placeholder = 'Message ' + s.name;
+    $('input').placeholder = 'Ask ' + s.name + ' anything...';
     $('banner').hidden = true;
 
     const chips = $('chips');
@@ -375,7 +516,10 @@
       lastWakeState = s.wake.state;
     }
 
-    $('model-label').textContent = modelLabel(s.mode, s.forced_turns);
+    syncModelIndicator();
+    if (!busy) syncCoreModel();
+    renderSidebar();
+    maybeRestore(s);
     $('menu-think-val').textContent = s.think;
     for (const b of $('think-seg').children) b.classList.toggle('on', b.dataset.v === s.think);
     $('stt-note').textContent = s.stt.server ? 'offline engine ready' : (s.stt.reason || '');
@@ -431,11 +575,50 @@
 
   // ---------------------------------------------------------------- chat
 
+  // ---------------------------------------------------------------- chat
+
+  let liveTimer = 0;
+  let liveVerbs = [];
+  let turnModels = [];
+  let tokenLevel = 0;
+  let restoredOnce = false;
+
+  function setLive(kind) {
+    clearTimeout(liveTimer);
+    $('livebar').dataset.state = kind;
+    $('live-text').textContent = liveLabel(kind, liveVerbs, names.ai);
+    const coreState = { thinking: 'thinking', tool: 'tool', writing: 'responding' }[kind] || 'idle';
+    coreAll((c) => c.setState(coreState, { fragments: 3 + liveVerbs.length * 2 }));
+    if (kind === 'done' || kind === 'stopped' || kind === 'error') liveTimer = setTimeout(() => setLive('ready'), 2400);
+  }
+
+  function syncModelIndicator() {
+    const mode = (status && status.mode) || 'auto';
+    const active = busy && turnModels.length ? turnModels[turnModels.length - 1] : mode;
+    let label = busy && turnModels.length ? (MODEL_NAMES[active] || active) : modelLabel(mode, status && status.forced_turns);
+    if (busy && turnModels.length > 1) label = turnModels.length + ' models';
+    const glyph = MODEL_GLYPH[active] || '\u25CB';
+    const g = $('model-glyph');
+    if (g.textContent !== glyph) { g.classList.remove('swap'); void g.offsetWidth; g.classList.add('swap'); }
+    g.textContent = glyph;
+    $('model-label').textContent = label;
+    const quick = $('model-quick');
+    quick.querySelector('.g').textContent = glyph;
+    quick.querySelector('b').textContent = label;
+  }
+
+  // The core wears the form of whatever model is answering; auto cycles through them all.
+  function syncCoreModel() {
+    const target = busy && turnModels.length ? turnModels[turnModels.length - 1] : (status && status.mode !== 'auto' ? status.mode : null);
+    coreAll((c) => c.setModel(target));
+  }
+
   function setBusy(on) {
     busy = on;
     document.body.classList.toggle('busy', on);
     $('send-icon').textContent = on ? '\u25A0' : '\u2191';
     $('send').setAttribute('aria-label', on ? 'Stop' : 'Send');
+    syncModelIndicator();
   }
 
   async function stopTurn() {
@@ -450,23 +633,31 @@
     pollStatus(true);
   }
 
-  async function sendMessage(text) {
+  async function sendMessage(text, files) {
     stopAudio();
     if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
     syncSpeechButton();
+    if (/^\/logs?(\s|$)/.test(text)) return openLog();
     if (text.startsWith('/')) return runCommand(text);
 
-    addMessage({ role: 'user', text });
+    const sent = composeMessage(text, files);
+    const um = { role: 'user', text };
+    if (files && files.length) { um.files = files.map((f) => f.name); um.sent = sent; }
+    addMessage(um);
     const m = { role: 'faze', text: '', tag: '', note: '', thinking: '', trace: [], pending: true };
     chat.push(m);
     const el = renderMessage(m);
-    $('log').appendChild(el);
-    scrollDown();
+    $('thread').appendChild(el);
+    scrollDown(true);
+    liveVerbs = [];
+    turnModels = [];
     setBusy(true);
+    setLive('thinking');
+    syncCoreModel();
 
     const paint = () => { renderMessage(m, el); scrollDown(); };
     try {
-      const res = await api('/api/chat', { body: { message: text } });
+      const res = await api('/api/chat', { body: { message: sent } });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || ('HTTP ' + res.status));
@@ -484,10 +675,24 @@
           if (event === 'route') {
             if (m.text) { m.trace.push('(discarded partial reply from ' + m.tag + ')'); m.text = ''; m.thinking = ''; }
             m.tag = data.tag; m.note = data.note;
+            if (MODEL_FORM_TAGS.has(data.tag) && !turnModels.includes(data.tag)) {
+              turnModels.push(data.tag);
+              if (turnModels.length > 1) { m.models = turnModels.length; coreAll((c) => c.burst(turnModels)); }
+            }
+            syncModelIndicator();
+            syncCoreModel();
           } else if (event === 'token') {
-            if (data.kind === 'thinking') m.thinking += data.text; else m.text += data.text;
+            if (data.kind === 'thinking') m.thinking += data.text;
+            else {
+              if (!m.text) setLive('writing');
+              m.text += data.text;
+              tokenLevel = 0.7;
+              coreAll((c) => c.pulse(0.02));
+            }
           } else if (event === 'trace') {
             m.trace.push(data.line);
+            const t = parseTrace(data.line);
+            if (t && t.verb) { liveVerbs.push(t.verb); setLive('tool'); }
           } else if (event === 'notice') {
             addMessage({ role: 'system', text: data.text });
           } else if (event === 'reply') {
@@ -508,23 +713,99 @@
     }
     m.pending = false;
     if (m.text.startsWith('[') && /failed|couldn't answer|no backend/.test(m.text)) m.failed = true;
-    if (m.text === '[stopped]') { m.text = 'Stopped.'; m.tag = ''; }
+    const stopped = m.text === '[stopped]';
+    if (stopped) { m.text = 'Stopped.'; m.tag = ''; }
     paint();
     saveChat();
     setBusy(false);
-    speak(m.failed || m.text === 'Stopped.' ? '' : m.text);
+    setLive(m.failed ? 'error' : stopped ? 'stopped' : 'done');
+    syncCoreModel();
+    speak(m.failed || stopped ? '' : m.text);
     pollStatus(true);
   }
 
+  function makeChat(messages) {
+    const first = (messages || []).find((m) => m.role === 'user');
+    return { id: 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), title: first ? titleFor(first.text) : 'New chat',
+      project: '', updated: Date.now(), messages: messages || [] };
+  }
+
+  function persistChats() { store.set('faze_chats', chats); store.set('faze_active', activeId); }
+
+  function saveChat() {
+    const c = chats.find((x) => x.id === activeId);
+    if (c) {
+      c.updated = Date.now();
+      const u = chat.find((m) => m.role === 'user');
+      if (u && (!c.title || c.title === 'New chat')) c.title = titleFor(u.text);
+      if (chat.length > 200) chat.splice(0, chat.length - 200);
+    }
+    if (chats.length > 60) chats = chats.slice().sort((a, b) => b.updated - a.updated).slice(0, 60);
+    persistChats();
+    renderSidebar();
+  }
+
+  function startChat() {
+    const c = makeChat([]);
+    chats.unshift(c);
+    activeId = c.id;
+    chat = c.messages;
+    persistChats();
+  }
+
   async function newChat() {
+    closeDrawer();
     $('menu').hidden = true;
     if (busy) await stopTurn();
     try { await command('/reset'); } catch (e) { toast(e.message); return; }
-    chat = [];
+    if (chat.length) startChat();
     seenNotices.clear();
-    saveChat();
     renderAll();
     newGreeting();
+    renderSidebar();
+    setLive('ready');
+    $('input').focus();
+  }
+
+  async function openChat(id) {
+    closeDrawer();
+    if (id === activeId) return;
+    const target = chats.find((x) => x.id === id);
+    if (!target) return;
+    if (busy) await stopTurn();
+    if (!chat.length) chats = chats.filter((x) => x.id !== activeId);
+    activeId = id;
+    chat = target.messages;
+    persistChats();
+    try { await apiJson('/api/restore', { messages: restorePayload(chat) }); } catch (e) { toast(e.message); }
+    seenNotices.clear();
+    renderAll();
+    newGreeting();
+    renderSidebar();
+  }
+
+  async function deleteChat(c) {
+    if (!confirm('Delete "' + c.title + '"?')) return;
+    chats = chats.filter((x) => x.id !== c.id);
+    if (c.id === activeId) {
+      if (busy) await stopTurn();
+      try { await command('/reset'); } catch (e) { toast(e.message); }
+      if (!chats.length) chats = [makeChat([])];
+      activeId = chats[0].id;
+      chat = chats[0].messages;
+      if (chat.length) { try { await apiJson('/api/restore', { messages: restorePayload(chat) }); } catch (e) { /* offline */ } }
+      renderAll();
+      newGreeting();
+    }
+    persistChats();
+    renderSidebar();
+  }
+
+  // After a server restart its history is empty; give it the open chat back once.
+  function maybeRestore(s) {
+    if (restoredOnce) return;
+    restoredOnce = true;
+    if (s.turns === 0 && chat.length) apiJson('/api/restore', { messages: restorePayload(chat) }).catch(() => {});
   }
 
   // ---------------------------------------------------------------- voice out
@@ -597,8 +878,8 @@
     }
   }
 
-  function speak(text) {
-    const wanted = (opts.speak || voiceMode) && text;
+  function speak(text, force) {
+    const wanted = (opts.speak || voiceMode || force) && text;
     const clean = wanted ? stripForSpeech(text) : '';
     if (!clean) { resumeListening(); return; }
     const gemini = status && status.tts && status.tts.engine === 'gemini' && navigator.onLine;
@@ -1077,6 +1358,275 @@
     $('model-sheet').hidden = false;
   }
 
+  // ---------------------------------------------------------------- core, sidebar, composer, log
+
+  const cores = [];
+  function coreAll(fn) {
+    for (const c of cores) { try { fn(c); } catch (e) { /* drawing must never break chat */ } }
+  }
+
+  function initCores() {
+    const kit = window.FazeCoreKit;
+    if (!kit) return;
+    for (const id of ['core-hero', 'core-side', 'core-live']) {
+      const el = $(id);
+      if (el) cores.push(new kit.FazeCore(el, { scale: 0.3 }));
+    }
+    kit.refreshTheme();
+    kit.setReduced(reducedMotion());
+    window.addEventListener('resize', () => cores.forEach((c) => c.resize()));
+  }
+
+  function reducedMotion() {
+    return !opts.motion || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
+
+  // Core size follows speech, the microphone and streaming text.
+  function levelTick() {
+    let v = tokenLevel;
+    tokenLevel *= 0.78;
+    const speaking = audioPlaying || (typeof speechSynthesis !== 'undefined' && speechSynthesis.speaking);
+    if (speaking) v = Math.max(v, 0.25 + Math.random() * 0.45);
+    if (recorder) v = Math.max(v, Number(document.documentElement.style.getPropertyValue('--level')) || 0);
+    coreAll((c) => c.setLevel(v));
+  }
+
+  const isWide = () => !window.matchMedia || window.matchMedia('(min-width: 861px)').matches;
+  function closeDrawer() { document.body.classList.remove('side-open'); }
+
+  function toggleSidebar() {
+    if (isWide()) { saveOpt('sidebar', opts.sidebar === 'open' ? 'closed' : 'open'); applyLook(); }
+    else document.body.classList.toggle('side-open');
+    setTimeout(() => cores.forEach((c) => c.resize()), 320);
+  }
+
+  function renderSidebar() {
+    const nav = $('chat-groups');
+    nav.textContent = '';
+    const groups = groupChats(chats, Date.now(), $('chat-search').value);
+    if (!groups.length) {
+      const p = document.createElement('p');
+      p.className = 'empty-note';
+      p.textContent = 'No chats found';
+      nav.appendChild(p);
+    }
+    for (const g of groups) {
+      const sec = document.createElement('section');
+      sec.className = 'grp' + (g.project ? ' project' : '');
+      const h = document.createElement('h4');
+      h.textContent = (g.project ? '\u25A3 ' : '') + g.title;
+      sec.appendChild(h);
+      for (const c of g.items) sec.appendChild(chatItem(c));
+      nav.appendChild(sec);
+    }
+    const name = names.user || 'You';
+    $('avatar').textContent = name.charAt(0).toUpperCase();
+    $('profile-name').textContent = name;
+  }
+
+  function chatItem(c) {
+    const row = document.createElement('div');
+    row.className = 'chat-item' + (c.id === activeId ? ' on' : '');
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'chat-open';
+    open.textContent = c.title || 'New chat';
+    open.title = c.title || 'New chat';
+    if (c.id === activeId) open.setAttribute('aria-current', 'true');
+    open.addEventListener('click', () => openChat(c.id));
+    const acts = document.createElement('span');
+    acts.className = 'chat-acts';
+    const actions = [
+      ['Rename', '\u270E', () => { const v = prompt('Rename chat', c.title); if (v && v.trim()) { c.title = v.trim().slice(0, 60); persistChats(); renderSidebar(); } }],
+      ['Move to project', '\u25A3', () => { const v = prompt('Project name (leave empty to remove)', c.project || ''); if (v !== null) { c.project = v.trim().slice(0, 30); persistChats(); renderSidebar(); } }],
+      ['Delete', '\u2715', () => deleteChat(c)],
+    ];
+    for (const [label, glyph, fn] of actions) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.title = label;
+      b.setAttribute('aria-label', label + ': ' + (c.title || 'chat'));
+      b.textContent = glyph;
+      b.addEventListener('click', (ev) => { ev.stopPropagation(); fn(); });
+      acts.appendChild(b);
+    }
+    row.appendChild(open);
+    row.appendChild(acts);
+    return row;
+  }
+
+  const pendingFiles = [];
+
+  function renderAttachments() {
+    const box = $('attachments');
+    box.textContent = '';
+    pendingFiles.forEach((f, i) => {
+      const chipEl = document.createElement('span');
+      chipEl.className = 'file-chip';
+      chipEl.textContent = '\uD83D\uDCCE ' + f.name + (f.truncated ? ' (truncated)' : '');
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.setAttribute('aria-label', 'Remove ' + f.name);
+      x.textContent = '\u2715';
+      x.addEventListener('click', () => { pendingFiles.splice(i, 1); renderAttachments(); syncComposerOpen(); });
+      chipEl.appendChild(x);
+      box.appendChild(chipEl);
+    });
+    box.hidden = !pendingFiles.length;
+  }
+
+  async function addFiles(list) {
+    for (const f of Array.from(list || [])) {
+      if (pendingFiles.length >= 3) { toast('Up to 3 files per message'); break; }
+      if (f.size > 500000) { toast(f.name + ' is too large'); continue; }
+      try { pendingFiles.push(clipFile(f.name, await f.text())); } catch (e) { toast("Can't read " + f.name); }
+    }
+    renderAttachments();
+    syncComposerOpen();
+  }
+
+  function syncComposerOpen() {
+    const form = $('composer');
+    const open = form.contains(document.activeElement) || $('input').value.length > 0 || pendingFiles.length > 0;
+    form.classList.toggle('open', open);
+  }
+
+  function insertText(text) {
+    const input = $('input');
+    input.value = text;
+    autoGrow();
+    input.focus();
+    $('tools-menu').hidden = true;
+    syncComposerOpen();
+    renderCommandMenu();
+  }
+
+  function initComposerUi() {
+    const form = $('composer');
+    form.addEventListener('focusin', syncComposerOpen);
+    form.addEventListener('focusout', () => setTimeout(syncComposerOpen, 0));
+    $('attach').addEventListener('click', () => $('file-input').click());
+    $('file-input').addEventListener('change', (ev) => { addFiles(ev.target.files); ev.target.value = ''; });
+    $('tools-btn').addEventListener('click', (ev) => { ev.stopPropagation(); $('menu').hidden = true; $('tools-menu').hidden = !$('tools-menu').hidden; });
+    $('model-quick').addEventListener('click', openModelSheet);
+    for (const b of $('tools-menu').querySelectorAll('[data-insert]')) b.addEventListener('click', () => insertText(b.dataset.insert));
+    for (const b of $('starters').children) b.addEventListener('click', () => insertText(b.dataset.insert));
+    document.addEventListener('click', (ev) => { if (!$('tools-menu').contains(ev.target) && ev.target !== $('tools-btn') && !$('tools-btn').contains(ev.target)) $('tools-menu').hidden = true; });
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(() => document.documentElement.style.setProperty('--composer-h', form.offsetHeight + 'px')).observe(form);
+    }
+    $('thread').addEventListener('click', (ev) => {
+      const btn = ev.target.closest('button');
+      if (!btn) return;
+      const turn = btn.closest('.turn');
+      if (btn.classList.contains('copy')) {
+        const code = btn.closest('.code').querySelector('code').textContent;
+        copyText(code, btn);
+      } else if (btn.classList.contains('act-copy') && turn && turn._m) copyText(turn._m.text, btn);
+      else if (btn.classList.contains('act-speak') && turn && turn._m) speak(turn._m.text, true);
+    });
+  }
+
+  function copyText(text, btn) {
+    const done = () => { if (btn) { const old = btn.textContent; btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = old; }, 1400); } };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => toast('Copy failed'));
+    else toast('Copy is not available here');
+  }
+
+  function initSidebar() {
+    $('menu-btn').addEventListener('click', toggleSidebar);
+    $('collapse').addEventListener('click', toggleSidebar);
+    $('scrim').addEventListener('click', closeDrawer);
+    $('chat-search').addEventListener('input', renderSidebar);
+    $('profile').addEventListener('click', openSettings);
+    renderSidebar();
+  }
+
+  // ---- log panel (also /log)
+
+  let logTimer = 0;
+  let logSig = '';
+
+  function logRow(l) {
+    const row = document.createElement('div');
+    row.className = 'log-row' + (/\bERROR\b|failed/i.test(l.text) ? ' bad' : '');
+    const t = document.createElement('time');
+    t.textContent = new Date(l.ts * 1000).toTimeString().slice(0, 8);
+    const m = l.text.match(/^(\[[^\]]+\])\s*(.*)$/);
+    const head = document.createElement('b');
+    head.textContent = m ? m[1] : '';
+    const rest = document.createElement('span');
+    rest.textContent = m ? m[2] : l.text;
+    row.appendChild(t);
+    row.appendChild(head);
+    row.appendChild(rest);
+    return row;
+  }
+
+  async function refreshLog(force) {
+    if ($('log-sheet').hidden) return;
+    try {
+      const data = await apiJson('/api/log?n=120');
+      const last = data.lines[data.lines.length - 1];
+      const sig = data.lines.length + ':' + (last ? last.ts + ':' + last.text.length : '');
+      if (!force && sig === logSig) return;
+      logSig = sig;
+      const box = $('log-lines');
+      const near = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+      box.textContent = '';
+      if (!data.lines.length) {
+        const p = document.createElement('p');
+        p.className = 'empty-note';
+        p.textContent = 'No activity yet. Tool calls and model routing show up here.';
+        box.appendChild(p);
+        return;
+      }
+      for (const l of data.lines) box.appendChild(logRow(l));
+      if (near || force) box.scrollTop = box.scrollHeight;
+    } catch (e) { /* offline: keep what is shown */ }
+  }
+
+  function openLog() {
+    $('menu').hidden = true;
+    closeDrawer();
+    $('log-sheet').hidden = false;
+    logSig = '';
+    refreshLog(true);
+    clearInterval(logTimer);
+    logTimer = setInterval(refreshLog, 2000);
+  }
+
+  function closeLog() {
+    $('log-sheet').hidden = true;
+    clearInterval(logTimer);
+  }
+
+  function initLogPanel() {
+    $('log-btn').addEventListener('click', openLog);
+    $('menu-log').addEventListener('click', openLog);
+    $('close-log').addEventListener('click', closeLog);
+    $('log-sheet').addEventListener('click', (ev) => { if (ev.target === $('log-sheet')) closeLog(); });
+    $('log-copy').addEventListener('click', () => copyText(Array.from($('log-lines').children).map((r) => r.textContent).join('\n'), $('log-copy')));
+  }
+
+  function initShortcuts() {
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') {
+        closeMenu();
+        closeDrawer();
+        closeLog();
+        $('menu').hidden = true;
+        $('tools-menu').hidden = true;
+        for (const id of ['sheet', 'model-sheet', 'voice-sheet']) $(id).hidden = true;
+      } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k') {
+        ev.preventDefault();
+        if (isWide() && opts.sidebar === 'closed') toggleSidebar();
+        else document.body.classList.add('side-open');
+        $('chat-search').focus();
+      }
+    });
+  }
+
   // ---------------------------------------------------------------- pairing / boot
 
   function showPair() { $('pair').hidden = false; }
@@ -1125,7 +1675,7 @@
     if (typeof speechSynthesis !== 'undefined') speechSynthesis.addEventListener('voiceschanged', () => { if (!$('voice-sheet').hidden) renderVoices(); });
     for (const [name, color] of Object.entries(ACCENTS)) {
       const b = document.createElement('button');
-      b.type = 'button'; b.dataset.v = name; b.style.background = color; b.setAttribute('aria-label', name);
+      b.type = 'button'; b.dataset.v = name; b.style.background = color[0]; b.setAttribute('aria-label', name);
       b.addEventListener('click', () => { saveOpt('accent', name); applyLook(); syncSettingsControls(); });
       $('swatches').appendChild(b);
     }
@@ -1140,10 +1690,18 @@
     }
     if (!token) showPair();
 
+    for (const c of chats) for (const m of c.messages) if (m.pending) { m.pending = false; m.failed = true; if (!m.text) m.text = 'Interrupted.'; }
+    initCores();
     applyLook();
     bindSettings();
+    initSidebar();
+    initComposerUi();
+    initLogPanel();
+    initShortcuts();
     renderAll();
     newGreeting();
+    setLive('ready');
+    setInterval(levelTick, 80);
     syncMicButton();
     if (typeof speechSynthesis !== 'undefined') {
       speechSynthesis.addEventListener('voiceschanged', loadVoices);
@@ -1153,14 +1711,18 @@
     $('composer').addEventListener('submit', (ev) => {
       ev.preventDefault();
       if (busy) { stopTurn(); return; }
-      const text = $('input').value.trim();
-      if (!text) return;
+      let text = $('input').value.trim();
+      if (!text && !pendingFiles.length) return;
+      if (!text) text = 'Please look at the attached file.';
+      const files = pendingFiles.splice(0);
       $('input').value = '';
       autoGrow();
       closeMenu();
-      sendMessage(text);
+      renderAttachments();
+      syncComposerOpen();
+      sendMessage(text, files);
     });
-    $('input').addEventListener('input', () => { autoGrow(); menuSel = 0; renderCommandMenu(); });
+    $('input').addEventListener('input', () => { autoGrow(); menuSel = 0; renderCommandMenu(); syncComposerOpen(); });
     $('input').addEventListener('keydown', (ev) => {
       if (menuKey(ev)) { ev.preventDefault(); return; }
       if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); if (!busy) $('composer').requestSubmit(); }
@@ -1171,8 +1733,8 @@
     $('voice-stop').addEventListener('click', () => { wakeFlash = false; setVoiceMode(false); syncAura(); });
     $('new-chat').addEventListener('click', newChat);
     $('model-chip').addEventListener('click', openModelSheet);
-    $('plus').addEventListener('click', (ev) => { ev.stopPropagation(); $('menu').hidden = !$('menu').hidden; });
-    document.addEventListener('click', (ev) => { if (!$('menu').contains(ev.target)) $('menu').hidden = true; });
+    $('plus').addEventListener('click', (ev) => { ev.stopPropagation(); $('tools-menu').hidden = true; $('menu').hidden = !$('menu').hidden; });
+    document.addEventListener('click', (ev) => { if (!$('menu').contains(ev.target) && !$('plus').contains(ev.target)) $('menu').hidden = true; });
     $('menu-think').addEventListener('click', async () => {
       const next = { auto: 'on', on: 'off', off: 'auto' }[(status && status.think) || 'auto'];
       try { toast(await command('/think ' + next)); } catch (e) { toast(e.message); }

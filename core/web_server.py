@@ -40,6 +40,7 @@ STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/core.js": ("core.js", "text/javascript; charset=utf-8"),
     "/app.css": ("app.css", "text/css; charset=utf-8"),
     "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
     "/sw.js": ("sw.js", "text/javascript; charset=utf-8"),
@@ -52,7 +53,8 @@ ICONS = {
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
        "connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 MAX_BODY = 64 * 1024
-MAX_MESSAGE = 4000
+MAX_RESTORE_BODY = 256 * 1024  # reopening an old chat sends its recent turns
+MAX_MESSAGE = 8000
 
 
 def token_path() -> Path:
@@ -204,7 +206,7 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return hmac.compare_digest(header[len("Bearer "):].strip(), self.server.token)
 
-    def _read_json(self):
+    def _read_json(self, limit: int = MAX_BODY):
         """Parsed JSON body, or None after sending the error response."""
         if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
             self._error(415, "Content-Type must be application/json")
@@ -217,7 +219,7 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             length = -1
-        if length < 0 or length > MAX_BODY:
+        if length < 0 or length > limit:
             self._error(413, "body too large")
             return None
         try:
@@ -278,6 +280,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"settings": self.server.convo.settings_list()})
             if path == "/api/commands":
                 return self._json(200, {"commands": self.server.convo.commands()})
+            if path == "/api/log":
+                try:
+                    n = int((self.path.split("n=", 1) + ["60"])[1].split("&")[0]) if "n=" in self.path else 60
+                except ValueError:
+                    n = 60
+                return self._json(200, {"lines": action_log.recent_lines(n)})
             if path == "/api/events":
                 return self._events()
             if path == "/api/voices":
@@ -295,7 +303,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(401, "missing or wrong token")
         if path == "/api/transcribe":
             return self._transcribe()
-        data = self._read_json()
+        data = self._read_json(MAX_RESTORE_BODY if path == "/api/restore" else MAX_BODY)
         if data is None:
             return
         if path == "/api/speak":
@@ -303,6 +311,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/wake":
             fired = self.server.trigger_wake("api")
             return self._json(200, {"ok": True, "fired": fired})
+        if path == "/api/restore":
+            kept = self.server.convo.restore_history(data.get("messages"))
+            return self._json(200, {"ok": True, "kept": kept})
         if path == "/api/cancel":
             self.server.convo.cancel()
             return self._json(200, {"ok": True})
@@ -334,6 +345,7 @@ class Handler(BaseHTTPRequestHandler):
             "tts": dict(convo.config["tts"]),
             "user_name": convo._names()[1],
             "forced_turns": convo.forced_remaining,
+            "turns": max(0, len(convo.messages) - 1),
             "think": convo.config["reasoning"]["mode"],
             "stt": {"server": stt.available(convo.config), "pref": convo.config["voice"]["stt"],
                     "reason": stt.missing_reason(convo.config)},

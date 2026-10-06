@@ -328,7 +328,7 @@ class TestChatStream(WebBase):
         self.assertEqual(self.jpost("/api/chat", {"message": "  "})[0], 400)
         self.assertEqual(self.jpost("/api/chat", {})[0], 400)
         self.assertEqual(self.jpost("/api/chat", {"message": "/model gemini"})[0], 400)
-        self.assertEqual(self.jpost("/api/chat", {"message": "x" * 4001})[0], 413)
+        self.assertEqual(self.jpost("/api/chat", {"message": "x" * 8001})[0], 413)
 
     def test_client_disconnect_does_not_wedge_the_server(self):
         gate = threading.Event()

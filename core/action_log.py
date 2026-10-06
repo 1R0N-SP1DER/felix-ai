@@ -2,6 +2,8 @@ import os
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 import logging
+import time
+from collections import deque
 
 LOG_DIR = Path(os.environ.get("FELIX_LOG_DIR") or (Path.home() / "felix-ai" / "logs"))
 LOG_FILE = LOG_DIR / "actions.log"
@@ -18,6 +20,7 @@ logger.addHandler(handler)
 
 _console = True
 _listeners = []
+_recent = deque(maxlen=300)  # (unix time, line) for the web log panel and /log
 _inline_open = False  # a "Faze [tag]: " prefix is waiting on the current line
 
 
@@ -29,6 +32,12 @@ def add_listener(fn) -> None:
 def remove_listener(fn) -> None:
     if fn in _listeners:
         _listeners.remove(fn)
+
+
+def recent_lines(n: int = 50) -> list:
+    """Newest-last list of {ts, text} for the last n trace lines."""
+    n = max(1, min(int(n), 300))
+    return [{"ts": ts, "text": text} for ts, text in list(_recent)[-n:]]
 
 
 def set_console(enabled: bool) -> None:
@@ -49,6 +58,7 @@ def log_action(layer, tool, args, result, ms, extra=None, echo=True):
     if extra:
         log_line += f" | {extra}"
     logger.info(log_line)
+    _recent.append((round(time.time(), 1), log_line))
     if echo:
         for fn in list(_listeners):
             try:

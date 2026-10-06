@@ -85,6 +85,7 @@ COMMANDS = [
          {"value": "set", "description": "Change a setting"},
          {"value": "unset", "description": "Go back to a setting's default"},
      ]},
+    {"name": "log", "description": "Show recent tool and routing activity", "usage": "/log [count]", "args": []},
     {"name": "help", "description": "List every command", "usage": "/help", "args": []},
 ]
 
@@ -664,12 +665,36 @@ class Conversation:
             return self._think_command(args)
         if cmd == "/model":
             return self._model_command(args)
+        if cmd == "/log":
+            return self._log_text(args)
         if cmd == "/help":
             return "\n".join(f"/{c['name']:<9} {c['description']}" for c in COMMANDS)
         return f"Unknown command {parts[0]}. Type /help for the list"
 
     def commands(self) -> list:
         return COMMANDS
+
+    def _log_text(self, args: list) -> str:
+        try:
+            n = int(args[0]) if args else 15
+        except ValueError:
+            return "Usage: /log [count]"
+        lines = action_log.recent_lines(n)
+        return "\n".join(l["text"] for l in lines) if lines else "No activity yet"
+
+    def restore_history(self, items) -> int:
+        """Replace the history with earlier turns (the web app reopening an old
+        chat). Only user/assistant text is accepted; returns how many were kept."""
+        keep = []
+        for it in items if isinstance(items, list) else []:
+            if isinstance(it, dict) and it.get("role") in ("user", "assistant") and isinstance(it.get("content"), str) and it["content"].strip():
+                keep.append({"role": it["role"], "content": it["content"][:4000]})
+        keep = keep[-MAX_HISTORY_MESSAGES:]
+        while keep and keep[0]["role"] != "user":
+            keep.pop(0)
+        self.messages = [self.messages[0]] + keep
+        self._turn_context = ""
+        return len(keep)
 
     def _mode_text(self) -> str:
         if not self.forced_model:

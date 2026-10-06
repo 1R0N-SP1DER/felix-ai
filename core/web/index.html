@@ -2,63 +2,100 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#141414">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#05070d">
   <meta name="color-scheme" content="dark">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon-192.png">
   <link rel="apple-touch-icon" href="/icon-192.png">
-  <title>Faze</title>
+  <title>FAZE</title>
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <header>
-    <button id="open-settings" class="icon" aria-label="Settings">&#9776;</button>
-    <div id="chips" aria-label="Status"></div>
-    <button id="stop-speech" class="icon" hidden aria-label="Stop speaking">&#128263;</button>
-    <button id="new-chat" class="icon" aria-label="New chat">&#9998;</button>
-  </header>
+  <a class="skip" href="#input">Skip to message box</a>
+  <div id="app">
+    <aside id="sidebar" aria-label="Conversations">
+      <div class="side-top">
+        <div class="brand"><canvas id="core-side" width="88" height="88" aria-hidden="true"></canvas><span class="brand-name">FAZE</span></div>
+        <button id="collapse" class="icon" aria-label="Collapse sidebar">&#171;</button>
+      </div>
+      <button id="new-chat" class="new-chat" type="button"><span>+</span> New chat</button>
+      <input id="chat-search" type="search" placeholder="Search chats" autocomplete="off" aria-label="Search chats">
+      <nav id="chat-groups" aria-label="Chat history"></nav>
+      <div class="side-bottom">
+        <button id="open-settings" class="side-link" type="button">Settings</button>
+        <button id="profile" class="profile" type="button" aria-label="Profile and settings"><span id="avatar">F</span><span id="profile-name">You</span></button>
+      </div>
+    </aside>
+    <div id="scrim" aria-hidden="true"></div>
 
-  <div id="banner" hidden></div>
+    <section id="main">
+      <header id="topbar">
+        <button id="menu-btn" class="icon" aria-label="Open sidebar">&#9776;</button>
+        <button id="model-chip" class="model-ind" type="button" aria-label="Choose model"><span id="model-glyph">&#9678;</span><span id="model-label">Auto</span><span class="caret">&#9662;</span></button>
+        <div id="chips" aria-label="Status"></div>
+        <button id="log-btn" class="icon" aria-label="Activity log" title="Activity log">&#8801;</button>
+        <button id="stop-speech" class="icon" hidden aria-label="Stop speaking">&#9632;</button>
+      </header>
+      <div id="banner" hidden></div>
 
-  <main id="log" aria-live="polite">
-    <div id="hero">
-      <svg id="logo" viewBox="-50 -50 100 100" aria-hidden="true">
-        <g stroke="currentColor" stroke-width="7" stroke-linecap="round">
-          <line x1="0" y1="-14" x2="0" y2="-40"/><line x1="0" y1="-14" x2="0" y2="-40" transform="rotate(30)"/>
-          <line x1="0" y1="-14" x2="0" y2="-40" transform="rotate(60)"/><line x1="0" y1="-14" x2="0" y2="-40" transform="rotate(90)"/>
-          <line x1="0" y1="-14" x2="0" y2="-40" transform="rotate(120)"/><line x1="0" y1="-14" x2="0" y2="-40" transform="rotate(150)"/>
-          <line x1="0" y1="-14" x2="0" y2="-40" transform="rotate(180)"/><line x1="0" y1="-14" x2="0" y2="-40" transform="rotate(210)"/>
-          <line x1="0" y1="-14" x2="0" y2="-40" transform="rotate(240)"/><line x1="0" y1="-14" x2="0" y2="-40" transform="rotate(270)"/>
-          <line x1="0" y1="-14" x2="0" y2="-40" transform="rotate(300)"/><line x1="0" y1="-14" x2="0" y2="-40" transform="rotate(330)"/>
-        </g>
-      </svg>
-      <h2 id="greeting"></h2>
-    </div>
-  </main>
+      <main id="log">
+        <div id="home">
+          <canvas id="core-hero" width="520" height="520" aria-label="FAZE"></canvas>
+          <h1>What are we building?</h1>
+          <p id="sub">Ask anything. Build anything.</p>
+          <div id="starters">
+            <button type="button" data-insert="search the web for ">Search the web</button>
+            <button type="button" data-insert="Help me plan ">Plan a project</button>
+            <button type="button" data-insert="Explain how ">Explain something</button>
+          </div>
+        </div>
+        <div id="thread"></div>
+      </main>
 
-  <div id="cmdmenu" role="listbox" aria-label="Commands" hidden></div>
+      <div id="livebar" aria-live="polite">
+        <canvas id="core-live" width="64" height="64" aria-hidden="true"></canvas>
+        <span id="live-text">FAZE is ready</span>
+      </div>
+      <div id="cmdmenu" role="listbox" aria-label="Commands" hidden></div>
+      <div id="attachments" hidden></div>
 
-  <form id="composer" autocomplete="off">
-    <textarea id="input" rows="1" placeholder="Message Faze" enterkeyhint="send"></textarea>
-    <div class="bar">
-      <button type="button" id="plus" class="round" aria-label="More">+</button>
-      <button type="button" id="model-chip" class="pill" aria-label="Choose model"><span id="model-label">Auto</span><span class="caret">&#9662;</span></button>
-      <span class="spacer"></span>
-      <button type="button" id="mic" class="round" hidden aria-label="Speak">&#127908;</button>
-      <button type="submit" id="send" class="round primary" aria-label="Send"><span id="send-icon">&#8593;</span></button>
-    </div>
-  </form>
+      <form id="composer" autocomplete="off">
+        <div class="field">
+          <button type="button" id="plus" class="lead" aria-label="More">+</button>
+          <textarea id="input" rows="1" placeholder="Ask FAZE anything..." enterkeyhint="send" aria-label="Message"></textarea>
+          <button type="button" id="mic" class="round" hidden aria-label="Speak">&#127908;</button>
+          <button type="submit" id="send" class="round primary" aria-label="Send"><span id="send-icon">&#8593;</span></button>
+        </div>
+        <div class="tools-wrap"><div class="tools">
+          <button type="button" id="attach" class="tool" aria-label="Attach a text file"><span>&#128206;</span><b>Attach</b></button>
+          <button type="button" id="tools-btn" class="tool" aria-label="Tools"><span>&#9881;</span><b>Tools</b></button>
+          <button type="button" id="model-quick" class="tool" aria-label="Choose model"><span class="g">&#9678;</span><b>Auto</b></button>
+          <span class="hint-keys">Enter to send &middot; / for commands</span>
+        </div></div>
+        <input id="file-input" type="file" multiple hidden accept="text/*,.md,.py,.js,.ts,.json,.csv,.log,.html,.css,.java,.kt,.sh,.yml,.yaml,.toml,.xml,.sql">
+      </form>
+    </section>
+  </div>
 
   <div id="menu" hidden>
     <button id="menu-voice" type="button"><span>Voice mode</span><b id="menu-voice-val">off</b></button>
     <button id="menu-think" type="button"><span>Thinking</span><b id="menu-think-val">auto</b></button>
+    <button id="menu-log" type="button">Activity log</button>
     <button id="menu-new" type="button">New chat</button>
     <button id="menu-settings" type="button">Settings</button>
   </div>
+  <div id="tools-menu" hidden>
+    <button type="button" data-insert="search the web for ">Search the web</button>
+    <button type="button" data-insert="ask gemini ">Ask Gemini</button>
+    <button type="button" data-insert="whats my battery">Battery</button>
+    <button type="button" data-insert="whats the time">Time</button>
+    <button type="button" data-insert="read my clipboard">Clipboard</button>
+    <button type="button" data-insert="vibrate my phone">Vibrate</button>
+  </div>
 
   <div class="overlay" id="model-sheet" hidden>
-    <div class="sheet-body">
+    <div class="sheet-body" role="dialog" aria-label="Model">
       <div class="grab"></div>
       <h3>Model</h3>
       <div id="model-list"></div>
@@ -78,7 +115,7 @@
   </div>
 
   <div class="overlay" id="sheet" hidden>
-    <div class="sheet-body">
+    <div class="sheet-body" role="dialog" aria-label="Settings">
       <div class="grab"></div>
       <div class="sheet-head">
         <h2>Settings</h2>
@@ -93,7 +130,7 @@
         <div class="row"><span>Font</span>
           <div class="seg small" id="font-seg"><button type="button" data-v="system">System</button><button type="button" data-v="serif">Serif</button><button type="button" data-v="mono">Mono</button></div></div>
         <label class="row"><span>Animations</span><input type="checkbox" id="opt-motion"></label>
-        <label class="row"><span>Show greeting</span><input type="checkbox" id="opt-greeting"></label>
+        <label class="row"><span>Greeting line</span><input type="checkbox" id="opt-greeting"></label>
       </section>
 
       <section>
@@ -114,9 +151,9 @@
       </section>
 
       <section>
-        <h3>Faze</h3>
+        <h3>FAZE</h3>
         <div id="settings-list"></div>
-        <p class="hint">Settings marked * apply after Faze restarts.</p>
+        <p class="hint">Settings marked * apply after FAZE restarts.</p>
       </section>
 
       <section>
@@ -127,7 +164,7 @@
   </div>
 
   <div class="overlay" id="voice-sheet" hidden>
-    <div class="sheet-body">
+    <div class="sheet-body" role="dialog" aria-label="Voices">
       <div class="grab"></div>
       <div class="sheet-head"><h2>Voices</h2><button id="close-voices" class="icon" aria-label="Close">&#10005;</button></div>
       <input id="voice-search" type="search" placeholder="Search voices" autocomplete="off">
@@ -139,10 +176,19 @@
     </div>
   </div>
 
+  <div class="overlay" id="log-sheet" hidden>
+    <div class="sheet-body wide-sheet" role="dialog" aria-label="Activity log">
+      <div class="grab"></div>
+      <div class="sheet-head"><h2>Activity</h2><span class="spacer"></span><button id="log-copy" type="button" class="ghost small">Copy</button><button id="close-log" class="icon" aria-label="Close">&#10005;</button></div>
+      <div id="log-lines" class="log-lines" tabindex="0"></div>
+      <p class="hint">Live from FAZE: routing, tool calls, errors. The same lines the terminal prints.</p>
+    </div>
+  </div>
+
   <div class="overlay center" id="pair" hidden>
-    <div class="pair-body">
-      <h2>Pair with Faze</h2>
-      <p>Open the link Faze printed in Termux, or paste the token here.</p>
+    <div class="pair-body" role="dialog" aria-label="Pair">
+      <h2>Pair with FAZE</h2>
+      <p>Open the link FAZE printed in Termux, or paste the token here.</p>
       <input id="pair-input" type="password" autocomplete="off" spellcheck="false" placeholder="token">
       <button id="pair-go" class="wide">Connect</button>
     </div>
@@ -155,7 +201,8 @@
     <button id="voice-stop" type="button" aria-label="Stop voice mode">&#10005;</button>
   </div>
 
-  <div id="toast" hidden></div>
+  <div id="toast" hidden role="status"></div>
+  <script src="/core.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

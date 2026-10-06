@@ -1,8 +1,8 @@
 // Caches the app shell so the installed app opens even when Faze's server
 // isn't running (it then shows a "can't reach Faze" banner). API calls are
 // never cached.
-const CACHE = 'faze-shell-v1';
-const SHELL = ['/', '/app.js', '/app.css', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
+const CACHE = 'faze-shell-v3';
+const SHELL = ['/', '/app.js', '/core.js', '/app.css', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
