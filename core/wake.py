@@ -253,7 +253,7 @@ def check_mic(config: dict, seconds: float = 3.0) -> int:
     cmd = shlex.split(config["wake"]["mic_cmd"])
     print(f"Recording {seconds:.0f}s with: {' '.join(cmd)}\nSay something now...")
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except OSError as e:
         print(f"FAIL: could not run the mic command ({e.strerror or e}).")
         return 1
@@ -265,7 +265,11 @@ def check_mic(config: dict, seconds: float = 3.0) -> int:
         levels.append((rms(data), any(data)))
     _reap(proc)
     if not levels:
-        print("FAIL: the mic command produced no audio.")
+        try:
+            why = proc.stderr.read().decode(errors="replace").strip().splitlines()
+        except (OSError, ValueError):
+            why = []
+        print("FAIL: the mic command produced no audio." + (f" It said: {why[-1][:160]}" if why else ""))
         return 1
     if not any(nonzero for _, nonzero in levels):
         print("FAIL: audio is pure silence. Grant Termux the Microphone permission in Android settings, "

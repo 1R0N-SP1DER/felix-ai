@@ -39,18 +39,37 @@ def choose_source(listing: str):
     return "OpenSL_ES_source" if "OpenSL_ES_source" in mics else (mics[0] if mics else None)
 
 
-def detect_source():
+def _pactl(*args):
     try:
-        out = subprocess.run(["pactl", "list", "short", "sources"], capture_output=True, text=True, timeout=5)
+        return subprocess.run(["pactl", *args], capture_output=True, text=True, timeout=8)
     except (OSError, subprocess.SubprocessError):
         return None
-    return choose_source(out.stdout) if out.returncode == 0 else None
+
+
+def detect_source():
+    """The microphone source, loading Termux's OpenSL ES module first if only monitors exist."""
+    out = _pactl("list", "short", "sources")
+    if out is None or out.returncode != 0:
+        return None
+    found = choose_source(out.stdout)
+    if found is None and _pactl("load-module", "module-sles-source") is not None:
+        out = _pactl("list", "short", "sources")
+        found = choose_source(out.stdout) if out is not None and out.returncode == 0 else None
+    return found
 
 
 def main(argv) -> int:
     source = (argv[1] if len(argv) > 1 else os.environ.get("FAZE_MIC_SOURCE", "")) or None
     if source in (None, "auto"):
         source = detect_source()
+        if source is None:
+            info = _pactl("info")
+            if info is not None and info.returncode != 0:
+                print("pa_record: pulseaudio is not running; run: pulseaudio --start --exit-idle-time=-1", file=sys.stderr)
+                return 4
+            if info is not None:
+                print("pa_record: no microphone source (only monitors); run: pactl load-module module-sles-source", file=sys.stderr)
+                return 3
     rate = int(argv[2]) if len(argv) > 2 else 16000
     lib = load_lib()
     if lib is None:
