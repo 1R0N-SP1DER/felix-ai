@@ -79,6 +79,8 @@ DEFAULTS = {
     "gemini_enabled": True,
     "narrate_tool_results": False,
     "ui": {"show_model_tag": True, "show_trace": True},
+    # Gemini-written tools: ask = approve each new tool, yolo = auto-approve with a description, off = none
+    "agent": {"mode": "ask", "high_tools": False, "max_rounds": 6},
 }
 
 # Settings editable with /settings: key -> (type, allowed values or None)
@@ -105,6 +107,9 @@ SETTINGS = {
     "boot.chat_while_booting": (str, ("lfm", "gemini", "wait")),
     "boot.warmup": (bool, None),
     "boot.qwen": (str, ("lazy", "eager")),
+    "agent.mode": (str, ("off", "ask", "yolo")),
+    "agent.high_tools": (bool, None),
+    "agent.max_rounds": (int, None),
     "fallback.order": (str, ("lfm,qwen", "qwen,lfm", "lfm", "qwen", "off")),
     "gemini.model": (str, None),
     "gemini.search_model": (str, None),

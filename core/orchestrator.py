@@ -38,6 +38,7 @@ from local_server import ServerManager
 from memory_store import init_db, log_message
 from memory_recall import setup_fts
 from identity import fix_identity
+import agent
 from prompt_assembler import build_static_system_message, build_turn_context, set_names
 from tool_schema import validate_tool_call, ToolCallValidationError
 from permission_policy import get_permission_tier, UnknownToolError
@@ -85,6 +86,23 @@ COMMANDS = [
          {"value": "set", "description": "Change a setting"},
          {"value": "unset", "description": "Go back to a setting's default"},
      ]},
+    {"name": "agent", "description": "How Gemini may add new tools",
+     "usage": "/agent [off|ask|yolo]",
+     "args": [
+         {"value": "ask", "description": "Show each new tool and wait for approval"},
+         {"value": "yolo", "description": "Add tools without asking (you still get the description)"},
+         {"value": "off", "description": "Gemini cannot create tools"},
+     ]},
+    {"name": "elevated", "description": "Allow higher-level tools (network, shell, files)",
+     "usage": "/elevated [on|off]",
+     "args": [{"value": "on", "description": "Higher-level tools may be created and run"},
+              {"value": "off", "description": "Only pure-computation tools"}]},
+    {"name": "tools", "description": "List or remove tools Gemini made",
+     "usage": "/tools [list|remove <name>|clear]",
+     "args": [{"value": "list", "description": "Show saved tools"}, {"value": "clear", "description": "Delete all saved tools"}]},
+    {"name": "tasks", "description": "List or remove saved tasks",
+     "usage": "/tasks [list|remove <id>|clear]",
+     "args": [{"value": "list", "description": "Show saved tasks"}, {"value": "clear", "description": "Delete all saved tasks"}]},
     {"name": "log", "description": "Show recent tool and routing activity", "usage": "/log [count]", "args": []},
     {"name": "help", "description": "List every command", "usage": "/help", "args": []},
 ]
@@ -124,13 +142,22 @@ RULES:
   quickly and correctly.
 """
 
-GEMINI_TOOL_NOTE = (
-    "\nYou can call these tools: "
-    + ", ".join(t["function"]["name"] for t in GEMINI_TOOLS_SCHEMA)
-    + ". Call a tool only when the user asks for it right now. If a tool "
-      "fails, do not retry it: answer from your own knowledge or say you "
-      "could not check. Never invent tool results.\n"
-)
+def gemini_tool_note(schema: list) -> str:
+    return (
+        "\nYou can call these tools: "
+        + ", ".join(t["function"]["name"] for t in schema)
+        + ". Call a tool only when the user asks for it right now. If a tool "
+          "fails, do not retry it: answer from your own knowledge or say you "
+          "could not check. Never invent tool results.\n"
+    )
+
+
+GEMINI_TOOL_NOTE = gemini_tool_note(GEMINI_TOOLS_SCHEMA)
+
+
+def tool_instructions() -> str:
+    """The fixed tool rules plus any tools Gemini has made."""
+    return TOOL_INSTRUCTIONS + agent.custom_tools_text()
 
 
 class LocalModelError(Exception):
@@ -176,6 +203,11 @@ class Conversation:
         self.last_reply_streamed = False
         self._turn_context = ""
         self._last_user_message = ""
+        self.approver = None          # callable(info) -> bool: asks the user about a new tool (ask mode)
+        self._agent_notes = []
+        self._agent_steps = []
+        self._agent_created = []
+        agent.init(config)
         if config.get("gemini_enabled", True) is False:
             os.environ["FAZE_GEMINI_DISABLED"] = "1"
         names = config["assistant"]
@@ -184,7 +216,7 @@ class Conversation:
         self._gemini_down_until = 0.0
         self.system_static = build_static_system_message()
         self.messages = [{"role": "system",
-                          "content": self.system_static + "\n" + TOOL_INSTRUCTIONS}]
+                          "content": self.system_static + "\n" + tool_instructions()}]
         self.local = ServerManager(config, self._warm_local)
         atexit.register(self.stop_lfm)
         atexit.register(self._stop_local_on_exit)
@@ -197,7 +229,7 @@ class Conversation:
         """Heat llama-server's KV cache with the exact production prefix."""
         payload = {
             "messages": [self.messages[0], {"role": "user", "content": "hi"}],
-            "tools": LOCAL_TOOLS_SCHEMA,
+            "tools": agent.local_schema(),
             "chat_template_kwargs": {"enable_thinking": False},
             "max_tokens": 1,
         }
@@ -248,7 +280,8 @@ class Conversation:
             log_action("lfm", "preload", {}, f"ERROR {e}", 0, echo=False)
 
     def drain_notices(self) -> list:
-        return self.local.drain_notices()
+        notes, self._agent_notes = self._agent_notes, []
+        return self.local.drain_notices() + notes
 
     def _announce(self, tag: str, extra: str = ""):
         self.last_route = tag
@@ -282,7 +315,7 @@ class Conversation:
 
     def _rebuild_system(self):
         self.system_static = build_static_system_message()
-        self.messages[0] = {"role": "system", "content": self.system_static + "\n" + TOOL_INSTRUCTIONS}
+        self.messages[0] = {"role": "system", "content": self.system_static + "\n" + tool_instructions()}
 
     def _names(self):
         return self.config["assistant"]["name"], self.config["assistant"]["user_name"]
@@ -411,7 +444,7 @@ class Conversation:
             allow_thinking = True
         for _ in range(max_rounds):
             result = self._call_llm(self._request_messages(), allow_thinking,
-                                    tools=LOCAL_TOOLS_SCHEMA)
+                                    tools=agent.local_schema())
             calls = result["tool_calls"]
 
             if not calls:
@@ -469,6 +502,8 @@ class Conversation:
         """Validate, permission-check and run one tool. Returns
         (ok, text): the raw result on success, a short real error on
         failure. Always logged."""
+        if name == "create_tool":
+            return self._create_tool(args, layer)
         call = {"tool": name, "parameters": args}
         start = time.time()
         try:
@@ -490,6 +525,53 @@ class Conversation:
         ms = int((time.time() - start) * 1000)
         log_action(layer, name, args, result if ok else f"ERROR {result}", ms, extra)
         return ok, result
+
+    def _approve(self, info: dict) -> bool:
+        if self.approver is None:
+            return False
+        approved = bool(self.approver(info))
+        if self._cancel.is_set():
+            raise TurnCancelled()
+        return approved
+
+    def _create_tool(self, args: dict, layer: str):
+        """Gemini's create_tool: check it, get approval per the agent mode, save and register it."""
+        start = time.time()
+        cfg = self.config.get("agent", {})
+        mode = cfg.get("mode", "ask")
+        name = str(args.get("name", ""))[:40]
+
+        def done(ok, text):
+            log_action(layer, "create_tool", {"name": name}, text if ok else f"ERROR {text}", int((time.time() - start) * 1000))
+            return ok, text
+
+        if mode == "off":
+            return done(False, "creating tools is turned off")
+        try:
+            info, meta, code = agent.prepare_tool(args, bool(cfg.get("high_tools")))
+        except agent.ToolCreateError as e:
+            return done(False, str(e))
+        if mode == "ask" and not self._approve(info):
+            return done(False, "the user declined this tool; do not create it again, continue without it")
+        agent.STORE.add_tool(meta, code)
+        self._rebuild_system()
+        self._agent_created.append(meta["name"])
+        if mode == "yolo":
+            self._agent_notes.append("Added a tool (yolo mode)\n" + agent.format_info(info))
+        signature = ", ".join(meta["params"])
+        return done(True, f"tool '{meta['name']}' created ({meta['level']}). Call it now: {meta['name']}({signature})")
+
+    def _save_agent_task(self, prompt: str, reply: str):
+        if self.config.get("agent", {}).get("mode", "ask") == "off":
+            return
+        steps = [s for s in self._agent_steps if s["ok"]]
+        custom = [s for s in steps if s["tool"] in agent.STORE.tools]
+        if not (len(steps) >= 2 or self._agent_created or custom):
+            return
+        try:
+            agent.STORE.save_task(prompt, steps, reply, self._agent_created)
+        except OSError as e:
+            log_action("agent", "save_task", {}, f"ERROR {summarize_error(e)}", 0)
 
     def _tool_reply(self, name: str, args: dict, ok: bool, result: str) -> str:
         if not ok:
@@ -530,21 +612,24 @@ class Conversation:
     # ------------------------------------------------------------------
 
     def _call_gemini_with_tools(self, max_rounds: int = 2) -> str:
-        """Gemini picks tools from its own schema (never delegate_to_gemini).
-        Identical repeated calls are not re-run, tool errors go back as
-        text, and the last request is sent with tools off so it must
-        answer."""
-        system_message = self.system_static + GEMINI_TOOL_NOTE
+        """Gemini picks tools from its own schema (never delegate_to_gemini). With the agent on it
+        gets more rounds and create_tool. Identical repeated calls are not re-run, tool errors go
+        back as text, and the last request is sent with tools off so it must answer."""
+        agent_cfg = self.config.get("agent", {})
+        if agent_cfg.get("mode", "ask") != "off":
+            max_rounds = max(max_rounds, int(agent_cfg.get("max_rounds", 6)))
+        schema = agent.gemini_schema(self.config)
+        system_message = self.system_static + gemini_tool_note(schema) + agent.agent_note(self.config)
         history = [m for m in self._request_messages()[1:]
                    if m["role"] in ("user", "assistant")]
-        allowed = {t["function"]["name"] for t in GEMINI_TOOLS_SCHEMA}
+        allowed = {t["function"]["name"] for t in schema}
         seen = set()
 
         for round_no in range(max_rounds + 1):
             final_round = round_no == max_rounds
             start = time.time()
             result = ask_gemini(system_message, history,
-                                tools_schema=None if final_round else GEMINI_TOOLS_SCHEMA)
+                                tools_schema=None if final_round else schema)
             if result["type"] == "text":
                 log_action("gemini", "reply", {}, f"{len(result['content'])} chars",
                            int((time.time() - start) * 1000))
@@ -561,9 +646,16 @@ class Conversation:
             else:
                 seen.add(key)
                 ok, res = self._execute_tool(name, args, "gemini")
-                tool_text = res if ok else (
-                    f"{name} failed: {res}. Do not retry; answer from your own "
-                    f"knowledge or say you could not check.")
+                if name != "create_tool":
+                    self._agent_steps.append({"tool": name, "args": args, "ok": ok, "result": str(res)[:120]})
+                if name == "create_tool":
+                    schema = agent.gemini_schema(self.config)
+                    allowed = {t["function"]["name"] for t in schema}
+                    tool_text = res if ok else f"create_tool failed: {res}. Fix the problem and try once more, or answer without it."
+                else:
+                    tool_text = res if ok else (
+                        f"{name} failed: {res}. Do not retry; answer from your own "
+                        f"knowledge or say you could not check.")
 
             history.append({"role": "assistant", "content": f"[called {name}]"})
             history.append({"role": "user", "content": f"[tool result from {name}] {tool_text}"})
@@ -667,12 +759,76 @@ class Conversation:
             return self._model_command(args)
         if cmd == "/log":
             return self._log_text(args)
+        if cmd == "/agent":
+            return self._agent_command(args)
+        if cmd == "/elevated":
+            return self._elevated_command(args)
+        if cmd == "/tools":
+            return self._tools_command(args)
+        if cmd == "/tasks":
+            return self._tasks_command(args)
         if cmd == "/help":
             return "\n".join(f"/{c['name']:<9} {c['description']}" for c in COMMANDS)
         return f"Unknown command {parts[0]}. Type /help for the list"
 
     def commands(self) -> list:
         return COMMANDS
+
+    def _agent_text(self) -> str:
+        cfg = self.config["agent"]
+        return (f"Agent mode: {cfg['mode']} ({agent.MODE_HELP[cfg['mode']]})\n"
+                f"Higher-level tools: {'on' if cfg['high_tools'] else 'off'}\n"
+                f"Saved: {len(agent.STORE.tools)} tools, {len(agent.STORE.tasks)} tasks")
+
+    def _agent_command(self, args: list) -> str:
+        if not args:
+            return self._agent_text()
+        if args[0].lower() not in agent.MODES:
+            return "Usage: /agent off|ask|yolo"
+        self.change_setting("agent.mode", args[0].lower())
+        return self._agent_text()
+
+    def _elevated_command(self, args: list) -> str:
+        if args:
+            word = args[0].lower()
+            if word not in ("on", "off", "true", "false", "yes", "no"):
+                return "Usage: /elevated on|off"
+            self.change_setting("agent.high_tools", "true" if word in ("on", "true", "yes") else "false")
+        on = self.config["agent"]["high_tools"]
+        return "Higher-level tools: " + ("on (tools may use the network, shell or files)" if on else "off (pure-computation tools only)")
+
+    def _tools_command(self, args: list) -> str:
+        store = agent.STORE
+        sub = args[0].lower() if args else "list"
+        if sub == "list":
+            if not store.tools:
+                return "No saved tools"
+            return "\n".join(f"{m['name']} [{m['level']}] {m['description']} (used {m.get('uses', 0)}x)"
+                             for _, m in sorted(store.tools.items()))
+        if sub == "remove" and len(args) == 2:
+            removed = store.remove_tool(args[1])
+            self._rebuild_system()
+            return f"Removed {args[1]}" if removed else f"No tool named {args[1]}"
+        if sub == "clear":
+            n = store.clear_tools()
+            self._rebuild_system()
+            return f"Removed {n} tool{'s' if n != 1 else ''}"
+        return "Usage: /tools [list|remove <name>|clear]"
+
+    def _tasks_command(self, args: list) -> str:
+        store = agent.STORE
+        sub = args[0].lower() if args else "list"
+        if sub == "list":
+            if not store.tasks:
+                return "No saved tasks"
+            return "\n".join(f"{t['id']}  {t['prompt'][:60]}  ({', '.join(sorted({s['tool'] for s in t['steps']})) or 'no tools'}; used {t.get('uses', 0)}x)"
+                             for t in store.tasks)
+        if sub == "remove" and len(args) == 2:
+            return f"Removed {args[1]}" if store.remove_task(args[1]) else f"No task {args[1]}"
+        if sub == "clear":
+            n = store.clear_tasks()
+            return f"Removed {n} task{'s' if n != 1 else ''}"
+        return "Usage: /tasks [list|remove <id>|clear]"
 
     def _log_text(self, args: list) -> str:
         try:
@@ -831,6 +987,8 @@ class Conversation:
             self._rebuild_system()
         if key in ("gemini.model", "gemini.search_model"):
             gemini_client.configure(chat=self.config["gemini"]["model"], search=self.config["gemini"]["search_model"])
+        if key == "agent.high_tools":
+            agent.set_policy(high_tools=bool(value))
         if key == "model.forced":
             self._persisted_force = value if value in FORCEABLE_MODELS else None
             if self.forced_remaining == 0:
@@ -959,12 +1117,17 @@ class Conversation:
             self.stop_lfm()  # Qwen took over; free the RAM LFM was using
         self.messages.append({"role": "user", "content": user_message})
         log_message(DEVICE, "user", user_message)
+        self._agent_steps, self._agent_created = [], []
 
         try:
             self._turn_context = build_turn_context(user_message)
         except Exception as e:
             self._turn_context = ""
             log_action("memory", "recall", {}, f"ERROR {summarize_error(e)}", 0)
+        if self.config.get("agent", {}).get("mode", "ask") != "off":
+            hint = agent.STORE.task_hint(user_message)
+            if hint:
+                self._turn_context = (self._turn_context + "\n\n" + hint).strip()
 
         # 1. Deterministic routes: free, instant, never a model guess.
         call = match_intent(user_message)
@@ -1000,6 +1163,7 @@ class Conversation:
 
         if forced and self.forced_model != "lfm":
             self.stop_lfm()
+        self._save_agent_task(user_message, reply)
         return self._finish(fix_identity(reply, *self._names()))
 
 
@@ -1051,6 +1215,14 @@ if __name__ == "__main__":
         readline.parse_and_bind("tab: complete")
     except (ImportError, OSError):
         pass
+
+    def cli_approver(info):
+        print("\n" + agent.format_info(info) + "\n--- code ---\n" + info["code"] + "\n------------")
+        try:
+            return input("Approve this tool? [y/N] ").strip().lower() in ("y", "yes")
+        except (EOFError, KeyboardInterrupt):
+            return False
+    convo.approver = cli_approver
 
     name = config["assistant_name"]
     print(f"felix-ai Core -- {name}")

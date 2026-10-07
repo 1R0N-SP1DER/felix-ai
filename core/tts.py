@@ -63,8 +63,34 @@ def _audio_from(payload):
         return None, "the speech model returned no audio (unreadable data)"
 
 
+def package_audio(audio: bytes, mime: str):
+    """(bytes, content type) the browser can play. Raw PCM gets a WAV header; audio that already
+    is a file (wav, mp3, ogg...) passes through untouched; wrapping that in a second header is what
+    makes a browser say "no supported source"."""
+    head, kind = audio[:12], (mime or "").lower()
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        return audio, "audio/wav"
+    if head[:3] == b"ID3" or head[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+        return audio, "audio/mpeg"
+    if head[:4] == b"OggS":
+        return audio, "audio/ogg"
+    if head[:4] == b"fLaC":
+        return audio, "audio/flac"
+    if head[4:8] == b"ftyp":
+        return audio, "audio/mp4"
+    if kind.startswith("audio/") and not any(k in kind for k in ("l16", "pcm", "raw")) and kind not in ("audio/", "audio/x-raw"):
+        return audio, kind.split(";")[0]
+    rate_match = re.search(r"rate=(\d+)", kind)
+    return wav_from_pcm(audio, int(rate_match.group(1)) if rate_match else 24000), "audio/wav"
+
+
 def synthesize(text: str, voice: str, model: str, timeout: float = 60.0, post=None) -> bytes:
-    """Speak `text` and return a WAV file. Raises TtsError with a short reason."""
+    """Speak `text`; returns playable audio bytes (a WAV for PCM replies). Raises TtsError with a short reason."""
+    return synthesize_audio(text, voice, model, timeout, post)[0]
+
+
+def synthesize_audio(text: str, voice: str, model: str, timeout: float = 60.0, post=None):
+    """Like synthesize, but returns (bytes, content type)."""
     text = (text or "").strip()
     if not text:
         raise TtsError("nothing to say")
@@ -105,8 +131,7 @@ def synthesize(text: str, voice: str, model: str, timeout: float = 60.0, post=No
             continue
         pcm, mime = _audio_from(payload)
         if pcm:
-            rate_match = re.search(r"rate=(\d+)", mime)
-            return wav_from_pcm(pcm, int(rate_match.group(1)) if rate_match else 24000)
+            return package_audio(pcm, mime)
         reason = mime
     raise TtsError(reason)
 
@@ -119,11 +144,11 @@ if __name__ == "__main__":
     words = sys.argv[1] if len(sys.argv) > 1 else "Hello, this is a voice test."
     who = sys.argv[2] if len(sys.argv) > 2 else cfg["voice"]
     try:
-        wav = synthesize(words, who, cfg["model"])
+        audio, kind = synthesize_audio(words, who, cfg["model"])
     except TtsError as e:
         print(f"FAIL ({cfg['model']}, {who}): {e}")
         raise SystemExit(1)
-    out = os.path.expanduser("~/faze_tts_test.wav")
+    out = os.path.expanduser("~/faze_tts_test." + {"audio/mpeg": "mp3", "audio/ogg": "ogg", "audio/flac": "flac", "audio/mp4": "m4a"}.get(kind, "wav"))
     with open(out, "wb") as f:
-        f.write(wav)
-    print(f"OK: {len(wav)} bytes -> {out} ({cfg['model']}, {who})")
+        f.write(audio)
+    print(f"OK: {len(audio)} bytes, {kind}, starts {audio[:12].hex()} -> {out} ({cfg['model']}, {who})")

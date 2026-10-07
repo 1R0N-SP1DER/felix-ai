@@ -77,10 +77,13 @@ def validate_tool_call(candidate: dict) -> bool:
             raise ToolCallValidationError(
                 f"Missing required parameter '{param_name}' for tool '{tool_name}'."
             )
-        if not isinstance(parameters[param_name], expected_type):
+        value = parameters[param_name]
+        if expected_type is float and isinstance(value, int) and not isinstance(value, bool):
+            continue  # JSON has no int/float split; 10 is a fine number
+        if not isinstance(value, expected_type):
             raise ToolCallValidationError(
                 f"Parameter '{param_name}' for tool '{tool_name}' must be "
-                f"{expected_type.__name__}, got {type(parameters[param_name]).__name__}."
+                f"{expected_type.__name__}, got {type(value).__name__}."
             )
 
     return True

@@ -108,6 +108,8 @@
     return mode === 'auto' || !turns ? name : name + ' \u00b7 ' + turns + ' left';
   }
 
+  const STAY_OPTIONS = [[0, 'Until I turn it off'], [1, 'Next message'], [3, '3 messages'], [5, '5 messages'], [10, '10 messages'], [20, '20 messages']];
+
   function stayLabel(n) {
     n = Number(n) || 0;
     return n <= 0 ? 'until I turn it off' : n === 1 ? '1 message' : n + ' messages';
@@ -285,7 +287,7 @@
 
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { escapeHtml, renderMarkdown, parseSSE, stripForSpeech, greetingFor, GREETINGS,
-      modelLabel, stayLabel, resampleMean, encodeWav, commandSuggestions,
+      modelLabel, stayLabel, STAY_OPTIONS, resampleMean, encodeWav, commandSuggestions,
       parseTrace, liveLabel, titleFor, groupChats, clipFile, composeMessage, restorePayload, TOOL_VERBS, MODEL_GLYPH, MODEL_NAMES };
     return;
   }
@@ -531,32 +533,68 @@
     }
   }
 
+  // Tap a model: stay on it until turned off. The control at the right (a tick on the active model, an
+  // arrow elsewhere) morphs into a dropdown for "stay N messages".
+  function stayControl(id) {
+    const active = status.mode === id;
+    const turns = active ? (status.forced_turns || 0) : 0;
+    const ctl = document.createElement('div');
+    ctl.className = 'stay-ctl' + (active ? ' active' : '');
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'stay-trigger';
+    trigger.textContent = active ? '\u2713' : '\u25BE';
+    trigger.setAttribute('aria-label', (active ? 'Staying on ' + MODEL_NAMES[id] + ' ' + stayLabel(turns) + '. ' : '') + 'Choose how long to stay on ' + MODEL_NAMES[id]);
+    const pick = document.createElement('select');
+    pick.className = 'stay-pick';
+    pick.tabIndex = -1;
+    pick.setAttribute('aria-label', 'How long to stay on ' + MODEL_NAMES[id]);
+    const options = STAY_OPTIONS.slice();
+    if (turns && !options.some((o) => o[0] === turns)) options.push([turns, stayLabel(turns)]);
+    for (const [n, label] of options) {
+      const o = document.createElement('option');
+      o.value = String(n);
+      o.textContent = label;
+      pick.appendChild(o);
+    }
+    pick.value = String(turns);
+    const close = () => { ctl.classList.remove('open'); pick.tabIndex = -1; };
+    trigger.onclick = () => {
+      ctl.classList.add('open');
+      pick.tabIndex = 0;
+      pick.focus();
+      try { if (pick.showPicker) pick.showPicker(); } catch (e) { /* the tap itself opens it */ }
+    };
+    pick.onchange = () => { close(); chooseModel(id, Number(pick.value)); };
+    pick.onblur = () => setTimeout(close, 150);
+    ctl.appendChild(trigger);
+    ctl.appendChild(pick);
+    return ctl;
+  }
+
   function renderModelSheet() {
     if (!status) return;
     const list = $('model-list');
+    if (list.querySelector('.stay-ctl.open')) return;  // do not yank a dropdown away mid-choice
     list.textContent = '';
     const st = modelStates(status);
     for (const id of ['auto', 'qwen', 'lfm', 'gemini']) {
+      const item = document.createElement('div');
+      item.className = 'model-item';
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'model-row' + (status.mode === id ? ' on' : '');
       row.innerHTML = '<span class="dot ' + st[id].cls + '"></span><span class="name">' + MODEL_NAMES[id] +
-        '<small>' + escapeHtml(st[id].sub) + '</small></span><span class="check">&#10003;</span>';
-      row.onclick = () => chooseModel(id);
-      list.appendChild(row);
-    }
-    const forced = status.mode !== 'auto';
-    $('stay').hidden = !forced;
-    if (forced) {
-      const n = status.forced_turns || 0;
-      $('stay-range').value = n;
-      $('stay-val').textContent = stayLabel(n);
+        '<small>' + escapeHtml(st[id].sub) + '</small></span>';
+      row.onclick = () => chooseModel(id, 0);
+      item.appendChild(row);
+      if (id !== 'auto') item.appendChild(stayControl(id));
+      list.appendChild(item);
     }
   }
 
-  async function chooseModel(id) {
+  async function chooseModel(id, n) {
     try {
-      const n = Number($('stay-range').value) || 0;
       toast(await command('/model ' + id + (id !== 'auto' && n > 0 ? ' ' + n : '')));
     } catch (e) { toast(e.message); }
     pollStatus(true);
@@ -930,6 +968,8 @@
         buffer = parsed.rest;
         for (const { event, data } of parsed.events) {
           if (event === 'wake' && data.seq !== wakeSeq) { wakeSeq = data.seq; onWake(); }
+          else if (event === 'approval') showApproval(data);
+          else if (event === 'approval_done' && data.id === approvalId) { $('approval-sheet').hidden = true; approvalId = ''; }
         }
       }
     }).catch(() => {}).then(() => setTimeout(connectEvents, 3000));
@@ -1347,6 +1387,95 @@
     renderWakeRow();
   }
 
+  // ---- agent: approving tools Gemini wrote, modes, saved tools and tasks
+
+  let approvalId = '';
+
+  function showApproval(info) {
+    approvalId = info.id;
+    $('ap-title').textContent = info.replaces ? 'Update a tool?' : 'Add a new tool?';
+    $('ap-name').textContent = info.name;
+    $('ap-level').textContent = info.level === 'high' ? 'higher-level' : 'normal';
+    $('ap-level').classList.toggle('warn-pill', info.level === 'high');
+    $('ap-desc').textContent = info.description;
+    $('ap-how').textContent = info.how_it_works;
+    const why = info.reasons || [];
+    $('ap-reasons').hidden = !why.length;
+    $('ap-reasons').textContent = 'Higher-level because it ' + why.join('; ');
+    $('ap-code').textContent = info.code || '';
+    $('approval-sheet').hidden = false;
+    $('ap-allow').focus();
+  }
+
+  async function answerApproval(approve, yolo) {
+    const id = approvalId;
+    $('approval-sheet').hidden = true;
+    approvalId = '';
+    if (!id) return;
+    try {
+      if (yolo) await apiJson('/api/settings', { key: 'agent.mode', value: 'yolo' });
+      await apiJson('/api/approve', { id, approve });
+    } catch (e) { toast(e.message); }
+    pollStatus(true);
+  }
+
+  function agentList(box, items, build) {
+    box.textContent = '';
+    if (!items.length) {
+      const p = document.createElement('p');
+      p.className = 'empty-note';
+      p.textContent = 'Nothing saved yet';
+      box.appendChild(p);
+      return;
+    }
+    for (const it of items) box.appendChild(build(it));
+  }
+
+  function agentItem(title, pill, sub, meta, onRemove) {
+    const row = document.createElement('div');
+    row.className = 'agent-item';
+    const body = document.createElement('div');
+    const head = document.createElement('b');
+    head.textContent = title;
+    body.appendChild(head);
+    if (pill) { const p = document.createElement('span'); p.className = 'via' + (pill === 'higher-level' ? ' warn-pill' : ''); p.textContent = pill; body.appendChild(p); }
+    const d = document.createElement('small');
+    d.textContent = sub;
+    body.appendChild(d);
+    const m = document.createElement('small');
+    m.textContent = meta;
+    body.appendChild(m);
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'icon';
+    x.setAttribute('aria-label', 'Remove ' + title);
+    x.textContent = '\u2715';
+    x.addEventListener('click', onRemove);
+    row.appendChild(body);
+    row.appendChild(x);
+    return row;
+  }
+
+  async function loadAgent() {
+    let d;
+    try { d = await (await api('/api/agent')).json(); } catch (e) { return; }
+    for (const b of $('agent-mode-seg').children) b.classList.toggle('on', b.dataset.v === d.mode);
+    $('agent-mode-help').textContent = d.modes[d.mode];
+    $('opt-elevated').checked = d.high_tools;
+    agentList($('agent-tools'), d.tools, (t) => agentItem(t.name, t.level === 'high' ? 'higher-level' : '', t.description + ' ' + t.how_it_works,
+      'used ' + t.uses + 'x', async () => { toast(await command('/tools remove ' + t.name)); loadAgent(); }));
+    agentList($('agent-tasks'), d.tasks, (t) => agentItem(t.prompt, '', t.tools.length ? 'Uses ' + t.tools.join(', ') : 'Answered directly',
+      'reused ' + t.uses + 'x, done ' + t.runs + 'x', async () => { toast(await command('/tasks remove ' + t.id)); loadAgent(); }));
+    if (d.pending && d.pending.length && !approvalId) showApproval(d.pending[0]);
+  }
+
+  async function clearAgent(what) {
+    if (!confirm('Delete all saved ' + what + '?')) return;
+    try { toast(await command('/' + what + ' clear')); } catch (e) { toast(e.message); }
+    loadAgent();
+    pollStatus(true);
+  }
+
   // Settings is a page of its own (General / Voice / Advanced), not a popup. Android's back button leaves it.
   let settingsTab = 'general';
 
@@ -1360,6 +1489,7 @@
     settingsTab = name;
     for (const b of $('settings-tabs').children) { const on = b.dataset.tab === name; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; }
     for (const p of $('settings-view').querySelectorAll('.panel')) p.classList.toggle('on', p.dataset.panel === name);
+    if (name === 'agent') loadAgent();
   }
 
   function openSettings() {
@@ -1663,6 +1793,7 @@
         closeLog();
         $('menu').hidden = true;
         $('tools-menu').hidden = true;
+        if (!$('approval-sheet').hidden) answerApproval(false, false);
         for (const id of ['model-sheet', 'voice-sheet']) $(id).hidden = true;
         if (!$('settings-view').hidden) closeSettings();
       } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k') {
@@ -1804,11 +1935,16 @@
     $('opt-wake').addEventListener('change', () => saveSetting('wake.enabled', $('opt-wake').checked, () => { $('opt-wake').checked = !$('opt-wake').checked; }));
     $('wake-phrase').addEventListener('change', () => saveSetting('wake.phrase', $('wake-phrase').value.trim(), renderWakeRow));
     $('adv-log').addEventListener('click', openLog);
+    for (const b of $('agent-mode-seg').children) b.addEventListener('click', async () => { await saveSetting('agent.mode', b.dataset.v); loadAgent(); });
+    $('opt-elevated').addEventListener('change', async () => { await saveSetting('agent.high_tools', $('opt-elevated').checked, () => { $('opt-elevated').checked = !$('opt-elevated').checked; }); loadAgent(); });
+    $('clear-tools').addEventListener('click', () => clearAgent('tools'));
+    $('clear-tasks').addEventListener('click', () => clearAgent('tasks'));
+    $('ap-allow').addEventListener('click', () => answerApproval(true, false));
+    $('ap-deny').addEventListener('click', () => answerApproval(false, false));
+    $('ap-yolo').addEventListener('click', () => answerApproval(true, true));
     window.addEventListener('popstate', () => showSettings(location.hash === '#settings'));
     if (location.hash === '#settings') showSettings(true);
     $('model-sheet').addEventListener('click', (ev) => { if (ev.target === $('model-sheet')) $('model-sheet').hidden = true; });
-    $('stay-range').addEventListener('input', (ev) => { $('stay-val').textContent = stayLabel(ev.target.value); });
-    $('stay-range').addEventListener('change', () => { if (status && status.mode !== 'auto') chooseModel(status.mode); });
     for (const b of $('think-seg').children) {
       b.addEventListener('click', async () => {
         try { toast(await command('/think ' + b.dataset.v)); } catch (e) { toast(e.message); }

@@ -22,6 +22,9 @@ TOOL_DESCRIPTIONS = {
 }
 
 
+# Per-tool parameter descriptions for tools added at runtime (see agent.py).
+TOOL_PARAM_DESCRIPTIONS = {}
+
 PARAM_DESCRIPTIONS = {
     "level": "volume level, an integer from 0 to 15",
     "text": "the exact text to copy to the clipboard",
@@ -53,7 +56,8 @@ def build_tools_schema(exclude=()) -> list:
         properties = {}
         for param_name, param_type in params.items():
             prop = _type_to_json_schema(param_type)
-            prop["description"] = PARAM_DESCRIPTIONS.get(param_name, param_name)
+            prop["description"] = (TOOL_PARAM_DESCRIPTIONS.get(name, {}).get(param_name)
+                                   or PARAM_DESCRIPTIONS.get(param_name, param_name))
             properties[param_name] = prop
 
         schema.append({

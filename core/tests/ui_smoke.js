@@ -28,6 +28,14 @@ function sse(events) {
   return { ok: true, status: 200, body: stream, json: async () => ({}) };
 }
 
+let evCtl = null;
+const pushEvent = (event, data) => evCtl && evCtl.enqueue(new TextEncoder().encode('event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n'));
+const AGENT = { mode: 'ask', high_tools: false, modes: { off: 'no tools', ask: 'asks first', yolo: 'auto' }, pending: [],
+  tools: [{ name: 'miles_to_km', description: 'Convert miles to km.', how_it_works: 'Multiplies by 1.609.', level: 'normal', uses: 2, created: 1 }],
+  tasks: [{ id: 'ab12', prompt: 'convert 5 miles to km', tools: ['miles_to_km'], uses: 1, runs: 2, ts: 1 }] };
+const INFO = { id: 'ap1', kind: 'tool', name: 'miles_to_km', description: 'Convert miles to km.', how_it_works: 'Multiplies by 1.609.', level: 'high',
+  reasons: ['imports subprocess'], params: { miles: 'number' }, code: 'def run(args):\n    return "1"', replaces: false };
+
 const REPLY = 'Here is **code**:\n```js\nconst a = 1;\n```\n1. first\n2. second';
 
 async function fakeFetch(url, opts) {
@@ -36,14 +44,20 @@ async function fakeFetch(url, opts) {
   const body = opts.body ? JSON.parse(opts.body) : null;
   calls.push({ path: p, body });
   const json = (obj) => ({ ok: true, status: 200, json: async () => obj });
-  if (p === '/api/events') return new Promise(() => {});
+  if (p === '/api/events') { return { ok: true, status: 200, body: new ReadableStream({ start(c) { evCtl = c; } }) }; }
+  if (p === '/api/agent') return json(AGENT);
+  if (p === '/api/approve') return json({ ok: true });
   if (p === '/api/status') return json(status);
   if (p === '/api/commands') return json({ commands: [
     { name: 'model', description: 'Choose model', usage: '/model [auto]', args: [{ value: 'auto', description: 'x' }] },
     { name: 'log', description: 'Show recent activity', usage: '/log [count]', args: [] }] });
   if (p === '/api/settings') return json({ value: body && body.value, restart: false, settings: [] });
   if (p === '/api/log') return json({ lines: [{ ts: 1700000000, text: '[qwen -> get_battery_status] {} => 80% (12ms)' }] });
-  if (p === '/api/command') return json({ text: 'ok' });
+  if (p === '/api/command') {
+    const m = /^\/model (\w+)(?: (\d+))?$/.exec(body.line || '');
+    if (m) { status.mode = m[1]; status.forced_turns = Number(m[2] || 0); }
+    return json({ text: 'ok' });
+  }
   if (p === '/api/restore') return json({ ok: true, kept: (body.messages || []).length });
   if (p === '/api/chat') {
     return sse([
@@ -137,7 +151,30 @@ async function fakeFetch(url, opts) {
   out.project = [...d.querySelectorAll('.grp h4')].map((h) => h.textContent);
 
   $('model-chip').click();
-  out.modelSheet = { open: !$('model-sheet').hidden, rows: d.querySelectorAll('.model-row').length };
+  out.modelSheet = { open: !$('model-sheet').hidden, rows: d.querySelectorAll('.model-row').length, items: d.querySelectorAll('.model-item').length,
+    controls: d.querySelectorAll('.stay-ctl').length, slider: !!d.getElementById('stay-range') };
+  const rowFor = (name) => [...d.querySelectorAll('.model-item')].find((i) => i.querySelector('.name').firstChild.textContent === name);
+  const ctlOf = (name) => rowFor(name).querySelector('.stay-ctl');
+  out.picker = { autoHasControl: !!rowFor('Auto').querySelector('.stay-ctl'), arrow: ctlOf('Qwen').querySelector('.stay-trigger').textContent, activeBefore: ctlOf('Qwen').classList.contains('active') };
+  rowFor('Qwen').querySelector('.model-row').click();
+  await sleep(120);
+  out.picker.chose = calls.filter((c) => c.path === '/api/command' && /^\/model qwen/.test(c.body.line)).map((c) => c.body.line);
+  out.picker.tick = ctlOf('Qwen').querySelector('.stay-trigger').textContent;
+  out.picker.activeAfter = ctlOf('Qwen').classList.contains('active');
+  out.picker.rowOn = rowFor('Qwen').querySelector('.model-row').classList.contains('on');
+  ctlOf('Qwen').querySelector('.stay-trigger').click();
+  out.picker.opened = ctlOf('Qwen').classList.contains('open');
+  out.picker.options = [...ctlOf('Qwen').querySelectorAll('option')].map((o) => o.textContent);
+  const pick = ctlOf('Qwen').querySelector('select');
+  pick.value = '5';
+  pick.dispatchEvent(new w.Event('change'));
+  await sleep(120);
+  out.picker.counted = calls.filter((c) => c.path === '/api/command' && /^\/model qwen 5/.test(c.body.line)).length;
+  out.picker.remaining = ctlOf('Qwen').querySelector('select').value;
+  out.picker.closed = !ctlOf('Qwen').classList.contains('open');
+  rowFor('Auto').querySelector('.model-row').click();
+  await sleep(120);
+  out.picker.backToAuto = status.mode;
   $('model-sheet').hidden = true;
 
   $('input').value = '/lo';
@@ -177,6 +214,52 @@ async function fakeFetch(url, opts) {
   await sleep(30);
   const wakeCall = calls.filter((c) => c.path === '/api/settings' && c.body && c.body.key === 'wake.enabled').pop();
   out.settings.wakeSaved = wakeCall && wakeCall.body.value;
+  d.querySelector('#settings-tabs [data-tab="agent"]').click();
+  await sleep(60);
+  out.agent = { panel: panelOn(), tools: d.querySelectorAll('#agent-tools .agent-item').length, tasks: d.querySelectorAll('#agent-tasks .agent-item').length,
+    mode: [...$('agent-mode-seg').children].filter((b) => b.classList.contains('on')).map((b) => b.dataset.v), help: $('agent-mode-help').textContent,
+    toolTitle: d.querySelector('#agent-tools b').textContent, elevated: $('opt-elevated').checked };
+  d.querySelector('#agent-mode-seg [data-v="yolo"]').click();
+  await sleep(60);
+  out.agent.yoloSaved = calls.some((c) => c.path === '/api/settings' && c.body && c.body.key === 'agent.mode' && c.body.value === 'yolo');
+  $('opt-elevated').checked = true;
+  $('opt-elevated').dispatchEvent(new w.Event('change'));
+  await sleep(60);
+  out.agent.elevatedSaved = calls.some((c) => c.path === '/api/settings' && c.body && c.body.key === 'agent.high_tools' && c.body.value === 'true');
+  $('clear-tasks').click();
+  await sleep(60);
+  $('clear-tools').click();
+  await sleep(60);
+  d.querySelector('#agent-tools .agent-item button').click();
+  await sleep(60);
+  d.querySelector('#agent-tasks .agent-item button').click();
+  await sleep(60);
+  const lines = calls.filter((c) => c.path === '/api/command').map((c) => c.body.line);
+  out.agent.commands = ['/tasks clear', '/tools clear', '/tools remove miles_to_km', '/tasks remove ab12'].map((l) => lines.includes(l));
+  pushEvent('approval', INFO);
+  await sleep(80);
+  out.approval = { open: !$('approval-sheet').hidden, name: $('ap-name').textContent, level: $('ap-level').textContent, warn: $('ap-level').classList.contains('warn-pill'),
+    desc: $('ap-desc').textContent, how: $('ap-how').textContent, reasons: $('ap-reasons').textContent, code: $('ap-code').textContent.includes('def run') };
+  $('ap-allow').click();
+  await sleep(60);
+  const approves = () => calls.filter((c) => c.path === '/api/approve').map((c) => c.body);
+  out.approval.allowed = approves().slice(-1)[0];
+  out.approval.closed = $('approval-sheet').hidden;
+  pushEvent('approval', Object.assign({}, INFO, { id: 'ap2' }));
+  await sleep(60);
+  $('ap-deny').click();
+  await sleep(60);
+  out.approval.denied = approves().slice(-1)[0];
+  pushEvent('approval', Object.assign({}, INFO, { id: 'ap3' }));
+  await sleep(60);
+  $('ap-yolo').click();
+  await sleep(60);
+  out.approval.yolo = { approve: approves().slice(-1)[0], mode: calls.filter((c) => c.path === '/api/settings' && c.body && c.body.value === 'yolo').length >= 2 };
+  pushEvent('approval', Object.assign({}, INFO, { id: 'ap4' }));
+  await sleep(60);
+  pushEvent('approval_done', { id: 'ap4' });
+  await sleep(60);
+  out.approval.autoClosed = $('approval-sheet').hidden;
   d.querySelector('#settings-tabs [data-tab="advanced"]').click();
   out.settings.advancedPanel = panelOn();
   $('close-settings').click();

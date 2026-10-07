@@ -10,6 +10,7 @@ directly, which skips that step.
 import ctypes
 import ctypes.util
 import os
+import subprocess
 import sys
 
 PA_SAMPLE_S16LE = 3
@@ -30,8 +31,26 @@ def load_lib():
     return None
 
 
+def choose_source(listing: str):
+    """Pick the real microphone from `pactl list short sources`. The pulse default is often a
+    sink *monitor* (what the phone is playing), which records pure silence."""
+    names = [line.split("\t")[1] if "\t" in line else (line.split() + ["", ""])[1] for line in listing.splitlines() if line.strip()]
+    mics = [n for n in names if n and not n.endswith(".monitor")]
+    return "OpenSL_ES_source" if "OpenSL_ES_source" in mics else (mics[0] if mics else None)
+
+
+def detect_source():
+    try:
+        out = subprocess.run(["pactl", "list", "short", "sources"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return choose_source(out.stdout) if out.returncode == 0 else None
+
+
 def main(argv) -> int:
     source = (argv[1] if len(argv) > 1 else os.environ.get("FAZE_MIC_SOURCE", "")) or None
+    if source in (None, "auto"):
+        source = detect_source()
     rate = int(argv[2]) if len(argv) > 2 else 16000
     lib = load_lib()
     if lib is None:

@@ -25,10 +25,12 @@ import shutil
 import subprocess
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import action_log
+import agent
 import stt
 import tts
 import wake
@@ -99,6 +101,43 @@ class FazeServer(ThreadingHTTPServer):
         self._wake_last = 0.0
         self.wake = None
         self._wake_cmd = None
+        self._approvals = {}
+        self._approval_lock = threading.Lock()
+        convo.approver = self.request_approval
+
+    # ---- asking the user to approve a tool Gemini wrote ------------------
+
+    def request_approval(self, info: dict, timeout: float = 180.0) -> bool:
+        """Block the turn until an open app answers (or the turn is stopped / time runs out)."""
+        token = uuid.uuid4().hex[:10]
+        slot = {"event": threading.Event(), "approved": False, "info": info}
+        with self._approval_lock:
+            self._approvals[token] = slot
+        self.publish("approval", {"id": token, **info})
+        action_log.log_action("agent", "approval", {"tool": info.get("name")}, "waiting for you", 0, echo=False)
+        deadline = time.monotonic() + timeout
+        try:
+            while not slot["event"].wait(0.25):
+                if self.convo._cancel.is_set() or time.monotonic() > deadline:
+                    return False
+            return slot["approved"]
+        finally:
+            with self._approval_lock:
+                self._approvals.pop(token, None)
+            self.publish("approval_done", {"id": token})
+
+    def resolve_approval(self, token: str, approved: bool) -> bool:
+        with self._approval_lock:
+            slot = self._approvals.get(token)
+        if not slot:
+            return False
+        slot["approved"] = bool(approved)
+        slot["event"].set()
+        return True
+
+    def pending_approvals(self) -> list:
+        with self._approval_lock:
+            return [{"id": t, **slot["info"]} for t, slot in self._approvals.items()]
 
     # ---- push events to open apps (Server-Sent Events) ------------------
 
@@ -280,6 +319,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"settings": self.server.convo.settings_list()})
             if path == "/api/commands":
                 return self._json(200, {"commands": self.server.convo.commands()})
+            if path == "/api/agent":
+                cfg = self.server.convo.config["agent"]
+                return self._json(200, {"mode": cfg["mode"], "high_tools": cfg["high_tools"],
+                                        "modes": {m: agent.MODE_HELP[m] for m in agent.MODES},
+                                        "pending": self.server.pending_approvals(), **agent.STORE.snapshot()})
             if path == "/api/log":
                 try:
                     n = int((self.path.split("n=", 1) + ["60"])[1].split("&")[0]) if "n=" in self.path else 60
@@ -314,6 +358,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/restore":
             kept = self.server.convo.restore_history(data.get("messages"))
             return self._json(200, {"ok": True, "kept": kept})
+        if path == "/api/approve":
+            if not self.server.resolve_approval(str(data.get("id", "")), bool(data.get("approve"))):
+                return self._error(404, "nothing is waiting for approval")
+            return self._json(200, {"ok": True})
         if path == "/api/cancel":
             self.server.convo.cancel()
             return self._json(200, {"ok": True})
@@ -345,6 +393,8 @@ class Handler(BaseHTTPRequestHandler):
             "tts": dict(convo.config["tts"]),
             "user_name": convo._names()[1],
             "forced_turns": convo.forced_remaining,
+            "agent": {"mode": convo.config["agent"]["mode"], "high_tools": convo.config["agent"]["high_tools"],
+                      "tools": len(agent.STORE.tools), "tasks": len(agent.STORE.tasks)},
             "turns": max(0, len(convo.messages) - 1),
             "think": convo.config["reasoning"]["mode"],
             "stt": {"server": stt.available(convo.config), "pref": convo.config["voice"]["stt"],
@@ -379,8 +429,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self.server.tts_lock.acquire(blocking=False):
             return self._error(409, "still speaking the last reply")
         try:
-            wav = tts.synthesize(str(data.get("text", "")), str(data.get("voice") or cfg["voice"]), cfg["model"])
-            self._send(200, wav, "audio/wav", {"Cache-Control": "no-store"})
+            audio, kind = tts.synthesize_audio(str(data.get("text", "")), str(data.get("voice") or cfg["voice"]), cfg["model"])
+            self._send(200, audio, kind, {"Cache-Control": "no-store"})
         except tts.TtsError as e:
             self._error(422, str(e))
         finally:

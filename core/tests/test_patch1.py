@@ -439,6 +439,7 @@ class TestRobustness(Base):
 class TestGeminiLoop(Base):
     def test_dedupe_error_feedback_and_final_round_without_tools(self):
         c = self.convo()
+        c.config["agent"]["mode"] = "off"  # the legacy two-round loop
         calls = []
 
         def _gem(system, history, tools_schema=None, **kw):

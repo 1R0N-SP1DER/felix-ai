@@ -84,6 +84,7 @@
         <div class="tabs" id="settings-tabs" role="tablist" aria-label="Settings sections">
           <button type="button" role="tab" data-tab="general" class="on">General</button>
           <button type="button" role="tab" data-tab="voice">Voice</button>
+          <button type="button" role="tab" data-tab="agent">Agent</button>
           <button type="button" role="tab" data-tab="advanced">Advanced</button>
         </div>
         <div class="sv-body">
@@ -122,6 +123,24 @@
           <select id="stt-pick"><option value="auto">Auto (Chrome online, whisper offline)</option><option value="server">Offline (whisper)</option><option value="browser">Chrome</option></select></div>
         <label class="row" id="row-ondevice"><span>Chrome: on-device only<small>Off lets Chrome use Google's cloud</small></span><input type="checkbox" id="opt-ondevice"></label>
       </section>
+          </div>
+          <div class="panel" role="tabpanel" data-panel="agent">
+            <section>
+              <h3>Approval mode</h3>
+              <div class="seg" id="agent-mode-seg"><button type="button" data-v="ask">Ask</button><button type="button" data-v="yolo">Yolo</button><button type="button" data-v="off">Off</button></div>
+              <p class="hint" id="agent-mode-help"></p>
+              <label class="row"><span>Allow higher-level tools<small>Network, shell, files outside the sandbox. Also /elevated</small></span><input type="checkbox" id="opt-elevated"></label>
+            </section>
+            <section>
+              <h3>Saved tools</h3>
+              <div id="agent-tools"></div>
+              <button id="clear-tools" class="wide ghost" type="button">Clear all tools</button>
+            </section>
+            <section>
+              <h3>Saved tasks</h3>
+              <div id="agent-tasks"></div>
+              <button id="clear-tasks" class="wide ghost" type="button">Clear all tasks</button>
+            </section>
           </div>
           <div class="panel" role="tabpanel" data-panel="advanced">
             <section>
@@ -165,11 +184,7 @@
       <div class="grab"></div>
       <h3>Model</h3>
       <div id="model-list"></div>
-      <div id="stay" hidden>
-        <div class="stay-head"><span>Stay on this model</span><b id="stay-val">until I turn it off</b></div>
-        <input type="range" id="stay-range" min="0" max="20" step="1" value="0" aria-label="Messages to stay on this model">
-        <div class="ticks"><span>until I turn it off</span><span>20 messages</span></div>
-      </div>
+      <p class="hint">Tap a model to stay on it until you turn it off. Tap the &#10003; or arrow to pick how long instead.</p>
       <h3>Thinking</h3>
       <div class="seg" id="think-seg">
         <button type="button" data-v="auto">Auto</button>
@@ -199,6 +214,20 @@
       <div class="sheet-head"><h2>Activity</h2><span class="spacer"></span><button id="log-copy" type="button" class="ghost small">Copy</button><button id="close-log" class="icon" aria-label="Close">&#10005;</button></div>
       <div id="log-lines" class="log-lines" tabindex="0"></div>
       <p class="hint">Live from FAZE: routing, tool calls, errors. The same lines the terminal prints.</p>
+    </div>
+  </div>
+
+  <div class="overlay center" id="approval-sheet" hidden>
+    <div class="pair-body approval" role="alertdialog" aria-labelledby="ap-title">
+      <h2 id="ap-title">Add a new tool?</h2>
+      <div class="ap-meta"><span id="ap-name" class="key"></span><span id="ap-level" class="via"></span></div>
+      <p id="ap-desc"></p>
+      <h3>How it works</h3>
+      <p id="ap-how"></p>
+      <p id="ap-reasons" class="hint" hidden></p>
+      <details><summary>Show the code</summary><pre id="ap-code"></pre></details>
+      <div class="ap-actions"><button id="ap-deny" class="wide ghost" type="button">Deny</button><button id="ap-allow" class="wide" type="button">Approve</button></div>
+      <button id="ap-yolo" class="link-btn" type="button">Approve and stop asking (yolo mode)</button>
     </div>
   </div>
 

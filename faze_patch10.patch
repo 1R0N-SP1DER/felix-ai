@@ -1,0 +1,2198 @@
+diff --git a/core/agent.py b/core/agent.py
+new file mode 100644
+index 0000000..bb0df46
+--- /dev/null
++++ b/core/agent.py
+@@ -0,0 +1,479 @@
++"""
++felix-ai Core -- agent.py
++Gemini-written tools, saved tasks, and the approval modes that govern them.
++
++  - A tool is a small Python file defining run(args) -> str. Gemini writes it with
++    create_tool; it is checked, shown to you (or auto-approved in yolo mode with the
++    same description), saved under ~/.felix/agent/tools and registered so every model
++    can call it by name.
++  - A task is a record of something Gemini worked out with tools (the request, the
++    tools it used, the outcome). When a similar request comes in later it is handed
++    to the model as a worked example, so Qwen can repeat it offline.
++
++Safety, honestly: tools run in a separate python process with a scrubbed environment,
++a scratch working directory, a CPU/memory limit and a timeout. Code that imports
++anything outside a short list of pure-computation modules (or reaches for open, eval,
++exec, dunder attributes...) is classed "high" and only runs while agent.high_tools is
++on. That limits accidents; it is not a boundary against deliberately hostile code, so
++read what you approve, and treat yolo mode as trust.
++"""
++
++import ast
++import functools
++import json
++import os
++import re
++import subprocess
++import sys
++import threading
++import time
++import uuid
++from pathlib import Path
++
++import gemini_tools
++from permission_policy import PERMISSION_REGISTRY
++from tool_executor import TOOL_EXECUTORS, ToolExecutionError
++from tool_schema import TOOL_REGISTRY
++
++MODES = ("off", "ask", "yolo")
++MODE_HELP = {
++    "off": "Gemini cannot create tools",
++    "ask": "Gemini shows each new tool and waits for your approval",
++    "yolo": "new tools are added without asking; you still get a description of each",
++}
++BUILTIN_TOOLS = frozenset(TOOL_REGISTRY) | {"create_tool"}
++MAX_TOOLS, MAX_TASKS, MAX_CODE = 25, 60, 8000
++TOOL_TIMEOUT = 20.0
++OUTPUT_CAP = 4000
++PY_TYPES = {"string": str, "integer": int, "number": float, "boolean": bool}
++NAME_RE = re.compile(r"[a-z][a-z0-9_]{2,30}")
++PARAM_RE = re.compile(r"[a-z][a-z0-9_]{0,24}")
++
++# Modules that only compute. Anything else makes a tool "high".
++SAFE_MODULES = {
++    "json", "math", "re", "datetime", "time", "statistics", "itertools", "functools", "collections", "textwrap",
++    "string", "random", "hashlib", "base64", "decimal", "fractions", "calendar", "unicodedata", "urllib.parse",
++    "html", "uuid", "operator", "typing", "dataclasses", "enum", "heapq", "bisect", "zlib", "colorsys", "numbers",
++}
++RISKY_CALLS = {"open", "exec", "eval", "compile", "__import__", "input", "breakpoint", "globals", "locals",
++               "vars", "getattr", "setattr", "delattr"}
++SAFE_DUNDERS = {"__name__", "__doc__", "__len__", "__str__", "__repr__", "__init__"}
++
++POLICY = {"high_tools": False}
++
++
++def set_policy(high_tools=None):
++    if high_tools is not None:
++        POLICY["high_tools"] = bool(high_tools)
++
++
++class ToolCreateError(Exception):
++    """A create_tool request that cannot be accepted; the message goes back to Gemini."""
++
++
++# ---------------------------------------------------------------- code checks
++
++def assess_code(code: str) -> dict:
++    """{'ok', 'error', 'level': 'normal'|'high', 'reasons': [...]} for a tool's source."""
++    if not isinstance(code, str) or not code.strip():
++        return {"ok": False, "error": "no code given", "level": "normal", "reasons": []}
++    if len(code) > MAX_CODE:
++        return {"ok": False, "error": f"code is over {MAX_CODE} characters", "level": "normal", "reasons": []}
++    if "GEMINI_API_KEY" in code:
++        return {"ok": False, "error": "tools may not touch the API key", "level": "normal", "reasons": []}
++    try:
++        tree = ast.parse(code)
++    except SyntaxError as e:
++        return {"ok": False, "error": f"syntax error on line {e.lineno}: {e.msg}", "level": "normal", "reasons": []}
++    run = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "run"), None)
++    if run is None or len(run.args.args) != 1:
++        return {"ok": False, "error": "define exactly one entry point: def run(args): ... return a string",
++                "level": "normal", "reasons": []}
++    reasons = []
++
++    def note(text):
++        if text not in reasons:
++            reasons.append(text)
++
++    for node in ast.walk(tree):
++        if isinstance(node, ast.Import):
++            for alias in node.names:
++                if alias.name not in SAFE_MODULES:
++                    note(f"imports {alias.name}")
++        elif isinstance(node, ast.ImportFrom):
++            module = node.module or ""
++            if node.level or module not in SAFE_MODULES:
++                note(f"imports from {'.' * node.level}{module}")
++        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in RISKY_CALLS:
++            note(f"calls {node.func.id}()")
++        elif isinstance(node, ast.Attribute) and node.attr.startswith("__") and node.attr.endswith("__") \
++                and node.attr not in SAFE_DUNDERS:
++            note(f"uses {node.attr}")
++    return {"ok": True, "error": "", "level": "high" if reasons else "normal", "reasons": reasons}
++
++
++def normalize_params(raw) -> dict:
++    """params_json -> {name: {'type', 'description'}}. Accepts {"n": "string"} or {"n": {"type":..., "description":...}}."""
++    if raw in (None, "", {}):
++        return {}
++    try:
++        data = json.loads(raw) if isinstance(raw, str) else raw
++    except ValueError:
++        raise ToolCreateError("params_json is not valid JSON")
++    if not isinstance(data, dict) or len(data) > 6:
++        raise ToolCreateError("params_json must be an object with at most 6 parameters")
++    out = {}
++    for name, spec in data.items():
++        if not PARAM_RE.fullmatch(str(name)):
++            raise ToolCreateError(f"bad parameter name '{name}' (lowercase letters, digits, underscore)")
++        kind, desc = (spec, str(name)) if isinstance(spec, str) else (
++            (spec or {}).get("type", "string"), str((spec or {}).get("description") or name))
++        if kind not in PY_TYPES:
++            raise ToolCreateError(f"parameter '{name}' has type '{kind}'; use string, integer, number or boolean")
++        out[str(name)] = {"type": kind, "description": desc[:120]}
++    return out
++
++
++def prepare_tool(args: dict, high_allowed: bool):
++    """Validate a create_tool request. Returns (info, meta, code); raises ToolCreateError."""
++    name = str(args.get("name", "")).strip()
++    if not NAME_RE.fullmatch(name):
++        raise ToolCreateError("name must be 3-31 characters: lowercase letters, digits and underscores, starting with a letter")
++    if name in BUILTIN_TOOLS:
++        raise ToolCreateError(f"'{name}' is a built-in tool; pick another name")
++    description = str(args.get("description", "")).strip()[:200]
++    how = str(args.get("how_it_works", "")).strip()[:600]
++    if not description or not how:
++        raise ToolCreateError("description and how_it_works are both required (the user reads them before approving)")
++    params = normalize_params(args.get("params_json"))
++    code = str(args.get("code", ""))
++    check = assess_code(code)
++    if not check["ok"]:
++        raise ToolCreateError(check["error"])
++    declared = str(args.get("level", "normal")).strip().lower()
++    level = "high" if declared == "high" or check["level"] == "high" else "normal"
++    if level == "high" and not high_allowed:
++        why = "; ".join(check["reasons"]) or "you declared it high-level"
++        raise ToolCreateError(f"Higher-level tools are turned off, so '{name}' was not created ({why}). "
++                              "Rewrite it with only pure computation, or ask the user to run /elevated on.")
++    store = STORE
++    if name not in store.tools and len(store.tools) >= MAX_TOOLS:
++        raise ToolCreateError(f"already {MAX_TOOLS} custom tools; ask the user to remove some (/tools)")
++    meta = {"name": name, "description": description, "how_it_works": how, "level": level, "params": params,
++            "created": time.time(), "uses": 0}
++    info = {"kind": "tool", "name": name, "description": description, "how_it_works": how, "level": level,
++            "reasons": check["reasons"], "params": {k: v["type"] for k, v in params.items()},
++            "code": code, "replaces": name in store.tools}
++    return info, meta, code
++
++
++def format_info(info: dict) -> str:
++    """Plain-text version of an approval request (terminal, logs, yolo notices)."""
++    lines = [f"{'Updated' if info.get('replaces') else 'New'} tool: {info['name']}  [{info['level']}]",
++             f"What it does: {info['description']}", f"How it works: {info['how_it_works']}"]
++    if info.get("params"):
++        lines.append("Takes: " + ", ".join(f"{k} ({v})" for k, v in info["params"].items()))
++    if info.get("reasons"):
++        lines.append("Higher-level because it " + "; ".join(info["reasons"]))
++    return "\n".join(lines)
++
++
++# ---------------------------------------------------------------- running tools
++
++_RUNNER = (
++    "import sys, json, importlib.util\n"
++    "spec = importlib.util.spec_from_file_location('faze_tool', sys.argv[1])\n"
++    "mod = importlib.util.module_from_spec(spec)\n"
++    "spec.loader.exec_module(mod)\n"
++    "out = mod.run(json.loads(sys.stdin.read() or '{}'))\n"
++    "sys.stdout.write(out if isinstance(out, str) else json.dumps(out, default=str))\n"
++)
++
++
++def _limits(timeout):
++    def apply():
++        try:
++            import resource
++            resource.setrlimit(resource.RLIMIT_CPU, (int(timeout) + 2, int(timeout) + 2))
++            resource.setrlimit(resource.RLIMIT_AS, (768 * 1024 * 1024, 768 * 1024 * 1024))
++            resource.setrlimit(resource.RLIMIT_FSIZE, (8 * 1024 * 1024, 8 * 1024 * 1024))
++        except (ImportError, ValueError, OSError):
++            pass
++    return apply
++
++
++def _clean_env(work: Path) -> dict:
++    keep = {k: v for k, v in os.environ.items() if k in ("PATH", "LANG", "LC_ALL", "TERM", "PREFIX", "ANDROID_ROOT", "ANDROID_DATA")}
++    keep.update({"HOME": str(work), "TMPDIR": str(work), "PYTHONIOENCODING": "utf-8"})
++    return keep  # no API keys, no tokens
++
++
++# ---------------------------------------------------------------- store
++
++def keywords(text: str) -> set:
++    stop = {"the", "a", "an", "to", "of", "for", "in", "on", "and", "or", "is", "it", "my", "me", "i", "you", "please",
++            "can", "could", "do", "what", "how", "with", "that", "this", "be", "are", "was", "at", "by", "from", "as",
++            "your", "we", "us", "so", "if", "then", "just", "some", "want", "need", "would", "like", "make", "get"}
++    return {w for w in re.findall(r"[a-z][a-z0-9']+", str(text).lower()) if w not in stop and len(w) > 1}
++
++
++class AgentStore:
++    def __init__(self, root):
++        self.root = Path(root).expanduser()
++        self.tools = {}
++        self.tasks = []
++        self._lock = threading.RLock()
++
++    # -- persistence
++    def _read(self, name, default):
++        try:
++            return json.loads((self.root / name).read_text())
++        except (OSError, ValueError):
++            return default
++
++    def _write(self, name, data):
++        self.root.mkdir(parents=True, exist_ok=True)
++        tmp = self.root / (name + ".tmp")
++        tmp.write_text(json.dumps(data, indent=1))
++        os.replace(tmp, self.root / name)
++
++    def load(self):
++        with self._lock:
++            for name in list(self.tools):
++                self.unregister(name)
++            self.tools = {}
++            for name, meta in (self._read("tools.json", {}) or {}).items():
++                if NAME_RE.fullmatch(name) and name not in BUILTIN_TOOLS and (self.root / "tools" / f"{name}.py").exists():
++                    self.tools[name] = meta
++                    self.register(meta)
++            tasks = self._read("tasks.json", [])
++            self.tasks = tasks if isinstance(tasks, list) else []
++
++    # -- registration into the live tool tables
++    def register(self, meta):
++        name = meta["name"]
++        TOOL_REGISTRY[name] = {p: PY_TYPES[s["type"]] for p, s in meta["params"].items()}
++        PERMISSION_REGISTRY[name] = "safe"
++        TOOL_EXECUTORS[name] = functools.partial(_run_registered, name)
++        gemini_tools.TOOL_DESCRIPTIONS[name] = f"Custom tool. Call this when the user asks: {meta['description']}"
++        gemini_tools.TOOL_PARAM_DESCRIPTIONS[name] = {p: s["description"] for p, s in meta["params"].items()}
++
++    def unregister(self, name):
++        for table in (TOOL_REGISTRY, PERMISSION_REGISTRY, TOOL_EXECUTORS, gemini_tools.TOOL_DESCRIPTIONS,
++                      gemini_tools.TOOL_PARAM_DESCRIPTIONS):
++            table.pop(name, None)
++
++    # -- tools
++    def add_tool(self, meta, code):
++        with self._lock:
++            (self.root / "tools").mkdir(parents=True, exist_ok=True)
++            (self.root / "work").mkdir(parents=True, exist_ok=True)
++            path = self.root / "tools" / f"{meta['name']}.py"
++            path.write_text(code)
++            os.chmod(path, 0o600)
++            old = self.tools.get(meta["name"])
++            if old:
++                meta["uses"], meta["created"] = old.get("uses", 0), old.get("created", meta["created"])
++            self.tools[meta["name"]] = meta
++            self._write("tools.json", self.tools)
++            self.register(meta)
++        return meta
++
++    def remove_tool(self, name) -> bool:
++        with self._lock:
++            if name not in self.tools:
++                return False
++            self.unregister(name)
++            del self.tools[name]
++            try:
++                (self.root / "tools" / f"{name}.py").unlink()
++            except OSError:
++                pass
++            self._write("tools.json", self.tools)
++            return True
++
++    def clear_tools(self) -> int:
++        with self._lock:
++            n = len(self.tools)
++            for name in list(self.tools):
++                self.remove_tool(name)
++            return n
++
++    def run_tool(self, name, parameters, timeout=None):
++        timeout = TOOL_TIMEOUT if timeout is None else timeout
++        meta = self.tools.get(name)
++        if not meta:
++            raise ToolExecutionError(f"custom tool '{name}' no longer exists")
++        if meta["level"] == "high" and not POLICY["high_tools"]:
++            raise ToolExecutionError(f"'{name}' is a higher-level tool and those are off (use /elevated on)")
++        path = self.root / "tools" / f"{name}.py"
++        work = self.root / "work"
++        work.mkdir(parents=True, exist_ok=True)
++        try:
++            proc = subprocess.run([sys.executable, "-I", "-B", "-c", _RUNNER, str(path)], input=json.dumps(parameters),
++                                  capture_output=True, text=True, timeout=timeout, cwd=str(work),
++                                  env=_clean_env(work), preexec_fn=_limits(timeout) if os.name == "posix" else None)
++        except subprocess.TimeoutExpired:
++            raise ToolExecutionError(f"'{name}' timed out after {timeout:.0f}s")
++        except OSError as e:
++            raise ToolExecutionError(f"could not start '{name}': {e.strerror or e}")
++        if proc.returncode != 0:
++            tail = (proc.stderr.strip().splitlines() or ["failed"])[-1]
++            raise ToolExecutionError(f"'{name}' failed: {tail[:300]}")
++        with self._lock:
++            meta["uses"] = meta.get("uses", 0) + 1
++            self._write("tools.json", self.tools)
++        out = proc.stdout.strip()
++        return out[:OUTPUT_CAP] if out else "(no output)"
++
++    # -- tasks
++    def save_task(self, prompt, steps, reply, created=()):
++        words = keywords(prompt)
++        if not words:
++            return None
++        clean = [{"tool": s["tool"], "args": s.get("args", {}), "ok": bool(s.get("ok", True))} for s in steps][:8]
++        with self._lock:
++            for t in self.tasks:
++                if _jaccard(words, set(t["keywords"])) >= 0.8:
++                    t.update(steps=clean, reply=str(reply)[:300], runs=t.get("runs", 1) + 1, ts=time.time(),
++                             created_tools=sorted(set(t.get("created_tools", [])) | set(created)))
++                    self._write("tasks.json", self.tasks)
++                    return t
++            task = {"id": uuid.uuid4().hex[:8], "prompt": str(prompt)[:300], "keywords": sorted(words), "steps": clean,
++                    "reply": str(reply)[:300], "created_tools": sorted(set(created)), "uses": 0, "runs": 1, "ts": time.time()}
++            self.tasks.append(task)
++            while len(self.tasks) > MAX_TASKS:
++                self.tasks.remove(min(self.tasks, key=lambda t: (t.get("uses", 0), t.get("ts", 0))))
++            self._write("tasks.json", self.tasks)
++            return task
++
++    def match_tasks(self, prompt, k=2, min_score=0.5):
++        words = keywords(prompt)
++        scored = [(_jaccard(words, set(t["keywords"])), t) for t in self.tasks] if words else []
++        return [t for score, t in sorted(scored, key=lambda p: -p[0]) if score >= min_score][:k]
++
++    def task_hint(self, prompt) -> str:
++        found = self.match_tasks(prompt)
++        if not found:
++            return ""
++        lines = ["A similar request was solved before. Repeat the same approach with the new details:"]
++        for t in found:
++            steps = "; ".join(f"{i}. {s['tool']}({', '.join(f'{k}={json.dumps(v)[:40]}' for k, v in s['args'].items())})"
++                              for i, s in enumerate(t["steps"], 1)) or "answered directly"
++            lines.append(f"- Request: \"{t['prompt'][:120]}\"\n  Steps: {steps}\n  Outcome: {t['reply'][:160]}")
++        with self._lock:
++            for t in found:
++                t["uses"] = t.get("uses", 0) + 1
++            self._write("tasks.json", self.tasks)
++        return "\n".join(lines)[:900]
++
++    def remove_task(self, task_id) -> bool:
++        with self._lock:
++            keep = [t for t in self.tasks if t["id"] != task_id]
++            if len(keep) == len(self.tasks):
++                return False
++            self.tasks = keep
++            self._write("tasks.json", self.tasks)
++            return True
++
++    def clear_tasks(self) -> int:
++        with self._lock:
++            n = len(self.tasks)
++            self.tasks = []
++            self._write("tasks.json", self.tasks)
++            return n
++
++    # -- views
++    def snapshot(self) -> dict:
++        with self._lock:
++            return {
++                "tools": [{k: m[k] for k in ("name", "description", "how_it_works", "level", "uses", "created")}
++                          for m in sorted(self.tools.values(), key=lambda m: m["name"])],
++                "tasks": [{"id": t["id"], "prompt": t["prompt"], "tools": sorted({s["tool"] for s in t["steps"]}),
++                           "uses": t.get("uses", 0), "runs": t.get("runs", 1), "ts": t.get("ts", 0)}
++                          for t in sorted(self.tasks, key=lambda t: -t.get("ts", 0))],
++            }
++
++
++def _jaccard(a: set, b: set) -> float:
++    return len(a & b) / len(a | b) if a and b else 0.0
++
++
++def _run_registered(name, parameters):
++    return STORE.run_tool(name, parameters)
++
++
++def default_dir() -> str:
++    return os.environ.get("FAZE_AGENT_DIR") or "~/.felix/agent"
++
++
++STORE = AgentStore(default_dir())
++
++
++def use_store(root):
++    """Swap the global store (tests); returns it after loading."""
++    global STORE
++    for name in list(STORE.tools):
++        STORE.unregister(name)
++    STORE = AgentStore(root)
++    STORE.load()
++    return STORE
++
++
++def init(config: dict):
++    use_store(default_dir())
++    set_policy(high_tools=config.get("agent", {}).get("high_tools", False))
++
++
++# ---------------------------------------------------------------- what the models are told
++
++CREATE_TOOL_DESCRIPTION = (
++    "Create a new reusable tool when none of the existing tools can do something the user wants done. Write a "
++    "small python function `def run(args): ...` that takes a dict of the declared parameters and returns a string. "
++    "Prefer pure computation with the standard library. Describe it honestly: the user reads description and "
++    "how_it_works before approving. Set level to 'high' if it needs the network, shell, files or anything beyond pure computation."
++)
++
++
++def create_tool_declaration() -> dict:
++    def s(desc):
++        return {"type": "string", "description": desc}
++    return {"type": "function", "function": {
++        "name": "create_tool", "description": CREATE_TOOL_DESCRIPTION,
++        "parameters": {"type": "object", "properties": {
++            "name": s("snake_case tool name, 3-31 characters"),
++            "description": s("one sentence: what the tool does and when to use it"),
++            "how_it_works": s("two or three sentences explaining the code's logic in plain language"),
++            "params_json": s('JSON object of parameters, e.g. {"miles": {"type": "number", "description": "distance in miles"}}. Types: string, integer, number, boolean. Use "{}" for none.'),
++            "code": s("python source defining def run(args) that returns a string"),
++            "level": s("normal or high"),
++        }, "required": ["name", "description", "how_it_works", "params_json", "code", "level"]}}}
++
++
++def gemini_schema(config: dict) -> list:
++    schema = gemini_tools.build_gemini_tools_schema()
++    if config.get("agent", {}).get("mode", "ask") != "off":
++        schema.append(create_tool_declaration())
++    return schema
++
++
++def local_schema() -> list:
++    return gemini_tools.build_local_tools_schema()
++
++
++def agent_note(config: dict) -> str:
++    cfg = config.get("agent", {})
++    if cfg.get("mode", "ask") == "off":
++        return ""
++    high = "Higher-level tools are allowed." if cfg.get("high_tools") else "Higher-level tools are NOT allowed: use pure computation only."
++    return ("\nYou can finish tasks in several steps. If no existing tool fits, create one with create_tool, then call it. "
++            "Check the existing tools first; do not recreate one that exists. " + high + "\n")
++
++
++def custom_tools_text() -> str:
++    if not STORE.tools:
++        return ""
++    lines = ["", "CUSTOM TOOLS (made earlier; call one when the request fits):"]
++    for name, meta in sorted(STORE.tools.items()):
++        lines.append(f"- {name}({', '.join(meta['params'])}) : {meta['description']}")
++    return "\n".join(lines) + "\n"
+diff --git a/core/config_loader.py b/core/config_loader.py
+index 1b60a81..a5c1ced 100644
+--- a/core/config_loader.py
++++ b/core/config_loader.py
+@@ -79,6 +79,8 @@ DEFAULTS = {
+     "gemini_enabled": True,
+     "narrate_tool_results": False,
+     "ui": {"show_model_tag": True, "show_trace": True},
++    # Gemini-written tools: ask = approve each new tool, yolo = auto-approve with a description, off = none
++    "agent": {"mode": "ask", "high_tools": False, "max_rounds": 6},
+ }
+ 
+ # Settings editable with /settings: key -> (type, allowed values or None)
+@@ -105,6 +107,9 @@ SETTINGS = {
+     "boot.chat_while_booting": (str, ("lfm", "gemini", "wait")),
+     "boot.warmup": (bool, None),
+     "boot.qwen": (str, ("lazy", "eager")),
++    "agent.mode": (str, ("off", "ask", "yolo")),
++    "agent.high_tools": (bool, None),
++    "agent.max_rounds": (int, None),
+     "fallback.order": (str, ("lfm,qwen", "qwen,lfm", "lfm", "qwen", "off")),
+     "gemini.model": (str, None),
+     "gemini.search_model": (str, None),
+diff --git a/core/gemini_tools.py b/core/gemini_tools.py
+index b62c0e5..0d5a20f 100644
+--- a/core/gemini_tools.py
++++ b/core/gemini_tools.py
+@@ -22,6 +22,9 @@ TOOL_DESCRIPTIONS = {
+ }
+ 
+ 
++# Per-tool parameter descriptions for tools added at runtime (see agent.py).
++TOOL_PARAM_DESCRIPTIONS = {}
++
+ PARAM_DESCRIPTIONS = {
+     "level": "volume level, an integer from 0 to 15",
+     "text": "the exact text to copy to the clipboard",
+@@ -53,7 +56,8 @@ def build_tools_schema(exclude=()) -> list:
+         properties = {}
+         for param_name, param_type in params.items():
+             prop = _type_to_json_schema(param_type)
+-            prop["description"] = PARAM_DESCRIPTIONS.get(param_name, param_name)
++            prop["description"] = (TOOL_PARAM_DESCRIPTIONS.get(name, {}).get(param_name)
++                                   or PARAM_DESCRIPTIONS.get(param_name, param_name))
+             properties[param_name] = prop
+ 
+         schema.append({
+diff --git a/core/orchestrator.py b/core/orchestrator.py
+index 0187624..d6aa03d 100644
+--- a/core/orchestrator.py
++++ b/core/orchestrator.py
+@@ -38,6 +38,7 @@ from local_server import ServerManager
+ from memory_store import init_db, log_message
+ from memory_recall import setup_fts
+ from identity import fix_identity
++import agent
+ from prompt_assembler import build_static_system_message, build_turn_context, set_names
+ from tool_schema import validate_tool_call, ToolCallValidationError
+ from permission_policy import get_permission_tier, UnknownToolError
+@@ -85,6 +86,23 @@ COMMANDS = [
+          {"value": "set", "description": "Change a setting"},
+          {"value": "unset", "description": "Go back to a setting's default"},
+      ]},
++    {"name": "agent", "description": "How Gemini may add new tools",
++     "usage": "/agent [off|ask|yolo]",
++     "args": [
++         {"value": "ask", "description": "Show each new tool and wait for approval"},
++         {"value": "yolo", "description": "Add tools without asking (you still get the description)"},
++         {"value": "off", "description": "Gemini cannot create tools"},
++     ]},
++    {"name": "elevated", "description": "Allow higher-level tools (network, shell, files)",
++     "usage": "/elevated [on|off]",
++     "args": [{"value": "on", "description": "Higher-level tools may be created and run"},
++              {"value": "off", "description": "Only pure-computation tools"}]},
++    {"name": "tools", "description": "List or remove tools Gemini made",
++     "usage": "/tools [list|remove <name>|clear]",
++     "args": [{"value": "list", "description": "Show saved tools"}, {"value": "clear", "description": "Delete all saved tools"}]},
++    {"name": "tasks", "description": "List or remove saved tasks",
++     "usage": "/tasks [list|remove <id>|clear]",
++     "args": [{"value": "list", "description": "Show saved tasks"}, {"value": "clear", "description": "Delete all saved tasks"}]},
+     {"name": "log", "description": "Show recent tool and routing activity", "usage": "/log [count]", "args": []},
+     {"name": "help", "description": "List every command", "usage": "/help", "args": []},
+ ]
+@@ -124,13 +142,22 @@ RULES:
+   quickly and correctly.
+ """
+ 
+-GEMINI_TOOL_NOTE = (
+-    "\nYou can call these tools: "
+-    + ", ".join(t["function"]["name"] for t in GEMINI_TOOLS_SCHEMA)
+-    + ". Call a tool only when the user asks for it right now. If a tool "
+-      "fails, do not retry it: answer from your own knowledge or say you "
+-      "could not check. Never invent tool results.\n"
+-)
++def gemini_tool_note(schema: list) -> str:
++    return (
++        "\nYou can call these tools: "
++        + ", ".join(t["function"]["name"] for t in schema)
++        + ". Call a tool only when the user asks for it right now. If a tool "
++          "fails, do not retry it: answer from your own knowledge or say you "
++          "could not check. Never invent tool results.\n"
++    )
++
++
++GEMINI_TOOL_NOTE = gemini_tool_note(GEMINI_TOOLS_SCHEMA)
++
++
++def tool_instructions() -> str:
++    """The fixed tool rules plus any tools Gemini has made."""
++    return TOOL_INSTRUCTIONS + agent.custom_tools_text()
+ 
+ 
+ class LocalModelError(Exception):
+@@ -176,6 +203,11 @@ class Conversation:
+         self.last_reply_streamed = False
+         self._turn_context = ""
+         self._last_user_message = ""
++        self.approver = None          # callable(info) -> bool: asks the user about a new tool (ask mode)
++        self._agent_notes = []
++        self._agent_steps = []
++        self._agent_created = []
++        agent.init(config)
+         if config.get("gemini_enabled", True) is False:
+             os.environ["FAZE_GEMINI_DISABLED"] = "1"
+         names = config["assistant"]
+@@ -184,7 +216,7 @@ class Conversation:
+         self._gemini_down_until = 0.0
+         self.system_static = build_static_system_message()
+         self.messages = [{"role": "system",
+-                          "content": self.system_static + "\n" + TOOL_INSTRUCTIONS}]
++                          "content": self.system_static + "\n" + tool_instructions()}]
+         self.local = ServerManager(config, self._warm_local)
+         atexit.register(self.stop_lfm)
+         atexit.register(self._stop_local_on_exit)
+@@ -197,7 +229,7 @@ class Conversation:
+         """Heat llama-server's KV cache with the exact production prefix."""
+         payload = {
+             "messages": [self.messages[0], {"role": "user", "content": "hi"}],
+-            "tools": LOCAL_TOOLS_SCHEMA,
++            "tools": agent.local_schema(),
+             "chat_template_kwargs": {"enable_thinking": False},
+             "max_tokens": 1,
+         }
+@@ -248,7 +280,8 @@ class Conversation:
+             log_action("lfm", "preload", {}, f"ERROR {e}", 0, echo=False)
+ 
+     def drain_notices(self) -> list:
+-        return self.local.drain_notices()
++        notes, self._agent_notes = self._agent_notes, []
++        return self.local.drain_notices() + notes
+ 
+     def _announce(self, tag: str, extra: str = ""):
+         self.last_route = tag
+@@ -282,7 +315,7 @@ class Conversation:
+ 
+     def _rebuild_system(self):
+         self.system_static = build_static_system_message()
+-        self.messages[0] = {"role": "system", "content": self.system_static + "\n" + TOOL_INSTRUCTIONS}
++        self.messages[0] = {"role": "system", "content": self.system_static + "\n" + tool_instructions()}
+ 
+     def _names(self):
+         return self.config["assistant"]["name"], self.config["assistant"]["user_name"]
+@@ -411,7 +444,7 @@ class Conversation:
+             allow_thinking = True
+         for _ in range(max_rounds):
+             result = self._call_llm(self._request_messages(), allow_thinking,
+-                                    tools=LOCAL_TOOLS_SCHEMA)
++                                    tools=agent.local_schema())
+             calls = result["tool_calls"]
+ 
+             if not calls:
+@@ -469,6 +502,8 @@ class Conversation:
+         """Validate, permission-check and run one tool. Returns
+         (ok, text): the raw result on success, a short real error on
+         failure. Always logged."""
++        if name == "create_tool":
++            return self._create_tool(args, layer)
+         call = {"tool": name, "parameters": args}
+         start = time.time()
+         try:
+@@ -491,6 +526,53 @@ class Conversation:
+         log_action(layer, name, args, result if ok else f"ERROR {result}", ms, extra)
+         return ok, result
+ 
++    def _approve(self, info: dict) -> bool:
++        if self.approver is None:
++            return False
++        approved = bool(self.approver(info))
++        if self._cancel.is_set():
++            raise TurnCancelled()
++        return approved
++
++    def _create_tool(self, args: dict, layer: str):
++        """Gemini's create_tool: check it, get approval per the agent mode, save and register it."""
++        start = time.time()
++        cfg = self.config.get("agent", {})
++        mode = cfg.get("mode", "ask")
++        name = str(args.get("name", ""))[:40]
++
++        def done(ok, text):
++            log_action(layer, "create_tool", {"name": name}, text if ok else f"ERROR {text}", int((time.time() - start) * 1000))
++            return ok, text
++
++        if mode == "off":
++            return done(False, "creating tools is turned off")
++        try:
++            info, meta, code = agent.prepare_tool(args, bool(cfg.get("high_tools")))
++        except agent.ToolCreateError as e:
++            return done(False, str(e))
++        if mode == "ask" and not self._approve(info):
++            return done(False, "the user declined this tool; do not create it again, continue without it")
++        agent.STORE.add_tool(meta, code)
++        self._rebuild_system()
++        self._agent_created.append(meta["name"])
++        if mode == "yolo":
++            self._agent_notes.append("Added a tool (yolo mode)\n" + agent.format_info(info))
++        signature = ", ".join(meta["params"])
++        return done(True, f"tool '{meta['name']}' created ({meta['level']}). Call it now: {meta['name']}({signature})")
++
++    def _save_agent_task(self, prompt: str, reply: str):
++        if self.config.get("agent", {}).get("mode", "ask") == "off":
++            return
++        steps = [s for s in self._agent_steps if s["ok"]]
++        custom = [s for s in steps if s["tool"] in agent.STORE.tools]
++        if not (len(steps) >= 2 or self._agent_created or custom):
++            return
++        try:
++            agent.STORE.save_task(prompt, steps, reply, self._agent_created)
++        except OSError as e:
++            log_action("agent", "save_task", {}, f"ERROR {summarize_error(e)}", 0)
++
+     def _tool_reply(self, name: str, args: dict, ok: bool, result: str) -> str:
+         if not ok:
+             return f"{name} failed: {result}"
+@@ -530,21 +612,24 @@ class Conversation:
+     # ------------------------------------------------------------------
+ 
+     def _call_gemini_with_tools(self, max_rounds: int = 2) -> str:
+-        """Gemini picks tools from its own schema (never delegate_to_gemini).
+-        Identical repeated calls are not re-run, tool errors go back as
+-        text, and the last request is sent with tools off so it must
+-        answer."""
+-        system_message = self.system_static + GEMINI_TOOL_NOTE
++        """Gemini picks tools from its own schema (never delegate_to_gemini). With the agent on it
++        gets more rounds and create_tool. Identical repeated calls are not re-run, tool errors go
++        back as text, and the last request is sent with tools off so it must answer."""
++        agent_cfg = self.config.get("agent", {})
++        if agent_cfg.get("mode", "ask") != "off":
++            max_rounds = max(max_rounds, int(agent_cfg.get("max_rounds", 6)))
++        schema = agent.gemini_schema(self.config)
++        system_message = self.system_static + gemini_tool_note(schema) + agent.agent_note(self.config)
+         history = [m for m in self._request_messages()[1:]
+                    if m["role"] in ("user", "assistant")]
+-        allowed = {t["function"]["name"] for t in GEMINI_TOOLS_SCHEMA}
++        allowed = {t["function"]["name"] for t in schema}
+         seen = set()
+ 
+         for round_no in range(max_rounds + 1):
+             final_round = round_no == max_rounds
+             start = time.time()
+             result = ask_gemini(system_message, history,
+-                                tools_schema=None if final_round else GEMINI_TOOLS_SCHEMA)
++                                tools_schema=None if final_round else schema)
+             if result["type"] == "text":
+                 log_action("gemini", "reply", {}, f"{len(result['content'])} chars",
+                            int((time.time() - start) * 1000))
+@@ -561,9 +646,16 @@ class Conversation:
+             else:
+                 seen.add(key)
+                 ok, res = self._execute_tool(name, args, "gemini")
+-                tool_text = res if ok else (
+-                    f"{name} failed: {res}. Do not retry; answer from your own "
+-                    f"knowledge or say you could not check.")
++                if name != "create_tool":
++                    self._agent_steps.append({"tool": name, "args": args, "ok": ok, "result": str(res)[:120]})
++                if name == "create_tool":
++                    schema = agent.gemini_schema(self.config)
++                    allowed = {t["function"]["name"] for t in schema}
++                    tool_text = res if ok else f"create_tool failed: {res}. Fix the problem and try once more, or answer without it."
++                else:
++                    tool_text = res if ok else (
++                        f"{name} failed: {res}. Do not retry; answer from your own "
++                        f"knowledge or say you could not check.")
+ 
+             history.append({"role": "assistant", "content": f"[called {name}]"})
+             history.append({"role": "user", "content": f"[tool result from {name}] {tool_text}"})
+@@ -667,6 +759,14 @@ class Conversation:
+             return self._model_command(args)
+         if cmd == "/log":
+             return self._log_text(args)
++        if cmd == "/agent":
++            return self._agent_command(args)
++        if cmd == "/elevated":
++            return self._elevated_command(args)
++        if cmd == "/tools":
++            return self._tools_command(args)
++        if cmd == "/tasks":
++            return self._tasks_command(args)
+         if cmd == "/help":
+             return "\n".join(f"/{c['name']:<9} {c['description']}" for c in COMMANDS)
+         return f"Unknown command {parts[0]}. Type /help for the list"
+@@ -674,6 +774,62 @@ class Conversation:
+     def commands(self) -> list:
+         return COMMANDS
+ 
++    def _agent_text(self) -> str:
++        cfg = self.config["agent"]
++        return (f"Agent mode: {cfg['mode']} ({agent.MODE_HELP[cfg['mode']]})\n"
++                f"Higher-level tools: {'on' if cfg['high_tools'] else 'off'}\n"
++                f"Saved: {len(agent.STORE.tools)} tools, {len(agent.STORE.tasks)} tasks")
++
++    def _agent_command(self, args: list) -> str:
++        if not args:
++            return self._agent_text()
++        if args[0].lower() not in agent.MODES:
++            return "Usage: /agent off|ask|yolo"
++        self.change_setting("agent.mode", args[0].lower())
++        return self._agent_text()
++
++    def _elevated_command(self, args: list) -> str:
++        if args:
++            word = args[0].lower()
++            if word not in ("on", "off", "true", "false", "yes", "no"):
++                return "Usage: /elevated on|off"
++            self.change_setting("agent.high_tools", "true" if word in ("on", "true", "yes") else "false")
++        on = self.config["agent"]["high_tools"]
++        return "Higher-level tools: " + ("on (tools may use the network, shell or files)" if on else "off (pure-computation tools only)")
++
++    def _tools_command(self, args: list) -> str:
++        store = agent.STORE
++        sub = args[0].lower() if args else "list"
++        if sub == "list":
++            if not store.tools:
++                return "No saved tools"
++            return "\n".join(f"{m['name']} [{m['level']}] {m['description']} (used {m.get('uses', 0)}x)"
++                             for _, m in sorted(store.tools.items()))
++        if sub == "remove" and len(args) == 2:
++            removed = store.remove_tool(args[1])
++            self._rebuild_system()
++            return f"Removed {args[1]}" if removed else f"No tool named {args[1]}"
++        if sub == "clear":
++            n = store.clear_tools()
++            self._rebuild_system()
++            return f"Removed {n} tool{'s' if n != 1 else ''}"
++        return "Usage: /tools [list|remove <name>|clear]"
++
++    def _tasks_command(self, args: list) -> str:
++        store = agent.STORE
++        sub = args[0].lower() if args else "list"
++        if sub == "list":
++            if not store.tasks:
++                return "No saved tasks"
++            return "\n".join(f"{t['id']}  {t['prompt'][:60]}  ({', '.join(sorted({s['tool'] for s in t['steps']})) or 'no tools'}; used {t.get('uses', 0)}x)"
++                             for t in store.tasks)
++        if sub == "remove" and len(args) == 2:
++            return f"Removed {args[1]}" if store.remove_task(args[1]) else f"No task {args[1]}"
++        if sub == "clear":
++            n = store.clear_tasks()
++            return f"Removed {n} task{'s' if n != 1 else ''}"
++        return "Usage: /tasks [list|remove <id>|clear]"
++
+     def _log_text(self, args: list) -> str:
+         try:
+             n = int(args[0]) if args else 15
+@@ -831,6 +987,8 @@ class Conversation:
+             self._rebuild_system()
+         if key in ("gemini.model", "gemini.search_model"):
+             gemini_client.configure(chat=self.config["gemini"]["model"], search=self.config["gemini"]["search_model"])
++        if key == "agent.high_tools":
++            agent.set_policy(high_tools=bool(value))
+         if key == "model.forced":
+             self._persisted_force = value if value in FORCEABLE_MODELS else None
+             if self.forced_remaining == 0:
+@@ -959,12 +1117,17 @@ class Conversation:
+             self.stop_lfm()  # Qwen took over; free the RAM LFM was using
+         self.messages.append({"role": "user", "content": user_message})
+         log_message(DEVICE, "user", user_message)
++        self._agent_steps, self._agent_created = [], []
+ 
+         try:
+             self._turn_context = build_turn_context(user_message)
+         except Exception as e:
+             self._turn_context = ""
+             log_action("memory", "recall", {}, f"ERROR {summarize_error(e)}", 0)
++        if self.config.get("agent", {}).get("mode", "ask") != "off":
++            hint = agent.STORE.task_hint(user_message)
++            if hint:
++                self._turn_context = (self._turn_context + "\n\n" + hint).strip()
+ 
+         # 1. Deterministic routes: free, instant, never a model guess.
+         call = match_intent(user_message)
+@@ -1000,6 +1163,7 @@ class Conversation:
+ 
+         if forced and self.forced_model != "lfm":
+             self.stop_lfm()
++        self._save_agent_task(user_message, reply)
+         return self._finish(fix_identity(reply, *self._names()))
+ 
+ 
+@@ -1052,6 +1216,14 @@ if __name__ == "__main__":
+     except (ImportError, OSError):
+         pass
+ 
++    def cli_approver(info):
++        print("\n" + agent.format_info(info) + "\n--- code ---\n" + info["code"] + "\n------------")
++        try:
++            return input("Approve this tool? [y/N] ").strip().lower() in ("y", "yes")
++        except (EOFError, KeyboardInterrupt):
++            return False
++    convo.approver = cli_approver
++
+     name = config["assistant_name"]
+     print(f"felix-ai Core -- {name}")
+     print(f"Talking to: {convo.url}")
+diff --git a/core/tests/test_patch1.py b/core/tests/test_patch1.py
+index 4773272..eb42bd6 100644
+--- a/core/tests/test_patch1.py
++++ b/core/tests/test_patch1.py
+@@ -439,6 +439,7 @@ class TestRobustness(Base):
+ class TestGeminiLoop(Base):
+     def test_dedupe_error_feedback_and_final_round_without_tools(self):
+         c = self.convo()
++        c.config["agent"]["mode"] = "off"  # the legacy two-round loop
+         calls = []
+ 
+         def _gem(system, history, tools_schema=None, **kw):
+diff --git a/core/tests/test_patch10.py b/core/tests/test_patch10.py
+new file mode 100644
+index 0000000..8b0694c
+--- /dev/null
++++ b/core/tests/test_patch10.py
+@@ -0,0 +1,553 @@
++"""
++Agent: Gemini-written tools, approval modes (ask / yolo / off), higher-level gating, saved tasks, plus the
++model picker, mic source choice and Gemini audio packaging fixes.
++
++    PYTHONPATH=. python3 -m unittest tests.test_patch10 -v
++"""
++import json
++import os
++import sys
++import tempfile
++import threading
++import time
++import unittest
++from unittest import mock
++
++CORE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++sys.path.insert(0, CORE)
++sys.path.insert(0, os.path.join(os.path.dirname(CORE), "scripts"))
++
++import agent  # noqa: E402
++import gemini_tools  # noqa: E402
++import pa_record  # noqa: E402
++import tts  # noqa: E402
++from config_loader import SETTINGS  # noqa: E402
++from tests.test_patch1 import Base  # noqa: E402
++from tests.test_patch5 import WebBase  # noqa: E402
++from tests.test_patch8 import HAVE_JSDOM, node, run_smoke  # noqa: E402
++from tool_executor import ToolExecutionError  # noqa: E402
++from tool_schema import TOOL_REGISTRY, validate_tool_call  # noqa: E402
++
++MILES = 'def run(args):\n    return "%.2f" % (float(args["miles"]) * 1.609344)\n'
++PARAMS = '{"miles": {"type": "number", "description": "distance in miles"}}'
++
++
++def spec(**over):
++    base = {"name": "miles_to_km", "description": "Convert miles to kilometres.", "how_it_works": "Multiplies the distance by 1.609344.",
++            "params_json": PARAMS, "code": MILES, "level": "normal"}
++    base.update(over)
++    return base
++
++
++class AgentCase(unittest.TestCase):
++    def setUp(self):
++        self.dir = tempfile.mkdtemp(prefix="faze-agent-")
++        self.env = mock.patch.dict(os.environ, {"FAZE_AGENT_DIR": self.dir})
++        self.env.start()
++        self.store = agent.use_store(self.dir)
++        agent.set_policy(high_tools=False)
++        self.addCleanup(self.env.stop)
++        self.addCleanup(lambda: agent.use_store(tempfile.mkdtemp(prefix="faze-agent-empty-")))
++
++
++class TestCodeChecks(AgentCase):
++    def test_pure_code_is_normal(self):
++        r = agent.assess_code(MILES + "import math\nimport json\nfrom urllib.parse import quote\n")
++        self.assertEqual((r["ok"], r["level"], r["reasons"]), (True, "normal", []))
++
++    def test_risky_code_is_high_with_reasons(self):
++        r = agent.assess_code("import subprocess\nfrom os import path\ndef run(args):\n    return str(eval('1'))\n")
++        self.assertTrue(r["ok"])
++        self.assertEqual(r["level"], "high")
++        self.assertEqual(r["reasons"], ["imports subprocess", "imports from os", "calls eval()"])
++        self.assertIn("uses __class__", agent.assess_code("def run(a):\n    return a.__class__\n")["reasons"])
++        self.assertEqual(agent.assess_code("def run(a):\n    return open('/x').read()\n")["reasons"], ["calls open()"])
++
++    def test_rejections(self):
++        for code, word in [("", "no code"), ("def run(:", "syntax"), ("def go(a): pass", "entry point"), ("def run(a, b): pass", "entry point"),
++                           ("def run(a):\n    return 'GEMINI_API_KEY'", "API key"), ("x=1\n" * 5000, "over")]:
++            r = agent.assess_code(code)
++            self.assertFalse(r["ok"], code[:20])
++            self.assertIn(word, r["error"])
++
++    def test_params(self):
++        self.assertEqual(agent.normalize_params(PARAMS), {"miles": {"type": "number", "description": "distance in miles"}})
++        self.assertEqual(agent.normalize_params('{"a": "string"}')["a"]["type"], "string")
++        self.assertEqual(agent.normalize_params(""), {})
++        for bad in ("not json", '{"A": "string"}', '{"a": "list"}', json.dumps({f"p{i}": "string" for i in range(7)}), "[1]"):
++            with self.assertRaises(agent.ToolCreateError, msg=bad):
++                agent.normalize_params(bad)
++
++    def test_prepare_tool_validation_and_levels(self):
++        info, meta, code = agent.prepare_tool(spec(), high_allowed=False)
++        self.assertEqual((info["level"], meta["level"], info["params"], info["replaces"]), ("normal", "normal", {"miles": "number"}, False))
++        for bad in (spec(name="x"), spec(name="Bad-Name"), spec(name="search_web"), spec(name="create_tool"), spec(description=""),
++                    spec(how_it_works=""), spec(code="def go(): pass")):
++            with self.assertRaises(agent.ToolCreateError):
++                agent.prepare_tool(bad, True)
++        with self.assertRaises(agent.ToolCreateError) as cm:
++            agent.prepare_tool(spec(level="high"), high_allowed=False)
++        self.assertIn("/elevated on", str(cm.exception))
++        risky = spec(code="import subprocess\ndef run(args):\n    return 'x'\n")
++        with self.assertRaises(agent.ToolCreateError):
++            agent.prepare_tool(risky, False)
++        info, _, _ = agent.prepare_tool(risky, True)  # honest declaration or not, the scan decides
++        self.assertEqual((info["level"], info["reasons"]), ("high", ["imports subprocess"]))
++        self.assertIn("Higher-level because it imports subprocess", agent.format_info(info))
++
++
++class TestStore(AgentCase):
++    def add(self, **over):
++        info, meta, code = agent.prepare_tool(spec(**over), True)
++        return self.store.add_tool(meta, code)
++
++    def test_add_registers_everywhere_and_runs(self):
++        self.add()
++        self.assertEqual(TOOL_REGISTRY["miles_to_km"], {"miles": float})
++        self.assertEqual(PERMISSION_REGISTRY_OF()["miles_to_km"], "safe")
++        self.assertTrue(validate_tool_call({"tool": "miles_to_km", "parameters": {"miles": 10}}))  # int is a fine number
++        decl = [t for t in gemini_tools.build_gemini_tools_schema() if t["function"]["name"] == "miles_to_km"][0]["function"]
++        self.assertEqual(decl["parameters"]["properties"]["miles"], {"type": "number", "description": "distance in miles"})
++        self.assertIn("Convert miles", decl["description"])
++        local = {t["function"]["name"] for t in agent.local_schema()}
++        self.assertIn("miles_to_km", local)
++        self.assertNotIn("create_tool", local)
++        from tool_executor import execute_tool
++        self.assertEqual(execute_tool("miles_to_km", {"miles": 10}), "16.09")
++        self.assertEqual(self.store.tools["miles_to_km"]["uses"], 1)
++        self.assertIn("miles_to_km(miles)", agent.custom_tools_text())
++
++    def test_persists_and_reloads(self):
++        self.add()
++        self.store.save_task("convert miles to km", [{"tool": "miles_to_km", "args": {"miles": 3}, "ok": True}], "4.83 km")
++        again = agent.use_store(self.dir)
++        self.assertIn("miles_to_km", again.tools)
++        self.assertIn("miles_to_km", TOOL_REGISTRY)
++        self.assertEqual(len(again.tasks), 1)
++        os.remove(os.path.join(self.dir, "tools", "miles_to_km.py"))  # a deleted file drops the tool
++        self.assertEqual(agent.use_store(self.dir).tools, {})
++        self.assertNotIn("miles_to_km", TOOL_REGISTRY)
++
++    def test_runner_limits_and_scrubbed_environment(self):
++        self.add(name="spin_forever", code="def run(args):\n    while True:\n        pass\n", params_json="{}")
++        with self.assertRaises(ToolExecutionError) as cm:
++            self.store.run_tool("spin_forever", {}, timeout=2)
++        self.assertIn("timed out", str(cm.exception))
++        self.add(name="boom", code="def run(args):\n    return 1 / 0\n", params_json="{}")
++        with self.assertRaises(ToolExecutionError) as cm:
++            self.store.run_tool("boom", {})
++        self.assertIn("ZeroDivisionError", str(cm.exception))
++        self.add(name="peek_env", code="import os\ndef run(args):\n    return ','.join(sorted(k for k in os.environ if 'KEY' in k or 'TOKEN' in k)) or 'clean'\n", params_json="{}")
++        agent.set_policy(high_tools=True)
++        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "secret", "FAZE_TOKEN": "t"}):
++            self.assertEqual(self.store.run_tool("peek_env", {}), "clean")
++        self.add(name="chatty", code="def run(args):\n    return 'x' * 100000\n", params_json="{}")
++        self.assertEqual(len(self.store.run_tool("chatty", {})), agent.OUTPUT_CAP)
++        self.add(name="dict_out", code="def run(args):\n    return {'a': 1}\n", params_json="{}")
++        self.assertEqual(self.store.run_tool("dict_out", {}), '{"a": 1}')
++
++    def test_high_level_tools_only_run_while_enabled(self):
++        self.add(name="shell_date", code="import subprocess\ndef run(args):\n    return 'ok'\n", params_json="{}", level="high")
++        with self.assertRaises(ToolExecutionError) as cm:
++            self.store.run_tool("shell_date", {})
++        self.assertIn("/elevated on", str(cm.exception))
++        agent.set_policy(high_tools=True)
++        self.assertEqual(self.store.run_tool("shell_date", {}), "ok")
++        agent.set_policy(high_tools=False)
++        with self.assertRaises(ToolExecutionError):
++            self.store.run_tool("shell_date", {})
++
++    def test_update_keeps_use_count_remove_and_clear(self):
++        self.add()
++        self.store.run_tool("miles_to_km", {"miles": 1})
++        self.add(description="Convert miles to km (v2).")
++        self.assertEqual((self.store.tools["miles_to_km"]["uses"], len(self.store.tools)), (1, 1))
++        self.assertTrue(self.store.remove_tool("miles_to_km"))
++        self.assertFalse(self.store.remove_tool("miles_to_km"))
++        self.assertNotIn("miles_to_km", TOOL_REGISTRY)
++        self.add(name="tool_one", params_json="{}", code="def run(a):\n    return '1'\n")
++        self.add(name="tool_two", params_json="{}", code="def run(a):\n    return '2'\n")
++        self.assertEqual(self.store.clear_tools(), 2)
++        self.assertEqual(os.listdir(os.path.join(self.dir, "tools")), [])
++        self.assertEqual(agent.custom_tools_text(), "")
++
++    def test_tool_cap_and_builtin_protection(self):
++        for i in range(agent.MAX_TOOLS):
++            self.add(name=f"tool_{i:02d}", params_json="{}", code="def run(a):\n    return 'x'\n")
++        with self.assertRaises(agent.ToolCreateError):
++            agent.prepare_tool(spec(name="one_too_many"), True)
++        agent.prepare_tool(spec(name="tool_00"), True)  # replacing is fine
++        self.assertIn("get_battery_status", TOOL_REGISTRY)
++        self.assertNotIn("create_tool", TOOL_REGISTRY)
++
++
++def PERMISSION_REGISTRY_OF():
++    from permission_policy import PERMISSION_REGISTRY
++    return PERMISSION_REGISTRY
++
++
++class TestTasks(AgentCase):
++    def steps(self, *names):
++        return [{"tool": n, "args": {"q": "x"}, "ok": True} for n in names]
++
++    def test_save_match_dedupe_and_hint(self):
++        t = self.store.save_task("Convert 25 miles to km please", self.steps("miles_to_km"), "40.23 km")
++        self.assertEqual(t["keywords"], ["convert", "km", "miles"])  # numbers are the variable part
++        same = self.store.save_task("convert 7 miles to km", self.steps("miles_to_km"), "11.27 km")
++        self.assertEqual((same["id"], same["runs"], len(self.store.tasks)), (t["id"], 2, 1))
++        self.assertEqual(self.store.match_tasks("what is the weather"), [])
++        self.assertEqual(self.store.match_tasks("convert 90 miles to km")[0]["id"], t["id"])
++        hint = self.store.task_hint("convert 90 miles into km")
++        self.assertIn("A similar request was solved before", hint)
++        self.assertIn("miles_to_km", hint)
++        self.assertIn("11.27 km", hint)
++        self.assertEqual(self.store.tasks[0]["uses"], 1)
++        self.assertEqual(self.store.task_hint("write a poem about the sea"), "")
++        self.assertIsNone(self.store.save_task("12 34", [], "x"))
++
++    def test_remove_clear_snapshot_and_cap(self):
++        a = self.store.save_task("first thing alpha", self.steps("a_tool"), "r")
++        self.store.save_task("second thing bravo", self.steps("b_tool", "c_tool"), "r")
++        snap = self.store.snapshot()
++        self.assertEqual([t["prompt"] for t in snap["tasks"]], ["second thing bravo", "first thing alpha"])
++        self.assertEqual(snap["tasks"][0]["tools"], ["b_tool", "c_tool"])
++        self.assertTrue(self.store.remove_task(a["id"]))
++        self.assertFalse(self.store.remove_task(a["id"]))
++        self.assertEqual(self.store.clear_tasks(), 1)
++        for i in range(agent.MAX_TASKS + 5):
++            self.store.save_task(f"unique topic{i} word{i} thing{i}", self.steps("t"), "r")
++        self.assertEqual(len(self.store.tasks), agent.MAX_TASKS)
++
++
++def scripted(replies, seen=None):
++    queue = list(replies)
++
++    def gem(system, history, tools_schema=None, **kw):
++        if seen is not None:
++            seen.append({"system": system, "history": [m["content"] for m in history], "tools": tools_schema})
++        item = queue.pop(0) if queue else {"type": "text", "content": "done"}
++        return item(tools_schema) if callable(item) else item
++    return gem
++
++
++def call(tool, args=None):
++    return {"type": "function_call", "name": tool, "args": args or {}}
++
++
++TEXT = lambda t: {"type": "text", "content": t}  # noqa: E731
++
++
++class TestOrchestratorAgent(AgentCase, Base):
++    def setUp(self):
++        AgentCase.setUp(self)
++        Base.setUp(self)
++
++    def tearDown(self):
++        Base.tearDown(self)
++
++    def run_agent(self, mode, replies, approver=None, prompt="turn 10 miles into km", high=False):
++        c = self.convo()
++        c.config["agent"].update(mode=mode, high_tools=high)
++        agent.set_policy(high_tools=high)
++        c.approver = approver
++        seen = []
++        with mock.patch("orchestrator.ask_gemini", side_effect=scripted(replies, seen)):
++            c.handle_command("/model gemini")
++            reply = c.send(prompt)
++        return c, reply, seen
++
++    def test_yolo_creates_runs_and_describes(self):
++        c, reply, seen = self.run_agent("yolo", [call("create_tool", spec()), call("miles_to_km", {"miles": 10}), TEXT("10 miles is 16.09 km")])
++        self.assertEqual(reply, "10 miles is 16.09 km")
++        self.assertIn("miles_to_km", c.local.__class__ and agent.STORE.tools)
++        self.assertIn("[tool result from miles_to_km] 16.09", seen[-1]["history"][-1])
++        self.assertTrue(any("create_tool" in t["function"]["name"] for t in seen[0]["tools"]))
++        notes = c.drain_notices()
++        self.assertTrue(any("Added a tool (yolo mode)" in n and "What it does: Convert miles" in n and "How it works: Multiplies" in n for n in notes), notes)
++        self.assertEqual(c.drain_notices(), [])
++        task = agent.STORE.tasks[0]
++        self.assertEqual((task["created_tools"], [s["tool"] for s in task["steps"]]), (["miles_to_km"], ["miles_to_km"]))
++        self.assertIn("CUSTOM TOOLS", c.messages[0]["content"])
++        self.assertIn("miles_to_km(miles)", c.messages[0]["content"])
++        self.assertEqual(len(seen), 3)
++
++    def test_ask_mode_approve_deny_and_no_way_to_ask(self):
++        asked = []
++        c, reply, _ = self.run_agent("ask", [call("create_tool", spec()), call("miles_to_km", {"miles": 2}), TEXT("ok")],
++                                     approver=lambda info: asked.append(info) or True)
++        self.assertEqual((len(asked), asked[0]["name"], asked[0]["level"], asked[0]["replaces"]), (1, "miles_to_km", "normal", False))
++        self.assertIn("def run", asked[0]["code"])
++        self.assertIn("miles_to_km", agent.STORE.tools)
++        self.assertEqual(c.drain_notices(), [])  # asked in person, no extra notice
++
++        agent.STORE.clear_tools()
++        agent.STORE.clear_tasks()
++        c, reply, seen = self.run_agent("ask", [call("create_tool", spec()), TEXT("fine, skipping it")], approver=lambda info: False)
++        self.assertEqual(reply, "fine, skipping it")
++        self.assertNotIn("miles_to_km", agent.STORE.tools)
++        self.assertIn("declined", seen[-1]["history"][-1])
++        self.assertEqual(agent.STORE.tasks, [])  # nothing worked, nothing to save
++
++        c, reply, seen = self.run_agent("ask", [call("create_tool", spec()), TEXT("no luck")], approver=None)
++        self.assertNotIn("miles_to_km", agent.STORE.tools)
++        self.assertIn("declined", seen[-1]["history"][-1])
++
++    def test_off_hides_create_tool_and_keeps_two_rounds(self):
++        c, reply, seen = self.run_agent("off", [call("create_tool", spec()), TEXT("no tools for you")])
++        self.assertFalse(any(t["function"]["name"] == "create_tool" for t in (seen[0]["tools"] or [])))
++        self.assertIn("not available", seen[1]["history"][-1])
++        self.assertEqual(agent.STORE.tools, {})
++        self.assertNotIn("create_tool", seen[0]["system"])
++
++    def test_high_level_gating_at_creation(self):
++        risky = spec(name="shell_thing", level="high", code="import subprocess\ndef run(args):\n    return 'x'\n", params_json="{}")
++        c, reply, seen = self.run_agent("yolo", [call("create_tool", risky), TEXT("ok")], high=False)
++        self.assertNotIn("shell_thing", agent.STORE.tools)
++        self.assertIn("Higher-level tools are turned off", seen[-1]["history"][-1])
++        c, reply, seen = self.run_agent("yolo", [call("create_tool", risky), TEXT("ok")], high=True)
++        self.assertEqual(agent.STORE.tools["shell_thing"]["level"], "high")
++        c.config["agent"]["high_tools"] = False
++        agent.set_policy(high_tools=False)
++        ok, text = c._execute_tool("shell_thing", {}, "gemini")
++        self.assertFalse(ok)
++        self.assertIn("/elevated on", text)
++
++    def test_bad_code_goes_back_to_gemini_to_fix(self):
++        broken = spec(code="def run(args:\n    return 1")
++        c, reply, seen = self.run_agent("yolo", [call("create_tool", broken), call("create_tool", spec()), call("miles_to_km", {"miles": 1}), TEXT("1.61")])
++        self.assertIn("syntax error", seen[1]["history"][-1])
++        self.assertIn("Fix the problem", seen[1]["history"][-1])
++        self.assertEqual(reply, "1.61")
++        self.assertIn("miles_to_km", agent.STORE.tools)
++
++    def test_agentic_turns_get_more_rounds(self):
++        replies = [call("get_current_datetime") if i % 2 == 0 else call("get_battery_status") for i in range(8)]
++        with mock.patch("orchestrator.execute_tool", return_value="x"):
++            c, reply, seen = self.run_agent("ask", replies + [TEXT("end")])
++        self.assertEqual(len(seen), 7)  # max_rounds 6 tool rounds plus the tool-free final one
++        self.assertIsNone(seen[-1]["tools"])  # the final round is tool-free
++
++    def test_saved_task_is_handed_to_the_next_similar_request(self):
++        self.run_agent("yolo", [call("create_tool", spec()), call("miles_to_km", {"miles": 10}), TEXT("16.09 km")])
++        c = self.convo()
++        c.config["agent"]["mode"] = "yolo"
++        seen = []
++        with mock.patch("orchestrator.ask_gemini", side_effect=scripted([TEXT("25 miles is 40.23 km")], seen)):
++            c.handle_command("/model gemini")
++            c.send("please turn 25 miles into km")
++        self.assertIn("A similar request was solved before", seen[0]["history"][-1])
++        self.assertIn("miles_to_km", seen[0]["history"][-1])
++        c.config["agent"]["mode"] = "off"
++        seen.clear()
++        with mock.patch("orchestrator.ask_gemini", side_effect=scripted([TEXT("fine")], seen)):
++            c.send("please turn 30 miles into km")
++        self.assertNotIn("similar request", seen[0]["history"][-1])
++
++    def test_simple_single_tool_turns_are_not_saved(self):
++        with mock.patch("orchestrator.execute_tool", return_value="80% battery"):
++            self.run_agent("ask", [call("get_battery_status"), TEXT("80%")], prompt="how is the battery looking")
++        self.assertEqual(agent.STORE.tasks, [])
++
++    def test_commands(self):
++        c = self.convo()
++        self.assertIn("Agent mode: ask", c.handle_command("/agent"))
++        self.assertIn("Agent mode: yolo", c.handle_command("/agent yolo"))
++        self.assertEqual(c.config["agent"]["mode"], "yolo")
++        self.assertEqual(c.handle_command("/agent nope"), "Usage: /agent off|ask|yolo")
++        self.assertIn("Higher-level tools: off", c.handle_command("/elevated"))
++        self.assertIn("Higher-level tools: on", c.handle_command("/elevated on"))
++        self.assertTrue(agent.POLICY["high_tools"])
++        c.handle_command("/elevated off")
++        self.assertFalse(agent.POLICY["high_tools"])
++        self.assertEqual(c.handle_command("/elevated maybe"), "Usage: /elevated on|off")
++        self.assertEqual(c.handle_command("/tools"), "No saved tools")
++        self.assertEqual(c.handle_command("/tasks"), "No saved tasks")
++        info, meta, code = agent.prepare_tool(spec(), False)
++        agent.STORE.add_tool(meta, code)
++        agent.STORE.save_task("convert miles to km", [{"tool": "miles_to_km", "args": {}, "ok": True}], "r")
++        self.assertIn("miles_to_km [normal] Convert miles", c.handle_command("/tools"))
++        task_id = agent.STORE.tasks[0]["id"]
++        self.assertIn(task_id, c.handle_command("/tasks"))
++        self.assertEqual(c.handle_command(f"/tasks remove {task_id}"), f"Removed {task_id}")
++        self.assertEqual(c.handle_command("/tasks remove zzz"), "No task zzz")
++        c._rebuild_system()
++        self.assertIn("miles_to_km", c.messages[0]["content"])
++        self.assertEqual(c.handle_command("/tools remove miles_to_km"), "Removed miles_to_km")
++        self.assertNotIn("miles_to_km", c.messages[0]["content"])
++        agent.STORE.add_tool(meta, code)
++        self.assertEqual(c.handle_command("/tools clear"), "Removed 1 tool")
++        self.assertEqual(c.handle_command("/tasks clear"), "Removed 0 tasks")
++        self.assertEqual(c.handle_command("/tools nope"), "Usage: /tools [list|remove <name>|clear]")
++        for name in ("agent", "elevated", "tools", "tasks"):
++            self.assertIn(name, [x["name"] for x in c.commands()])
++
++    def test_settings(self):
++        self.assertEqual(SETTINGS["agent.mode"], (str, ("off", "ask", "yolo")))
++        c = self.convo()
++        self.assertEqual((c.config["agent"]["mode"], c.config["agent"]["high_tools"]), ("ask", False))
++        with self.assertRaises(ValueError):
++            c.change_setting("agent.mode", "reckless")
++        c.change_setting("agent.high_tools", "true")
++        self.assertTrue(agent.POLICY["high_tools"])
++        keys = {r["key"] for r in c.settings_list()}
++        self.assertTrue({"agent.mode", "agent.high_tools", "agent.max_rounds"} <= keys)
++
++
++class TestAgentServer(AgentCase, WebBase):
++    def setUp(self):
++        AgentCase.setUp(self)
++        WebBase.setUp(self)
++
++    def tearDown(self):
++        WebBase.tearDown(self)
++
++    def wait_pending(self):
++        for _ in range(100):
++            pending = self.httpd.pending_approvals()
++            if pending:
++                return pending[0]
++            time.sleep(0.02)
++        self.fail("no approval was requested")
++
++    def ask_in_thread(self, **kw):
++        out = {}
++        t = threading.Thread(target=lambda: out.update(result=self.httpd.request_approval({"name": "t", "level": "normal", "code": "c"}, **kw)))
++        t.start()
++        return t, out
++
++    def test_wiring_status_and_agent_endpoint(self):
++        self.assertEqual(self.convo.approver, self.httpd.request_approval)
++        code, status = self.jget("/api/status")
++        self.assertEqual(status["agent"], {"mode": "ask", "high_tools": False, "tools": 0, "tasks": 0})
++        info, meta, src = agent.prepare_tool(spec(), False)
++        agent.STORE.add_tool(meta, src)
++        agent.STORE.save_task("convert miles to km", [{"tool": "miles_to_km", "args": {}, "ok": True}], "r")
++        code, data = self.jget("/api/agent")
++        self.assertEqual((code, data["mode"], data["high_tools"], data["pending"]), (200, "ask", False, []))
++        self.assertEqual(set(data["modes"]), {"off", "ask", "yolo"})
++        self.assertEqual(data["tools"][0]["name"], "miles_to_km")
++        self.assertNotIn("code", data["tools"][0])
++        self.assertEqual(data["tasks"][0]["tools"], ["miles_to_km"])
++        self.assertEqual(self.request("GET", "/api/agent", token=None)[0].status, 401)
++
++    def test_approval_round_trip(self):
++        q = self.httpd.subscribe()
++        t, out = self.ask_in_thread()
++        pending = self.wait_pending()
++        event, payload = q.get(timeout=2)
++        self.assertEqual((event, payload["id"], payload["name"]), ("approval", pending["id"], "t"))
++        self.assertEqual(self.jget("/api/agent")[1]["pending"][0]["id"], pending["id"])
++        code, _ = self.jpost("/api/approve", {"id": pending["id"], "approve": True})
++        t.join(3)
++        self.assertEqual((code, out["result"]), (200, True))
++        self.assertEqual(q.get(timeout=2)[0], "approval_done")
++        self.assertEqual(self.jpost("/api/approve", {"id": pending["id"], "approve": True})[0], 404)
++        t, out = self.ask_in_thread()
++        pending = self.wait_pending()
++        self.jpost("/api/approve", {"id": pending["id"], "approve": False})
++        t.join(3)
++        self.assertFalse(out["result"])
++        self.assertEqual(self.request("POST", "/api/approve", {"id": "x", "approve": True}, token=None)[0].status, 401)
++
++    def test_stop_and_timeout_deny(self):
++        t, out = self.ask_in_thread()
++        self.wait_pending()
++        self.convo.cancel()
++        t.join(3)
++        self.assertFalse(out["result"])
++        self.convo._cancel.clear()
++        t, out = self.ask_in_thread(timeout=0.3)
++        t.join(3)
++        self.assertFalse(out["result"])
++        self.assertEqual(self.httpd.pending_approvals(), [])
++
++    def test_speak_passes_real_audio_through_with_its_type(self):
++        with mock.patch("tts.synthesize_audio", return_value=(b"ID3xxxx", "audio/mpeg")):
++            resp, data = self.request("POST", "/api/speak", {"text": "hello"})
++        self.assertEqual((resp.status, resp.getheader("Content-Type"), data), (200, "audio/mpeg", b"ID3xxxx"))
++
++
++class TestAudioFixes(unittest.TestCase):
++    def test_package_audio(self):
++        wav = b"RIFF\x00\x00\x00\x00WAVEfmt "
++        self.assertEqual(tts.package_audio(wav, "audio/L16;rate=24000"), (wav, "audio/wav"))  # no double header
++        self.assertEqual(tts.package_audio(b"ID3\x04" + b"x" * 20, "")[1], "audio/mpeg")
++        self.assertEqual(tts.package_audio(b"\xff\xfb\x90\x00" + b"x" * 20, "")[1], "audio/mpeg")
++        self.assertEqual(tts.package_audio(b"OggS" + b"x" * 20, "")[1], "audio/ogg")
++        self.assertEqual(tts.package_audio(b"fLaC" + b"x" * 20, "")[1], "audio/flac")
++        self.assertEqual(tts.package_audio(b"\x00\x00\x00\x18ftypmp42" + b"x" * 8, "")[1], "audio/mp4")
++        self.assertEqual(tts.package_audio(b"x" * 20, "audio/webm;codecs=opus"), (b"x" * 20, "audio/webm"))
++        pcm = b"\x01\x00" * 50
++        out, kind = tts.package_audio(pcm, "audio/L16;codec=pcm;rate=16000")
++        self.assertEqual((kind, out[:4], int.from_bytes(out[24:28], "little"), out[44:]), ("audio/wav", b"RIFF", 16000, pcm))
++        self.assertEqual(int.from_bytes(tts.package_audio(pcm, "")[0][24:28], "little"), 24000)
++
++    def test_synthesize_audio_uses_the_container_the_model_sent(self):
++        import base64
++        reply = type("R", (), {"status_code": 200, "json": lambda self: {"candidates": [{"content": {"parts": [
++            {"inlineData": {"mimeType": "audio/mpeg", "data": base64.b64encode(b"ID3" + b"x" * 30).decode()}}]}}]}})()
++        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "k"}):
++            audio, kind = tts.synthesize_audio("hi there", "Kore", "m", post=lambda *a, **k: reply)
++        self.assertEqual((kind, audio[:3]), ("audio/mpeg", b"ID3"))
++
++    def test_mic_source_is_never_a_monitor(self):
++        listing = ("1\tOpenSL_ES_sink.monitor\tmodule-sles-sink.c\ts16le 2ch 44100Hz\tSUSPENDED\n"
++                   "2\tOpenSL_ES_source\tmodule-sles-source.c\ts16le 2ch 44100Hz\tSUSPENDED\n"
++                   "5\tOpenSL_ES_source.4\tmodule-sles-source.c\ts16le 2ch 44100Hz\tIDLE\n")
++        self.assertEqual(pa_record.choose_source(listing), "OpenSL_ES_source")
++        self.assertEqual(pa_record.choose_source("1\tother_mic\tm\tfmt\tIDLE\n2\tx.monitor\tm\tfmt\tIDLE"), "other_mic")
++        self.assertIsNone(pa_record.choose_source("1\tOpenSL_ES_sink.monitor\tm\tfmt\tIDLE"))
++        self.assertIsNone(pa_record.choose_source(""))
++        with mock.patch("subprocess.run", side_effect=OSError):
++            self.assertIsNone(pa_record.detect_source())
++
++
++class TestPickerHelpers(unittest.TestCase):
++    def test_stay_options(self):
++        res = node("console.log(JSON.stringify({ o: a.STAY_OPTIONS, labels: a.STAY_OPTIONS.map((x) => a.stayLabel(x[0])) }));")
++        self.assertEqual(res["o"][0], [0, "Until I turn it off"])
++        self.assertEqual([n for n, _ in res["o"]], [0, 1, 3, 5, 10, 20])
++        self.assertEqual(res["labels"][:2], ["until I turn it off", "1 message"])
++
++
++@unittest.skipUnless(HAVE_JSDOM, "jsdom not installed")
++class TestBrowserAgentUi(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.res = run_smoke()
++
++    def test_runs_clean(self):
++        self.assertNotIn("crash", self.res, self.res.get("crash"))
++        self.assertEqual(self.res["errors"], [])
++
++    def test_model_picker_has_no_slider_and_morphs_tick_into_dropdown(self):
++        self.assertEqual({k: self.res["modelSheet"][k] for k in ("items", "controls", "slider")}, {"items": 4, "controls": 3, "slider": False})
++        p = self.res["picker"]
++        self.assertFalse(p["autoHasControl"])
++        self.assertEqual((p["arrow"], p["activeBefore"]), ("\u25be", False))
++        self.assertEqual(p["chose"], ["/model qwen"])  # tapping the name alone = until turned off
++        self.assertEqual((p["tick"], p["activeAfter"], p["rowOn"]), ("\u2713", True, True))
++        self.assertTrue(p["opened"])
++        self.assertEqual(p["options"][0], "Until I turn it off")
++        self.assertEqual((p["counted"], p["remaining"], p["closed"], p["backToAuto"]), (1, "5", True, "auto"))
++
++    def test_agent_tab(self):
++        a = self.res["agent"]
++        self.assertEqual((a["panel"], a["tools"], a["tasks"], a["mode"], a["help"], a["toolTitle"], a["elevated"]),
++                         (["agent"], 1, 1, ["ask"], "asks first", "miles_to_km", False))
++        self.assertTrue(a["yoloSaved"] and a["elevatedSaved"])
++        self.assertEqual(a["commands"], [True, True, True, True])
++
++    def test_approval_card(self):
++        ap = self.res["approval"]
++        self.assertTrue(ap["open"] and ap["warn"] and ap["code"])
++        self.assertEqual((ap["name"], ap["level"], ap["desc"], ap["how"]), ("miles_to_km", "higher-level", "Convert miles to km.", "Multiplies by 1.609."))
++        self.assertEqual(ap["reasons"], "Higher-level because it imports subprocess")
++        self.assertEqual((ap["allowed"], ap["closed"]), ({"id": "ap1", "approve": True}, True))
++        self.assertEqual(ap["denied"], {"id": "ap2", "approve": False})
++        self.assertEqual(ap["yolo"], {"approve": {"id": "ap3", "approve": True}, "mode": True})
++        self.assertTrue(ap["autoClosed"])
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/core/tests/test_patch8.py b/core/tests/test_patch8.py
+index d784667..6ce250d 100644
+--- a/core/tests/test_patch8.py
++++ b/core/tests/test_patch8.py
+@@ -271,7 +271,7 @@ class TestBrowserSmoke(unittest.TestCase):
+         self.assertEqual(self.res["project"], ["\u25A3 Work"])
+ 
+     def test_sheets_menus_and_log_panel(self):
+-        self.assertEqual(self.res["modelSheet"], {"open": True, "rows": 4})
++        self.assertEqual((self.res["modelSheet"]["open"], self.res["modelSheet"]["rows"]), (True, 4))
+         self.assertEqual(self.res["slash"], ["/log"])
+         lp = self.res["logPanel"]
+         self.assertTrue(lp["open"] and lp["noChatCall"])
+diff --git a/core/tests/test_patch9.py b/core/tests/test_patch9.py
+index d8bb686..2061028 100644
+--- a/core/tests/test_patch9.py
++++ b/core/tests/test_patch9.py
+@@ -133,11 +133,11 @@ class TestSettingsPage(unittest.TestCase):
+         self.assertNotIn("crash", self.res, self.res.get("crash"))
+         self.assertEqual(self.res["errors"], [])
+ 
+-    def test_settings_is_a_page_with_three_tabs(self):
++    def test_settings_is_a_page_with_tabs(self):
+         s = self.res["settings"]
+         self.assertTrue(s["open"] and s["bodyClass"])
+         self.assertEqual(s["hash"], "#settings")
+-        self.assertEqual(s["tabs"], ["General", "Voice", "Advanced"])
++        self.assertEqual(s["tabs"], ["General", "Voice", "Agent", "Advanced"])
+         self.assertEqual((s["panel"], s["voicePanel"], s["advancedPanel"]), (["general"], ["voice"], ["advanced"]))
+         self.assertTrue(s["closed"])
+         self.assertEqual(s["hashAfter"], "")
+diff --git a/core/tests/ui_smoke.js b/core/tests/ui_smoke.js
+index 5c740a2..fe8d1cf 100644
+--- a/core/tests/ui_smoke.js
++++ b/core/tests/ui_smoke.js
+@@ -28,6 +28,14 @@ function sse(events) {
+   return { ok: true, status: 200, body: stream, json: async () => ({}) };
+ }
+ 
++let evCtl = null;
++const pushEvent = (event, data) => evCtl && evCtl.enqueue(new TextEncoder().encode('event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n'));
++const AGENT = { mode: 'ask', high_tools: false, modes: { off: 'no tools', ask: 'asks first', yolo: 'auto' }, pending: [],
++  tools: [{ name: 'miles_to_km', description: 'Convert miles to km.', how_it_works: 'Multiplies by 1.609.', level: 'normal', uses: 2, created: 1 }],
++  tasks: [{ id: 'ab12', prompt: 'convert 5 miles to km', tools: ['miles_to_km'], uses: 1, runs: 2, ts: 1 }] };
++const INFO = { id: 'ap1', kind: 'tool', name: 'miles_to_km', description: 'Convert miles to km.', how_it_works: 'Multiplies by 1.609.', level: 'high',
++  reasons: ['imports subprocess'], params: { miles: 'number' }, code: 'def run(args):\n    return "1"', replaces: false };
++
+ const REPLY = 'Here is **code**:\n```js\nconst a = 1;\n```\n1. first\n2. second';
+ 
+ async function fakeFetch(url, opts) {
+@@ -36,14 +44,20 @@ async function fakeFetch(url, opts) {
+   const body = opts.body ? JSON.parse(opts.body) : null;
+   calls.push({ path: p, body });
+   const json = (obj) => ({ ok: true, status: 200, json: async () => obj });
+-  if (p === '/api/events') return new Promise(() => {});
++  if (p === '/api/events') { return { ok: true, status: 200, body: new ReadableStream({ start(c) { evCtl = c; } }) }; }
++  if (p === '/api/agent') return json(AGENT);
++  if (p === '/api/approve') return json({ ok: true });
+   if (p === '/api/status') return json(status);
+   if (p === '/api/commands') return json({ commands: [
+     { name: 'model', description: 'Choose model', usage: '/model [auto]', args: [{ value: 'auto', description: 'x' }] },
+     { name: 'log', description: 'Show recent activity', usage: '/log [count]', args: [] }] });
+   if (p === '/api/settings') return json({ value: body && body.value, restart: false, settings: [] });
+   if (p === '/api/log') return json({ lines: [{ ts: 1700000000, text: '[qwen -> get_battery_status] {} => 80% (12ms)' }] });
+-  if (p === '/api/command') return json({ text: 'ok' });
++  if (p === '/api/command') {
++    const m = /^\/model (\w+)(?: (\d+))?$/.exec(body.line || '');
++    if (m) { status.mode = m[1]; status.forced_turns = Number(m[2] || 0); }
++    return json({ text: 'ok' });
++  }
+   if (p === '/api/restore') return json({ ok: true, kept: (body.messages || []).length });
+   if (p === '/api/chat') {
+     return sse([
+@@ -137,7 +151,30 @@ async function fakeFetch(url, opts) {
+   out.project = [...d.querySelectorAll('.grp h4')].map((h) => h.textContent);
+ 
+   $('model-chip').click();
+-  out.modelSheet = { open: !$('model-sheet').hidden, rows: d.querySelectorAll('.model-row').length };
++  out.modelSheet = { open: !$('model-sheet').hidden, rows: d.querySelectorAll('.model-row').length, items: d.querySelectorAll('.model-item').length,
++    controls: d.querySelectorAll('.stay-ctl').length, slider: !!d.getElementById('stay-range') };
++  const rowFor = (name) => [...d.querySelectorAll('.model-item')].find((i) => i.querySelector('.name').firstChild.textContent === name);
++  const ctlOf = (name) => rowFor(name).querySelector('.stay-ctl');
++  out.picker = { autoHasControl: !!rowFor('Auto').querySelector('.stay-ctl'), arrow: ctlOf('Qwen').querySelector('.stay-trigger').textContent, activeBefore: ctlOf('Qwen').classList.contains('active') };
++  rowFor('Qwen').querySelector('.model-row').click();
++  await sleep(120);
++  out.picker.chose = calls.filter((c) => c.path === '/api/command' && /^\/model qwen/.test(c.body.line)).map((c) => c.body.line);
++  out.picker.tick = ctlOf('Qwen').querySelector('.stay-trigger').textContent;
++  out.picker.activeAfter = ctlOf('Qwen').classList.contains('active');
++  out.picker.rowOn = rowFor('Qwen').querySelector('.model-row').classList.contains('on');
++  ctlOf('Qwen').querySelector('.stay-trigger').click();
++  out.picker.opened = ctlOf('Qwen').classList.contains('open');
++  out.picker.options = [...ctlOf('Qwen').querySelectorAll('option')].map((o) => o.textContent);
++  const pick = ctlOf('Qwen').querySelector('select');
++  pick.value = '5';
++  pick.dispatchEvent(new w.Event('change'));
++  await sleep(120);
++  out.picker.counted = calls.filter((c) => c.path === '/api/command' && /^\/model qwen 5/.test(c.body.line)).length;
++  out.picker.remaining = ctlOf('Qwen').querySelector('select').value;
++  out.picker.closed = !ctlOf('Qwen').classList.contains('open');
++  rowFor('Auto').querySelector('.model-row').click();
++  await sleep(120);
++  out.picker.backToAuto = status.mode;
+   $('model-sheet').hidden = true;
+ 
+   $('input').value = '/lo';
+@@ -177,6 +214,52 @@ async function fakeFetch(url, opts) {
+   await sleep(30);
+   const wakeCall = calls.filter((c) => c.path === '/api/settings' && c.body && c.body.key === 'wake.enabled').pop();
+   out.settings.wakeSaved = wakeCall && wakeCall.body.value;
++  d.querySelector('#settings-tabs [data-tab="agent"]').click();
++  await sleep(60);
++  out.agent = { panel: panelOn(), tools: d.querySelectorAll('#agent-tools .agent-item').length, tasks: d.querySelectorAll('#agent-tasks .agent-item').length,
++    mode: [...$('agent-mode-seg').children].filter((b) => b.classList.contains('on')).map((b) => b.dataset.v), help: $('agent-mode-help').textContent,
++    toolTitle: d.querySelector('#agent-tools b').textContent, elevated: $('opt-elevated').checked };
++  d.querySelector('#agent-mode-seg [data-v="yolo"]').click();
++  await sleep(60);
++  out.agent.yoloSaved = calls.some((c) => c.path === '/api/settings' && c.body && c.body.key === 'agent.mode' && c.body.value === 'yolo');
++  $('opt-elevated').checked = true;
++  $('opt-elevated').dispatchEvent(new w.Event('change'));
++  await sleep(60);
++  out.agent.elevatedSaved = calls.some((c) => c.path === '/api/settings' && c.body && c.body.key === 'agent.high_tools' && c.body.value === 'true');
++  $('clear-tasks').click();
++  await sleep(60);
++  $('clear-tools').click();
++  await sleep(60);
++  d.querySelector('#agent-tools .agent-item button').click();
++  await sleep(60);
++  d.querySelector('#agent-tasks .agent-item button').click();
++  await sleep(60);
++  const lines = calls.filter((c) => c.path === '/api/command').map((c) => c.body.line);
++  out.agent.commands = ['/tasks clear', '/tools clear', '/tools remove miles_to_km', '/tasks remove ab12'].map((l) => lines.includes(l));
++  pushEvent('approval', INFO);
++  await sleep(80);
++  out.approval = { open: !$('approval-sheet').hidden, name: $('ap-name').textContent, level: $('ap-level').textContent, warn: $('ap-level').classList.contains('warn-pill'),
++    desc: $('ap-desc').textContent, how: $('ap-how').textContent, reasons: $('ap-reasons').textContent, code: $('ap-code').textContent.includes('def run') };
++  $('ap-allow').click();
++  await sleep(60);
++  const approves = () => calls.filter((c) => c.path === '/api/approve').map((c) => c.body);
++  out.approval.allowed = approves().slice(-1)[0];
++  out.approval.closed = $('approval-sheet').hidden;
++  pushEvent('approval', Object.assign({}, INFO, { id: 'ap2' }));
++  await sleep(60);
++  $('ap-deny').click();
++  await sleep(60);
++  out.approval.denied = approves().slice(-1)[0];
++  pushEvent('approval', Object.assign({}, INFO, { id: 'ap3' }));
++  await sleep(60);
++  $('ap-yolo').click();
++  await sleep(60);
++  out.approval.yolo = { approve: approves().slice(-1)[0], mode: calls.filter((c) => c.path === '/api/settings' && c.body && c.body.value === 'yolo').length >= 2 };
++  pushEvent('approval', Object.assign({}, INFO, { id: 'ap4' }));
++  await sleep(60);
++  pushEvent('approval_done', { id: 'ap4' });
++  await sleep(60);
++  out.approval.autoClosed = $('approval-sheet').hidden;
+   d.querySelector('#settings-tabs [data-tab="advanced"]').click();
+   out.settings.advancedPanel = panelOn();
+   $('close-settings').click();
+diff --git a/core/tool_schema.py b/core/tool_schema.py
+index 56f6b67..69f70f7 100644
+--- a/core/tool_schema.py
++++ b/core/tool_schema.py
+@@ -77,10 +77,13 @@ def validate_tool_call(candidate: dict) -> bool:
+             raise ToolCallValidationError(
+                 f"Missing required parameter '{param_name}' for tool '{tool_name}'."
+             )
+-        if not isinstance(parameters[param_name], expected_type):
++        value = parameters[param_name]
++        if expected_type is float and isinstance(value, int) and not isinstance(value, bool):
++            continue  # JSON has no int/float split; 10 is a fine number
++        if not isinstance(value, expected_type):
+             raise ToolCallValidationError(
+                 f"Parameter '{param_name}' for tool '{tool_name}' must be "
+-                f"{expected_type.__name__}, got {type(parameters[param_name]).__name__}."
++                f"{expected_type.__name__}, got {type(value).__name__}."
+             )
+ 
+     return True
+diff --git a/core/tts.py b/core/tts.py
+index 2955a37..b9768e3 100644
+--- a/core/tts.py
++++ b/core/tts.py
+@@ -63,8 +63,34 @@ def _audio_from(payload):
+         return None, "the speech model returned no audio (unreadable data)"
+ 
+ 
++def package_audio(audio: bytes, mime: str):
++    """(bytes, content type) the browser can play. Raw PCM gets a WAV header; audio that already
++    is a file (wav, mp3, ogg...) passes through untouched; wrapping that in a second header is what
++    makes a browser say "no supported source"."""
++    head, kind = audio[:12], (mime or "").lower()
++    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
++        return audio, "audio/wav"
++    if head[:3] == b"ID3" or head[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
++        return audio, "audio/mpeg"
++    if head[:4] == b"OggS":
++        return audio, "audio/ogg"
++    if head[:4] == b"fLaC":
++        return audio, "audio/flac"
++    if head[4:8] == b"ftyp":
++        return audio, "audio/mp4"
++    if kind.startswith("audio/") and not any(k in kind for k in ("l16", "pcm", "raw")) and kind not in ("audio/", "audio/x-raw"):
++        return audio, kind.split(";")[0]
++    rate_match = re.search(r"rate=(\d+)", kind)
++    return wav_from_pcm(audio, int(rate_match.group(1)) if rate_match else 24000), "audio/wav"
++
++
+ def synthesize(text: str, voice: str, model: str, timeout: float = 60.0, post=None) -> bytes:
+-    """Speak `text` and return a WAV file. Raises TtsError with a short reason."""
++    """Speak `text`; returns playable audio bytes (a WAV for PCM replies). Raises TtsError with a short reason."""
++    return synthesize_audio(text, voice, model, timeout, post)[0]
++
++
++def synthesize_audio(text: str, voice: str, model: str, timeout: float = 60.0, post=None):
++    """Like synthesize, but returns (bytes, content type)."""
+     text = (text or "").strip()
+     if not text:
+         raise TtsError("nothing to say")
+@@ -105,8 +131,7 @@ def synthesize(text: str, voice: str, model: str, timeout: float = 60.0, post=No
+             continue
+         pcm, mime = _audio_from(payload)
+         if pcm:
+-            rate_match = re.search(r"rate=(\d+)", mime)
+-            return wav_from_pcm(pcm, int(rate_match.group(1)) if rate_match else 24000)
++            return package_audio(pcm, mime)
+         reason = mime
+     raise TtsError(reason)
+ 
+@@ -119,11 +144,11 @@ if __name__ == "__main__":
+     words = sys.argv[1] if len(sys.argv) > 1 else "Hello, this is a voice test."
+     who = sys.argv[2] if len(sys.argv) > 2 else cfg["voice"]
+     try:
+-        wav = synthesize(words, who, cfg["model"])
++        audio, kind = synthesize_audio(words, who, cfg["model"])
+     except TtsError as e:
+         print(f"FAIL ({cfg['model']}, {who}): {e}")
+         raise SystemExit(1)
+-    out = os.path.expanduser("~/faze_tts_test.wav")
++    out = os.path.expanduser("~/faze_tts_test." + {"audio/mpeg": "mp3", "audio/ogg": "ogg", "audio/flac": "flac", "audio/mp4": "m4a"}.get(kind, "wav"))
+     with open(out, "wb") as f:
+-        f.write(wav)
+-    print(f"OK: {len(wav)} bytes -> {out} ({cfg['model']}, {who})")
++        f.write(audio)
++    print(f"OK: {len(audio)} bytes, {kind}, starts {audio[:12].hex()} -> {out} ({cfg['model']}, {who})")
+diff --git a/core/web/app.css b/core/web/app.css
+index 4d0a1e7..54fbcba 100644
+--- a/core/web/app.css
++++ b/core/web/app.css
+@@ -372,3 +372,22 @@ body.view-settings #cmdmenu, body.view-settings #attachments, body.view-settings
+ .panel > section { margin-bottom: var(--sp-4); padding: var(--sp-2) var(--sp-4) var(--sp-4); border: 1px solid var(--line); border-radius: var(--r-l); background: var(--glass); }
+ .panel > section h3 { margin-top: var(--sp-3); } .panel .row:last-child { border-bottom: 0; }
+ .bad-text { color: var(--bad) !important; } code { font-family: var(--font-mono); font-size: .9em; color: var(--accent); }
++
++/* ---------------------------------------------------------------- model picker, approvals, agent tab */
++.model-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; } .model-item .model-row { margin-bottom: 0; flex: 1; min-width: 0; }
++.stay-ctl { position: relative; flex: none; width: 42px; height: 42px; border-radius: 21px; overflow: hidden; border: 1px solid var(--line); background: rgba(255, 255, 255, .03);
++  transition: width var(--t-slow) var(--spring), border-color var(--t-fast), background var(--t-fast); }
++.stay-ctl.active { border-color: var(--accent); background: var(--glow-soft); }
++.stay-trigger { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-3); font-size: 1.05rem; transition: opacity .25s, transform var(--t-med) var(--spring); }
++.stay-ctl.active .stay-trigger { color: var(--accent); }
++.stay-pick { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; padding: 0 12px; border: 0; border-radius: 0; background: transparent; color: var(--text); font-size: .86rem; opacity: 0; pointer-events: none; transition: opacity .3s .12s; }
++.stay-ctl.open { width: min(200px, 54vw); border-color: var(--accent); }
++.stay-ctl.open .stay-trigger { opacity: 0; transform: scale(.3) rotate(90deg); pointer-events: none; }
++.stay-ctl.open .stay-pick { opacity: 1; pointer-events: auto; }
++.approval { width: min(560px, calc(100% - 32px)); max-height: 88dvh; overflow-y: auto; } .approval h2 { margin: 0; } .approval p { margin: 0; } .approval h3 { margin: var(--sp-2) 0 0; }
++.ap-meta { display: flex; align-items: center; gap: var(--sp-2); } .ap-actions { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); }
++.approval pre { margin: var(--sp-2) 0 0; padding: 10px 12px; max-height: 38dvh; overflow: auto; border-radius: var(--r-m); border: 1px solid var(--line); background: rgba(3, 6, 12, .75); font: .78rem / 1.55 var(--font-mono); white-space: pre-wrap; }
++.link-btn { justify-self: center; color: var(--text-3); text-decoration: underline; font-size: .82rem; padding: 6px; } .link-btn:hover { color: var(--text); }
++.warn-pill { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
++.agent-item { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-2); padding: 10px 0; border-bottom: 1px solid var(--line); } .agent-item:last-child { border-bottom: 0; }
++.agent-item > div { min-width: 0; } .agent-item b { overflow-wrap: anywhere; margin-right: 6px; } .agent-item small { display: block; color: var(--text-3); font-size: .78rem; overflow-wrap: anywhere; }
+diff --git a/core/web/app.js b/core/web/app.js
+index 1fa8580..f958159 100644
+--- a/core/web/app.js
++++ b/core/web/app.js
+@@ -108,6 +108,8 @@
+     return mode === 'auto' || !turns ? name : name + ' \u00b7 ' + turns + ' left';
+   }
+ 
++  const STAY_OPTIONS = [[0, 'Until I turn it off'], [1, 'Next message'], [3, '3 messages'], [5, '5 messages'], [10, '10 messages'], [20, '20 messages']];
++
+   function stayLabel(n) {
+     n = Number(n) || 0;
+     return n <= 0 ? 'until I turn it off' : n === 1 ? '1 message' : n + ' messages';
+@@ -285,7 +287,7 @@
+ 
+   if (typeof module !== 'undefined' && module.exports) {
+     module.exports = { escapeHtml, renderMarkdown, parseSSE, stripForSpeech, greetingFor, GREETINGS,
+-      modelLabel, stayLabel, resampleMean, encodeWav, commandSuggestions,
++      modelLabel, stayLabel, STAY_OPTIONS, resampleMean, encodeWav, commandSuggestions,
+       parseTrace, liveLabel, titleFor, groupChats, clipFile, composeMessage, restorePayload, TOOL_VERBS, MODEL_GLYPH, MODEL_NAMES };
+     return;
+   }
+@@ -531,32 +533,68 @@
+     }
+   }
+ 
++  // Tap a model: stay on it until turned off. The control at the right (a tick on the active model, an
++  // arrow elsewhere) morphs into a dropdown for "stay N messages".
++  function stayControl(id) {
++    const active = status.mode === id;
++    const turns = active ? (status.forced_turns || 0) : 0;
++    const ctl = document.createElement('div');
++    ctl.className = 'stay-ctl' + (active ? ' active' : '');
++    const trigger = document.createElement('button');
++    trigger.type = 'button';
++    trigger.className = 'stay-trigger';
++    trigger.textContent = active ? '\u2713' : '\u25BE';
++    trigger.setAttribute('aria-label', (active ? 'Staying on ' + MODEL_NAMES[id] + ' ' + stayLabel(turns) + '. ' : '') + 'Choose how long to stay on ' + MODEL_NAMES[id]);
++    const pick = document.createElement('select');
++    pick.className = 'stay-pick';
++    pick.tabIndex = -1;
++    pick.setAttribute('aria-label', 'How long to stay on ' + MODEL_NAMES[id]);
++    const options = STAY_OPTIONS.slice();
++    if (turns && !options.some((o) => o[0] === turns)) options.push([turns, stayLabel(turns)]);
++    for (const [n, label] of options) {
++      const o = document.createElement('option');
++      o.value = String(n);
++      o.textContent = label;
++      pick.appendChild(o);
++    }
++    pick.value = String(turns);
++    const close = () => { ctl.classList.remove('open'); pick.tabIndex = -1; };
++    trigger.onclick = () => {
++      ctl.classList.add('open');
++      pick.tabIndex = 0;
++      pick.focus();
++      try { if (pick.showPicker) pick.showPicker(); } catch (e) { /* the tap itself opens it */ }
++    };
++    pick.onchange = () => { close(); chooseModel(id, Number(pick.value)); };
++    pick.onblur = () => setTimeout(close, 150);
++    ctl.appendChild(trigger);
++    ctl.appendChild(pick);
++    return ctl;
++  }
++
+   function renderModelSheet() {
+     if (!status) return;
+     const list = $('model-list');
++    if (list.querySelector('.stay-ctl.open')) return;  // do not yank a dropdown away mid-choice
+     list.textContent = '';
+     const st = modelStates(status);
+     for (const id of ['auto', 'qwen', 'lfm', 'gemini']) {
++      const item = document.createElement('div');
++      item.className = 'model-item';
+       const row = document.createElement('button');
+       row.type = 'button';
+       row.className = 'model-row' + (status.mode === id ? ' on' : '');
+       row.innerHTML = '<span class="dot ' + st[id].cls + '"></span><span class="name">' + MODEL_NAMES[id] +
+-        '<small>' + escapeHtml(st[id].sub) + '</small></span><span class="check">&#10003;</span>';
+-      row.onclick = () => chooseModel(id);
+-      list.appendChild(row);
+-    }
+-    const forced = status.mode !== 'auto';
+-    $('stay').hidden = !forced;
+-    if (forced) {
+-      const n = status.forced_turns || 0;
+-      $('stay-range').value = n;
+-      $('stay-val').textContent = stayLabel(n);
++        '<small>' + escapeHtml(st[id].sub) + '</small></span>';
++      row.onclick = () => chooseModel(id, 0);
++      item.appendChild(row);
++      if (id !== 'auto') item.appendChild(stayControl(id));
++      list.appendChild(item);
+     }
+   }
+ 
+-  async function chooseModel(id) {
++  async function chooseModel(id, n) {
+     try {
+-      const n = Number($('stay-range').value) || 0;
+       toast(await command('/model ' + id + (id !== 'auto' && n > 0 ? ' ' + n : '')));
+     } catch (e) { toast(e.message); }
+     pollStatus(true);
+@@ -930,6 +968,8 @@
+         buffer = parsed.rest;
+         for (const { event, data } of parsed.events) {
+           if (event === 'wake' && data.seq !== wakeSeq) { wakeSeq = data.seq; onWake(); }
++          else if (event === 'approval') showApproval(data);
++          else if (event === 'approval_done' && data.id === approvalId) { $('approval-sheet').hidden = true; approvalId = ''; }
+         }
+       }
+     }).catch(() => {}).then(() => setTimeout(connectEvents, 3000));
+@@ -1347,6 +1387,95 @@
+     renderWakeRow();
+   }
+ 
++  // ---- agent: approving tools Gemini wrote, modes, saved tools and tasks
++
++  let approvalId = '';
++
++  function showApproval(info) {
++    approvalId = info.id;
++    $('ap-title').textContent = info.replaces ? 'Update a tool?' : 'Add a new tool?';
++    $('ap-name').textContent = info.name;
++    $('ap-level').textContent = info.level === 'high' ? 'higher-level' : 'normal';
++    $('ap-level').classList.toggle('warn-pill', info.level === 'high');
++    $('ap-desc').textContent = info.description;
++    $('ap-how').textContent = info.how_it_works;
++    const why = info.reasons || [];
++    $('ap-reasons').hidden = !why.length;
++    $('ap-reasons').textContent = 'Higher-level because it ' + why.join('; ');
++    $('ap-code').textContent = info.code || '';
++    $('approval-sheet').hidden = false;
++    $('ap-allow').focus();
++  }
++
++  async function answerApproval(approve, yolo) {
++    const id = approvalId;
++    $('approval-sheet').hidden = true;
++    approvalId = '';
++    if (!id) return;
++    try {
++      if (yolo) await apiJson('/api/settings', { key: 'agent.mode', value: 'yolo' });
++      await apiJson('/api/approve', { id, approve });
++    } catch (e) { toast(e.message); }
++    pollStatus(true);
++  }
++
++  function agentList(box, items, build) {
++    box.textContent = '';
++    if (!items.length) {
++      const p = document.createElement('p');
++      p.className = 'empty-note';
++      p.textContent = 'Nothing saved yet';
++      box.appendChild(p);
++      return;
++    }
++    for (const it of items) box.appendChild(build(it));
++  }
++
++  function agentItem(title, pill, sub, meta, onRemove) {
++    const row = document.createElement('div');
++    row.className = 'agent-item';
++    const body = document.createElement('div');
++    const head = document.createElement('b');
++    head.textContent = title;
++    body.appendChild(head);
++    if (pill) { const p = document.createElement('span'); p.className = 'via' + (pill === 'higher-level' ? ' warn-pill' : ''); p.textContent = pill; body.appendChild(p); }
++    const d = document.createElement('small');
++    d.textContent = sub;
++    body.appendChild(d);
++    const m = document.createElement('small');
++    m.textContent = meta;
++    body.appendChild(m);
++    const x = document.createElement('button');
++    x.type = 'button';
++    x.className = 'icon';
++    x.setAttribute('aria-label', 'Remove ' + title);
++    x.textContent = '\u2715';
++    x.addEventListener('click', onRemove);
++    row.appendChild(body);
++    row.appendChild(x);
++    return row;
++  }
++
++  async function loadAgent() {
++    let d;
++    try { d = await (await api('/api/agent')).json(); } catch (e) { return; }
++    for (const b of $('agent-mode-seg').children) b.classList.toggle('on', b.dataset.v === d.mode);
++    $('agent-mode-help').textContent = d.modes[d.mode];
++    $('opt-elevated').checked = d.high_tools;
++    agentList($('agent-tools'), d.tools, (t) => agentItem(t.name, t.level === 'high' ? 'higher-level' : '', t.description + ' ' + t.how_it_works,
++      'used ' + t.uses + 'x', async () => { toast(await command('/tools remove ' + t.name)); loadAgent(); }));
++    agentList($('agent-tasks'), d.tasks, (t) => agentItem(t.prompt, '', t.tools.length ? 'Uses ' + t.tools.join(', ') : 'Answered directly',
++      'reused ' + t.uses + 'x, done ' + t.runs + 'x', async () => { toast(await command('/tasks remove ' + t.id)); loadAgent(); }));
++    if (d.pending && d.pending.length && !approvalId) showApproval(d.pending[0]);
++  }
++
++  async function clearAgent(what) {
++    if (!confirm('Delete all saved ' + what + '?')) return;
++    try { toast(await command('/' + what + ' clear')); } catch (e) { toast(e.message); }
++    loadAgent();
++    pollStatus(true);
++  }
++
+   // Settings is a page of its own (General / Voice / Advanced), not a popup. Android's back button leaves it.
+   let settingsTab = 'general';
+ 
+@@ -1360,6 +1489,7 @@
+     settingsTab = name;
+     for (const b of $('settings-tabs').children) { const on = b.dataset.tab === name; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; }
+     for (const p of $('settings-view').querySelectorAll('.panel')) p.classList.toggle('on', p.dataset.panel === name);
++    if (name === 'agent') loadAgent();
+   }
+ 
+   function openSettings() {
+@@ -1663,6 +1793,7 @@
+         closeLog();
+         $('menu').hidden = true;
+         $('tools-menu').hidden = true;
++        if (!$('approval-sheet').hidden) answerApproval(false, false);
+         for (const id of ['model-sheet', 'voice-sheet']) $(id).hidden = true;
+         if (!$('settings-view').hidden) closeSettings();
+       } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k') {
+@@ -1804,11 +1935,16 @@
+     $('opt-wake').addEventListener('change', () => saveSetting('wake.enabled', $('opt-wake').checked, () => { $('opt-wake').checked = !$('opt-wake').checked; }));
+     $('wake-phrase').addEventListener('change', () => saveSetting('wake.phrase', $('wake-phrase').value.trim(), renderWakeRow));
+     $('adv-log').addEventListener('click', openLog);
++    for (const b of $('agent-mode-seg').children) b.addEventListener('click', async () => { await saveSetting('agent.mode', b.dataset.v); loadAgent(); });
++    $('opt-elevated').addEventListener('change', async () => { await saveSetting('agent.high_tools', $('opt-elevated').checked, () => { $('opt-elevated').checked = !$('opt-elevated').checked; }); loadAgent(); });
++    $('clear-tools').addEventListener('click', () => clearAgent('tools'));
++    $('clear-tasks').addEventListener('click', () => clearAgent('tasks'));
++    $('ap-allow').addEventListener('click', () => answerApproval(true, false));
++    $('ap-deny').addEventListener('click', () => answerApproval(false, false));
++    $('ap-yolo').addEventListener('click', () => answerApproval(true, true));
+     window.addEventListener('popstate', () => showSettings(location.hash === '#settings'));
+     if (location.hash === '#settings') showSettings(true);
+     $('model-sheet').addEventListener('click', (ev) => { if (ev.target === $('model-sheet')) $('model-sheet').hidden = true; });
+-    $('stay-range').addEventListener('input', (ev) => { $('stay-val').textContent = stayLabel(ev.target.value); });
+-    $('stay-range').addEventListener('change', () => { if (status && status.mode !== 'auto') chooseModel(status.mode); });
+     for (const b of $('think-seg').children) {
+       b.addEventListener('click', async () => {
+         try { toast(await command('/think ' + b.dataset.v)); } catch (e) { toast(e.message); }
+diff --git a/core/web/index.html b/core/web/index.html
+index 272e15f..66be6d1 100644
+--- a/core/web/index.html
++++ b/core/web/index.html
+@@ -84,6 +84,7 @@
+         <div class="tabs" id="settings-tabs" role="tablist" aria-label="Settings sections">
+           <button type="button" role="tab" data-tab="general" class="on">General</button>
+           <button type="button" role="tab" data-tab="voice">Voice</button>
++          <button type="button" role="tab" data-tab="agent">Agent</button>
+           <button type="button" role="tab" data-tab="advanced">Advanced</button>
+         </div>
+         <div class="sv-body">
+@@ -123,6 +124,24 @@
+         <label class="row" id="row-ondevice"><span>Chrome: on-device only<small>Off lets Chrome use Google's cloud</small></span><input type="checkbox" id="opt-ondevice"></label>
+       </section>
+           </div>
++          <div class="panel" role="tabpanel" data-panel="agent">
++            <section>
++              <h3>Approval mode</h3>
++              <div class="seg" id="agent-mode-seg"><button type="button" data-v="ask">Ask</button><button type="button" data-v="yolo">Yolo</button><button type="button" data-v="off">Off</button></div>
++              <p class="hint" id="agent-mode-help"></p>
++              <label class="row"><span>Allow higher-level tools<small>Network, shell, files outside the sandbox. Also /elevated</small></span><input type="checkbox" id="opt-elevated"></label>
++            </section>
++            <section>
++              <h3>Saved tools</h3>
++              <div id="agent-tools"></div>
++              <button id="clear-tools" class="wide ghost" type="button">Clear all tools</button>
++            </section>
++            <section>
++              <h3>Saved tasks</h3>
++              <div id="agent-tasks"></div>
++              <button id="clear-tasks" class="wide ghost" type="button">Clear all tasks</button>
++            </section>
++          </div>
+           <div class="panel" role="tabpanel" data-panel="advanced">
+             <section>
+         <h3>FAZE</h3>
+@@ -165,11 +184,7 @@
+       <div class="grab"></div>
+       <h3>Model</h3>
+       <div id="model-list"></div>
+-      <div id="stay" hidden>
+-        <div class="stay-head"><span>Stay on this model</span><b id="stay-val">until I turn it off</b></div>
+-        <input type="range" id="stay-range" min="0" max="20" step="1" value="0" aria-label="Messages to stay on this model">
+-        <div class="ticks"><span>until I turn it off</span><span>20 messages</span></div>
+-      </div>
++      <p class="hint">Tap a model to stay on it until you turn it off. Tap the &#10003; or arrow to pick how long instead.</p>
+       <h3>Thinking</h3>
+       <div class="seg" id="think-seg">
+         <button type="button" data-v="auto">Auto</button>
+@@ -202,6 +217,20 @@
+     </div>
+   </div>
+ 
++  <div class="overlay center" id="approval-sheet" hidden>
++    <div class="pair-body approval" role="alertdialog" aria-labelledby="ap-title">
++      <h2 id="ap-title">Add a new tool?</h2>
++      <div class="ap-meta"><span id="ap-name" class="key"></span><span id="ap-level" class="via"></span></div>
++      <p id="ap-desc"></p>
++      <h3>How it works</h3>
++      <p id="ap-how"></p>
++      <p id="ap-reasons" class="hint" hidden></p>
++      <details><summary>Show the code</summary><pre id="ap-code"></pre></details>
++      <div class="ap-actions"><button id="ap-deny" class="wide ghost" type="button">Deny</button><button id="ap-allow" class="wide" type="button">Approve</button></div>
++      <button id="ap-yolo" class="link-btn" type="button">Approve and stop asking (yolo mode)</button>
++    </div>
++  </div>
++
+   <div class="overlay center" id="pair" hidden>
+     <div class="pair-body" role="dialog" aria-label="Pair">
+       <h2>Pair with FAZE</h2>
+diff --git a/core/web_server.py b/core/web_server.py
+index 245ad71..f27a300 100644
+--- a/core/web_server.py
++++ b/core/web_server.py
+@@ -25,10 +25,12 @@ import shutil
+ import subprocess
+ import threading
+ import time
++import uuid
+ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ from pathlib import Path
+ 
+ import action_log
++import agent
+ import stt
+ import tts
+ import wake
+@@ -99,6 +101,43 @@ class FazeServer(ThreadingHTTPServer):
+         self._wake_last = 0.0
+         self.wake = None
+         self._wake_cmd = None
++        self._approvals = {}
++        self._approval_lock = threading.Lock()
++        convo.approver = self.request_approval
++
++    # ---- asking the user to approve a tool Gemini wrote ------------------
++
++    def request_approval(self, info: dict, timeout: float = 180.0) -> bool:
++        """Block the turn until an open app answers (or the turn is stopped / time runs out)."""
++        token = uuid.uuid4().hex[:10]
++        slot = {"event": threading.Event(), "approved": False, "info": info}
++        with self._approval_lock:
++            self._approvals[token] = slot
++        self.publish("approval", {"id": token, **info})
++        action_log.log_action("agent", "approval", {"tool": info.get("name")}, "waiting for you", 0, echo=False)
++        deadline = time.monotonic() + timeout
++        try:
++            while not slot["event"].wait(0.25):
++                if self.convo._cancel.is_set() or time.monotonic() > deadline:
++                    return False
++            return slot["approved"]
++        finally:
++            with self._approval_lock:
++                self._approvals.pop(token, None)
++            self.publish("approval_done", {"id": token})
++
++    def resolve_approval(self, token: str, approved: bool) -> bool:
++        with self._approval_lock:
++            slot = self._approvals.get(token)
++        if not slot:
++            return False
++        slot["approved"] = bool(approved)
++        slot["event"].set()
++        return True
++
++    def pending_approvals(self) -> list:
++        with self._approval_lock:
++            return [{"id": t, **slot["info"]} for t, slot in self._approvals.items()]
+ 
+     # ---- push events to open apps (Server-Sent Events) ------------------
+ 
+@@ -280,6 +319,11 @@ class Handler(BaseHTTPRequestHandler):
+                 return self._json(200, {"settings": self.server.convo.settings_list()})
+             if path == "/api/commands":
+                 return self._json(200, {"commands": self.server.convo.commands()})
++            if path == "/api/agent":
++                cfg = self.server.convo.config["agent"]
++                return self._json(200, {"mode": cfg["mode"], "high_tools": cfg["high_tools"],
++                                        "modes": {m: agent.MODE_HELP[m] for m in agent.MODES},
++                                        "pending": self.server.pending_approvals(), **agent.STORE.snapshot()})
+             if path == "/api/log":
+                 try:
+                     n = int((self.path.split("n=", 1) + ["60"])[1].split("&")[0]) if "n=" in self.path else 60
+@@ -314,6 +358,10 @@ class Handler(BaseHTTPRequestHandler):
+         if path == "/api/restore":
+             kept = self.server.convo.restore_history(data.get("messages"))
+             return self._json(200, {"ok": True, "kept": kept})
++        if path == "/api/approve":
++            if not self.server.resolve_approval(str(data.get("id", "")), bool(data.get("approve"))):
++                return self._error(404, "nothing is waiting for approval")
++            return self._json(200, {"ok": True})
+         if path == "/api/cancel":
+             self.server.convo.cancel()
+             return self._json(200, {"ok": True})
+@@ -345,6 +393,8 @@ class Handler(BaseHTTPRequestHandler):
+             "tts": dict(convo.config["tts"]),
+             "user_name": convo._names()[1],
+             "forced_turns": convo.forced_remaining,
++            "agent": {"mode": convo.config["agent"]["mode"], "high_tools": convo.config["agent"]["high_tools"],
++                      "tools": len(agent.STORE.tools), "tasks": len(agent.STORE.tasks)},
+             "turns": max(0, len(convo.messages) - 1),
+             "think": convo.config["reasoning"]["mode"],
+             "stt": {"server": stt.available(convo.config), "pref": convo.config["voice"]["stt"],
+@@ -379,8 +429,8 @@ class Handler(BaseHTTPRequestHandler):
+         if not self.server.tts_lock.acquire(blocking=False):
+             return self._error(409, "still speaking the last reply")
+         try:
+-            wav = tts.synthesize(str(data.get("text", "")), str(data.get("voice") or cfg["voice"]), cfg["model"])
+-            self._send(200, wav, "audio/wav", {"Cache-Control": "no-store"})
++            audio, kind = tts.synthesize_audio(str(data.get("text", "")), str(data.get("voice") or cfg["voice"]), cfg["model"])
++            self._send(200, audio, kind, {"Cache-Control": "no-store"})
+         except tts.TtsError as e:
+             self._error(422, str(e))
+         finally:
+diff --git a/scripts/pa_record.py b/scripts/pa_record.py
+index 5d26ad7..384be6c 100644
+--- a/scripts/pa_record.py
++++ b/scripts/pa_record.py
+@@ -10,6 +10,7 @@ directly, which skips that step.
+ import ctypes
+ import ctypes.util
+ import os
++import subprocess
+ import sys
+ 
+ PA_SAMPLE_S16LE = 3
+@@ -30,8 +31,26 @@ def load_lib():
+     return None
+ 
+ 
++def choose_source(listing: str):
++    """Pick the real microphone from `pactl list short sources`. The pulse default is often a
++    sink *monitor* (what the phone is playing), which records pure silence."""
++    names = [line.split("\t")[1] if "\t" in line else (line.split() + ["", ""])[1] for line in listing.splitlines() if line.strip()]
++    mics = [n for n in names if n and not n.endswith(".monitor")]
++    return "OpenSL_ES_source" if "OpenSL_ES_source" in mics else (mics[0] if mics else None)
++
++
++def detect_source():
++    try:
++        out = subprocess.run(["pactl", "list", "short", "sources"], capture_output=True, text=True, timeout=5)
++    except (OSError, subprocess.SubprocessError):
++        return None
++    return choose_source(out.stdout) if out.returncode == 0 else None
++
++
+ def main(argv) -> int:
+     source = (argv[1] if len(argv) > 1 else os.environ.get("FAZE_MIC_SOURCE", "")) or None
++    if source in (None, "auto"):
++        source = detect_source()
+     rate = int(argv[2]) if len(argv) > 2 else 16000
+     lib = load_lib()
+     if lib is None:

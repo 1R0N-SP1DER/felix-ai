@@ -133,11 +133,11 @@ class TestSettingsPage(unittest.TestCase):
         self.assertNotIn("crash", self.res, self.res.get("crash"))
         self.assertEqual(self.res["errors"], [])
 
-    def test_settings_is_a_page_with_three_tabs(self):
+    def test_settings_is_a_page_with_tabs(self):
         s = self.res["settings"]
         self.assertTrue(s["open"] and s["bodyClass"])
         self.assertEqual(s["hash"], "#settings")
-        self.assertEqual(s["tabs"], ["General", "Voice", "Advanced"])
+        self.assertEqual(s["tabs"], ["General", "Voice", "Agent", "Advanced"])
         self.assertEqual((s["panel"], s["voicePanel"], s["advancedPanel"]), (["general"], ["voice"], ["advanced"]))
         self.assertTrue(s["closed"])
         self.assertEqual(s["hashAfter"], "")
