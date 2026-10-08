@@ -202,10 +202,15 @@ def _limits(timeout):
     return apply
 
 
+_SECRET = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH", re.IGNORECASE)
+
+
 def _clean_env(work: Path) -> dict:
-    keep = {k: v for k, v in os.environ.items() if k in ("PATH", "LANG", "LC_ALL", "TERM", "PREFIX", "ANDROID_ROOT", "ANDROID_DATA")}
-    keep.update({"HOME": str(work), "TMPDIR": str(work), "PYTHONIOENCODING": "utf-8"})
-    return keep  # no API keys, no tokens
+    """Everything the shell had (Android's variables, Termux's library paths: stripping those makes system
+    binaries such as am and su crash in the linker) minus anything that looks like a secret."""
+    env = {k: v for k, v in os.environ.items() if not _SECRET.search(k)}
+    env.update({"HOME": str(work), "TMPDIR": str(work), "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1"})
+    return env
 
 
 # ---------------------------------------------------------------- store
@@ -466,8 +471,14 @@ def agent_note(config: dict) -> str:
     if cfg.get("mode", "ask") == "off":
         return ""
     high = "Higher-level tools are allowed." if cfg.get("high_tools") else "Higher-level tools are NOT allowed: use pure computation only."
-    return ("\nYou can finish tasks in several steps. If no existing tool fits, create one with create_tool, then call it. "
-            "Check the existing tools first; do not recreate one that exists. " + high + "\n")
+    return ("\nYou can finish tasks in several steps. When the user asks for something none of your tools can do, never say you "
+            "can't: build the tool with create_tool, then call it. Check the existing tools first; do not recreate one that exists. "
+            "If a tool errors, read the error, fix the code and call create_tool again with the same name (up to two fixes) before "
+            "telling the user what went wrong, quoting the exact error. "
+            "Your tools run as Python 3 on the user's rooted Android phone inside Termux, not on a desktop: `am start -a "
+            "android.intent.action.VIEW -d URL`, `termux-*` commands and `su -c` exist. Call them with subprocess and a list of "
+            "arguments. If a command prints 'CFI' or a linker error, run it again with env set to a copy of os.environ without "
+            "LD_PRELOAD and LD_LIBRARY_PATH. " + high + "\n")
 
 
 def custom_tools_text() -> str:

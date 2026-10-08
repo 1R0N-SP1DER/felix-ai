@@ -46,13 +46,29 @@ def configure(config: dict) -> None:
     SETTINGS["root"] = mode if mode in ROOT_MODES else "auto"
 
 
-def _run(cmd: list, timeout: float = 15.0):
+def system_env() -> dict:
+    """The environment without Termux's preload and library paths. Android's own binaries (am, pm, su,
+    app_process) can die in the linker with a "CFI ... control flow integrity" error when those are set."""
+    return {k: v for k, v in os.environ.items() if k not in ("LD_PRELOAD", "LD_LIBRARY_PATH")}
+
+
+def _linker_crash(proc) -> bool:
+    return bool(re.search(r"\bCFI:|linker64|CANNOT LINK", (proc.stdout or "") + (proc.stderr or "")))
+
+
+def _exec(cmd: list, timeout: float, env=None):
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         raise ActionError(f"{cmd[0]} timed out")
     except OSError as e:
         raise ActionError(f"could not run {cmd[0]}: {e.strerror or e}")
+
+
+def _run(cmd: list, timeout: float = 15.0):
+    proc = _exec(cmd, timeout)
+    if _linker_crash(proc):
+        proc = _exec(cmd, timeout, system_env())  # same command, cleaner environment
     return proc
 
 
@@ -76,7 +92,7 @@ def _android_start(args: list) -> str:
             raise ActionError(f"Android refused to start it ({problem}); allow root with /settings set actions.root auto")
     if not shutil.which("su"):
         raise ActionError(f"Android refused to start it ({problem or 'no su available'})")
-    again = _am_failed(_run(["su", "-c", "am start " + " ".join(shlex.quote(a) for a in args)]))
+    again = _am_failed(_run(["su", "-c", "unset LD_PRELOAD LD_LIBRARY_PATH; am start " + " ".join(shlex.quote(a) for a in args)]))
     if again:
         raise ActionError(f"could not start it, even as root ({again})")
     return "via root"

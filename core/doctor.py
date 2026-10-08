@@ -79,6 +79,17 @@ def run_checks(config: dict) -> list:
         return (OK, "xdg-open found") if shutil.which("xdg-open") else (FAIL, "neither am nor xdg-open found")
     add("Open apps and links", device)
 
+    def system_commands():
+        if not actions._is_android():
+            return SKIP, "not on Android"
+        proc = actions._run(["am", "help"])
+        text = ((proc.stdout or "") + (proc.stderr or "")).strip()
+        first = text.splitlines()[0][:120] if text else "no output"
+        if actions._linker_crash(proc):
+            return FAIL, f"am crashes in the linker even with a clean environment: {first}"
+        return (OK, "am runs") if "usage" in text.lower() or proc.returncode == 0 else (WARN, f"am said: {first}")
+    add("Android system commands", system_commands)
+
     def yt():
         found = actions.youtube_find("mrwhosetheboss", latest=True)
         return (OK, f"found {found[1][:50] or found[0]}") if found else (FAIL, "no video found (YouTube changed its page?)")
