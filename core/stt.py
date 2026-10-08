@@ -10,6 +10,8 @@ leaves the phone.
 
 import os
 import re
+import time
+from collections import deque
 import struct
 import subprocess
 import tempfile
@@ -94,3 +96,52 @@ def transcribe_wav(data: bytes, config: dict) -> str:
         tail = (run.stderr or "").strip().splitlines()[-1:] or ["no error text"]
         raise TranscribeError(f"whisper-cli failed (code {run.returncode}): {tail[0][:120]}")
     return clean_text(run.stdout)
+
+
+# ---------------------------------------------------------------- wake word engine (online first)
+
+_ONLINE = {"blocked_until": 0.0, "recent": deque(maxlen=64)}
+
+
+def online_usable(config: dict, now=time.monotonic) -> bool:
+    if config.get("wake", {}).get("engine", "auto") == "whisper":
+        return False
+    if os.environ.get("FAZE_GEMINI_DISABLED") == "1" or not os.environ.get("GEMINI_API_KEY"):
+        return False
+    return now() >= _ONLINE["blocked_until"]
+
+
+def wake_ready(config: dict) -> bool:
+    return available(config) or online_usable(config)
+
+
+def _online_budget(config: dict, now) -> bool:
+    cap = int(config.get("wake", {}).get("online_per_min", 10))
+    recent = _ONLINE["recent"]
+    while recent and now() - recent[0] > 60:
+        recent.popleft()
+    if len(recent) >= cap:
+        return False
+    recent.append(now())
+    return True
+
+
+def transcribe_wake(data: bytes, config: dict, now=time.monotonic, online=None) -> str:
+    """Wake-word recognition: Gemini first (about a second), whisper.cpp when offline, rate limited or
+    out of quota. engine=gemini never falls back; engine=whisper never goes online."""
+    engine = config.get("wake", {}).get("engine", "auto")
+    if online_usable(config, now) and _online_budget(config, now):
+        try:
+            from gemini_client import GeminiError, transcribe_audio
+            return clean_text((online or transcribe_audio)(data))
+        except GeminiError as e:
+            text = str(e)
+            if re.search(r"429|quota|rate", text, re.IGNORECASE):
+                _ONLINE["blocked_until"] = now() + 300
+            if engine == "gemini":
+                raise TranscribeError(text[:160])
+    elif engine == "gemini":
+        raise TranscribeError("online recognition is unavailable right now (no key, quota pause, or too many requests)")
+    if available(config):
+        return transcribe_wav(data, config)
+    raise TranscribeError("no speech engine available (offline whisper is not installed)")

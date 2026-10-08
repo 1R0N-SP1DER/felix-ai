@@ -28,6 +28,9 @@ PERMISSION_REGISTRY = {
     "delegate_to_gemini": "safe",
     "search_web": "safe",
     "enable_thinking_mode": "safe",
+    "open_url": "safe",
+    "open_app": "safe",
+    "youtube_play": "safe",
 }
 
 VALID_TIERS = ("safe", "confirm", "block")

@@ -202,7 +202,7 @@ class FazeServer(ThreadingHTTPServer):
         if self.wake:
             return {"enabled": True, "seq": self.wake_seq, **self.wake.status()}
         return {"enabled": False, "seq": self.wake_seq, "state": "off", "detail": "",
-                "phrase": wake.phrase_for(self.config)}
+                "phrase": wake.phrase_for(self.config), "engine": self.config["wake"].get("engine", "auto")}
 
     def allowed_hosts(self):
         if not _loopback(self.bound_host):

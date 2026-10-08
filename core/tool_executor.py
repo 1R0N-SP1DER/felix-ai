@@ -5,6 +5,7 @@ and enable_thinking_mode -- the local model's real escape hatches for
 anything beyond its own reliability.
 """
 
+import re
 import subprocess
 import json
 
@@ -146,6 +147,41 @@ def delegate_to_gemini(parameters: dict) -> str:
     return f"Gemini responded with a tool request ({result['name']}) instead of an answer -- unexpected for a delegated request."
 
 
+SEARCH = {"engine": "auto", "blocked_until": 0.0}
+BREAKER_SECONDS = 600.0
+
+
+def configure(config: dict) -> None:
+    """Pick up settings that tools depend on (search engine, root mode)."""
+    import actions
+    engine = (config.get("search") or {}).get("engine", "auto")
+    SEARCH["engine"] = engine if engine in ("auto", "gemini", "web") else "auto"
+    actions.configure(config)
+
+
+def _run_action(fn, *args):
+    import actions
+    try:
+        return fn(*args)
+    except actions.ActionError as e:
+        raise ToolExecutionError(str(e))
+
+
+def open_url(parameters: dict) -> str:
+    import actions
+    return _run_action(actions.open_url, parameters.get("url"))
+
+
+def open_app(parameters: dict) -> str:
+    import actions
+    return _run_action(actions.open_app, parameters.get("app"))
+
+
+def youtube_play(parameters: dict) -> str:
+    import actions
+    return _run_action(actions.youtube_play, parameters.get("query"))
+
+
 def search_web(parameters: dict) -> str:
     """
     Called by the LOCAL model for anything current, recent, or
@@ -155,21 +191,33 @@ def search_web(parameters: dict) -> str:
     in the same request, so this cannot reuse the normal tool-calling
     call -- it is its own isolated grounded request).
     """
+    import time
+    import web_search
     query = parameters.get("query")
     if not query:
         raise ToolExecutionError("search_web requires a 'query' parameter.")
+    engine = SEARCH["engine"]
+    why = ""
+    if engine in ("auto", "gemini") and (engine == "gemini" or time.monotonic() >= SEARCH["blocked_until"]):
+        try:
+            result = ask_gemini(
+                system_message="Answer the user's question using real, current web search results. Be specific and cite what you found.",
+                conversation_messages=[{"role": "user", "content": query}],
+                use_search_grounding=True,
+            )
+            if result["type"] == "text":
+                return result["content"]
+            why = "Gemini search gave no usable answer"
+        except GeminiError as e:
+            why = str(e)
+            if re.search(r"429|quota|rate", why, re.IGNORECASE):
+                SEARCH["blocked_until"] = time.monotonic() + BREAKER_SECONDS  # stop asking for a while
+        if engine == "gemini":
+            raise ToolExecutionError(f"Web search failed: {why}")
     try:
-        result = ask_gemini(
-            system_message="Answer the user's question using real, current web search results. Be specific and cite what you found.",
-            conversation_messages=[{"role": "user", "content": query}],
-            use_search_grounding=True,
-        )
-    except GeminiError as e:
-        raise ToolExecutionError(f"Web search failed: {e}")
-
-    if result["type"] == "text":
-        return result["content"]
-    return "Search did not return a usable answer."
+        return web_search.format_results(query, web_search.ddg_search(query))
+    except web_search.SearchError as e:
+        raise ToolExecutionError(f"Web search failed: {why + '; ' if why else ''}{e}")
 
 
 def enable_thinking_mode(parameters: dict) -> str:
@@ -195,6 +243,9 @@ TOOL_EXECUTORS = {
     "delegate_to_gemini": delegate_to_gemini,
     "search_web": search_web,
     "enable_thinking_mode": enable_thinking_mode,
+    "open_url": open_url,
+    "open_app": open_app,
+    "youtube_play": youtube_play,
 }
 
 

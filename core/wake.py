@@ -154,7 +154,7 @@ class WakeListener:
         self.config = config
         self.on_wake = on_wake
         self.is_busy = is_busy
-        self.transcribe = transcribe or stt.transcribe_wav
+        self.transcribe = transcribe or stt.transcribe_wake
         self._popen, self._clock, self.retry_s = popen, clock, retry_s
         self.state, self.detail = "off", ""
         self._stop = threading.Event()
@@ -184,7 +184,8 @@ class WakeListener:
         self.state, self.detail = "off", ""
 
     def status(self) -> dict:
-        return {"state": self.state, "detail": self.detail, "phrase": phrase_for(self.config)}
+        return {"state": self.state, "detail": self.detail, "phrase": phrase_for(self.config),
+                "engine": self.config["wake"].get("engine", "auto")}
 
     def _set(self, state, detail=""):
         self.state, self.detail = state, detail
@@ -192,8 +193,8 @@ class WakeListener:
     # -- loop
     def _run(self):
         while not self._stop.is_set():
-            if not stt.available(self.config):
-                self._set("error", stt.missing_reason(self.config) or "offline speech engine is not installed")
+            if not stt.wake_ready(self.config):
+                self._set("error", stt.missing_reason(self.config) or "no speech engine: add a Gemini key or install whisper")
                 self._stop.wait(self.retry_s)
                 continue
             cmd = shlex.split(self.config["wake"]["mic_cmd"])
@@ -211,7 +212,7 @@ class WakeListener:
                 self._stop.wait(self.retry_s)
 
     def _listen(self, proc):
-        vad, silent = Vad(), 0
+        vad, silent = Vad(end_silence=max(6, int(self.config["wake"].get("end_silence_ms", 500)) // 30)), 0
         self._set("listening")
         while not self._stop.is_set():
             frame = proc.stdout.read(FRAME_BYTES)

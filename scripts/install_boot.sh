@@ -11,12 +11,13 @@ mkdir -p "$BOOT"
 
 cat > "$BOOT/faze" << 'SCRIPT'
 #!/data/data/com.termux/files/usr/bin/bash
-termux-wake-lock
-cd "$HOME/felix-ai"
-nohup ./faze.sh --serve >> "$HOME/felix-ai/faze.log" 2>&1 &
+"$HOME/felix-ai/scripts/faze_service.sh" start
 SCRIPT
 chmod +x "$BOOT/faze"
 
+chmod +x "$HOME/felix-ai/scripts/faze_service.sh"
+mkdir -p "$HOME/.local/bin" 2> /dev/null
+ln -sf "$HOME/felix-ai/scripts/faze_service.sh" "${PREFIX:-/usr}/bin/faze" 2> /dev/null && echo "[boot] command: faze start | stop | status | logs"
 echo "[boot] installed $BOOT/faze"
 echo "Next:"
 echo "  1. Open the Termux:Boot app once."

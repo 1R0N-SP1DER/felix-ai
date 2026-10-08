@@ -11,7 +11,7 @@ const calls = [];
 let ops = 0;
 
 const status = { name: 'Faze', qwen: { state: 'ready', detail: '', note: '' }, lfm: 'idle', gemini: true, mode: 'auto', busy: false, notices: [],
-  show_tag: true, wake: { enabled: true, state: 'listening', phrase: 'hey faze', detail: '' }, tts: { engine: 'system' }, user_name: 'Felix', forced_turns: 0, turns: 0, think: 'auto',
+  show_tag: true, wake: { enabled: true, state: 'listening', phrase: 'hey faze', detail: '', engine: 'auto' }, tts: { engine: 'system' }, user_name: 'Felix', forced_turns: 0, turns: 0, think: 'auto',
   stt: { server: false, pref: 'auto', reason: 'no whisper' } };
 
 function sse(events) {
@@ -208,6 +208,11 @@ async function fakeFetch(url, opts) {
     hash: w.location.hash, panel: panelOn(), tabs: [...$('settings-tabs').children].map((b) => b.textContent) };
   d.querySelector('#settings-tabs [data-tab="voice"]').click();
   out.settings.voicePanel = panelOn();
+  out.settings.engine = $('wake-engine').value;
+  $('wake-engine').value = 'gemini';
+  $('wake-engine').dispatchEvent(new w.Event('change'));
+  await sleep(40);
+  out.settings.engineSaved = calls.filter((c) => c.path === '/api/settings' && c.body && c.body.key === 'wake.engine').map((c) => c.body.value);
   out.settings.wake = { checked: $('opt-wake').checked, phrase: $('wake-phrase').value, status: $('wake-status').textContent };
   $('opt-wake').checked = false;
   $('opt-wake').dispatchEvent(new w.Event('change'));

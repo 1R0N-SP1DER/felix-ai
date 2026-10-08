@@ -1519,6 +1519,7 @@
     if (!w) return;
     $('opt-wake').checked = !!w.enabled;
     if (document.activeElement !== $('wake-phrase')) $('wake-phrase').value = w.phrase || '';
+    if (document.activeElement !== $('wake-engine')) $('wake-engine').value = w.engine || 'auto';
     const say = '\u201C' + (w.phrase || '') + '\u201D';
     $('wake-status').textContent = !w.enabled ? 'Off'
       : w.state === 'listening' ? 'Listening for ' + say
@@ -1933,6 +1934,7 @@
       }
     });
     $('opt-wake').addEventListener('change', () => saveSetting('wake.enabled', $('opt-wake').checked, () => { $('opt-wake').checked = !$('opt-wake').checked; }));
+    $('wake-engine').addEventListener('change', () => saveSetting('wake.engine', $('wake-engine').value, renderWakeRow));
     $('wake-phrase').addEventListener('change', () => saveSetting('wake.phrase', $('wake-phrase').value.trim(), renderWakeRow));
     $('adv-log').addEventListener('click', openLog);
     for (const b of $('agent-mode-seg').children) b.addEventListener('click', async () => { await saveSetting('agent.mode', b.dataset.v); loadAgent(); });

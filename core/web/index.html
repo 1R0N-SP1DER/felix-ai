@@ -104,6 +104,8 @@
             <section>
           <h3>Wake word</h3>
           <label class="row"><span>Listen for the wake word<small id="wake-status">Off</small></span><input type="checkbox" id="opt-wake"></label>
+          <div class="row"><span>Recognition<small>Online is fast but sends short speech clips to Google</small></span>
+            <select id="wake-engine"><option value="auto">Auto: online, offline backup</option><option value="gemini">Online only</option><option value="whisper">Offline only</option></select></div>
           <div class="row"><span>Phrase<small>2 to 40 letters</small></span><input type="text" id="wake-phrase" maxlength="40" autocomplete="off" spellcheck="false"></div>
           <p class="hint">Needs the offline speech engine (scripts/setup_whisper.sh) and a working mic. Check the mic in Termux with <code>python3 core/wake.py --check</code>.</p>
         </section>

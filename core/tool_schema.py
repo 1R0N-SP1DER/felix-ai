@@ -21,6 +21,9 @@ TOOL_REGISTRY = {
     "delegate_to_gemini": {"request": str},
     "search_web": {"query": str},
     "enable_thinking_mode": {},
+    "open_url": {"url": str},
+    "open_app": {"app": str},
+    "youtube_play": {"query": str},
 }
 
 

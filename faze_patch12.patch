@@ -1,0 +1,1514 @@
+diff --git a/core/actions.py b/core/actions.py
+new file mode 100644
+index 0000000..0f5bd39
+--- /dev/null
++++ b/core/actions.py
+@@ -0,0 +1,199 @@
++"""
++felix-ai Core -- actions.py
++Things Faze can do on the device: open a link, launch an app, play a YouTube video.
++
++On Android (Termux) this goes through `am start`; if Android refuses a background launch and
++actions.root allows it, the same command is retried through `su` (rooted phones skip that
++restriction). On a PC it falls back to xdg-open. Nothing here is shell-injectable: every command
++is an argument list, and URLs must be http(s).
++"""
++
++import json
++import os
++import re
++import shlex
++import shutil
++import subprocess
++import urllib.parse
++
++import requests
++
++ROOT_MODES = ("auto", "always", "never")
++SETTINGS = {"root": "auto"}
++UA = ("Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) "
++      "Chrome/124.0 Mobile Safari/537.36")
++
++APP_PACKAGES = {
++    "youtube": "com.google.android.youtube", "chrome": "com.android.chrome", "spotify": "com.spotify.music",
++    "whatsapp": "com.whatsapp", "telegram": "org.telegram.messenger", "maps": "com.google.android.apps.maps",
++    "google maps": "com.google.android.apps.maps", "gmail": "com.google.android.gm", "settings": "com.android.settings",
++    "play store": "com.android.vending", "discord": "com.discord", "instagram": "com.instagram.android",
++    "netflix": "com.netflix.mediaclient", "termux": "com.termux", "photos": "com.google.android.apps.photos",
++    "calendar": "com.google.android.calendar", "clock": "com.google.android.deskclock", "twitter": "com.twitter.android",
++    "x": "com.twitter.android", "reddit": "com.reddit.frontpage", "tiktok": "com.zhiliaoapp.musically",
++    "snapchat": "com.snapchat.android", "twitch": "tv.twitch.android.app", "firefox": "org.mozilla.firefox",
++    "camera": "com.android.camera", "files": "com.google.android.documentsui", "messages": "com.google.android.apps.messaging",
++    "phone": "com.google.android.dialer", "contacts": "com.google.android.contacts", "drive": "com.google.android.apps.docs",
++}
++
++
++class ActionError(Exception):
++    """An action could not be carried out; the message is safe to show the user."""
++
++
++def configure(config: dict) -> None:
++    mode = (config.get("actions") or {}).get("root", "auto")
++    SETTINGS["root"] = mode if mode in ROOT_MODES else "auto"
++
++
++def _run(cmd: list, timeout: float = 15.0):
++    try:
++        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
++    except subprocess.TimeoutExpired:
++        raise ActionError(f"{cmd[0]} timed out")
++    except OSError as e:
++        raise ActionError(f"could not run {cmd[0]}: {e.strerror or e}")
++    return proc
++
++
++def _am_failed(proc) -> str:
++    """`am` often exits 0 on failure; the text is the truth."""
++    text = ((proc.stdout or "") + (proc.stderr or "")).strip()
++    if proc.returncode != 0 or re.search(r"\bError\b|Exception|not found|unable to", text, re.IGNORECASE):
++        return text.splitlines()[-1][:200] if text else f"exit code {proc.returncode}"
++    return ""
++
++
++def _android_start(args: list) -> str:
++    """Run `am start <args>`; retry through su when allowed. Returns a note ('' = plain, 'via root')."""
++    mode = SETTINGS["root"]
++    problem = ""
++    if mode != "always":
++        problem = _am_failed(_run(["am", "start"] + args))
++        if not problem:
++            return ""
++        if mode == "never":
++            raise ActionError(f"Android refused to start it ({problem}); allow root with /settings set actions.root auto")
++    if not shutil.which("su"):
++        raise ActionError(f"Android refused to start it ({problem or 'no su available'})")
++    again = _am_failed(_run(["su", "-c", "am start " + " ".join(shlex.quote(a) for a in args)]))
++    if again:
++        raise ActionError(f"could not start it, even as root ({again})")
++    return "via root"
++
++
++def _is_android() -> bool:
++    return bool(shutil.which("am"))
++
++
++def open_url(url: str) -> str:
++    url = str(url or "").strip()
++    parts = urllib.parse.urlparse(url)
++    if parts.scheme not in ("http", "https") or not parts.netloc or len(url) > 2000 or any(c in url for c in "\r\n\x00"):
++        raise ActionError("open_url needs a full http(s) link")
++    if _is_android():
++        note = _android_start(["-a", "android.intent.action.VIEW", "-d", url])
++        return f"Opened {parts.netloc}" + (f" ({note})" if note else "")
++    opener = shutil.which("xdg-open") or shutil.which("open")
++    if not opener:
++        raise ActionError("no way to open links here (no am or xdg-open)")
++    subprocess.Popen([opener, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
++    return f"Opened {parts.netloc}"
++
++
++def _find_package(name: str) -> str:
++    key = re.sub(r"\s+(app|application)$", "", name.strip().lower())
++    if key in APP_PACKAGES:
++        return APP_PACKAGES[key]
++    if re.fullmatch(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+", key):
++        return key
++    try:
++        listing = _run(["pm", "list", "packages"], 10).stdout
++    except ActionError:
++        return ""
++    squashed = re.sub(r"[^a-z0-9]", "", key)
++    hits = [p.split(":", 1)[1] for p in listing.split() if p.startswith("package:") and squashed and squashed in p.lower()]
++    return sorted(hits, key=len)[0] if hits else ""
++
++
++def open_app(app: str) -> str:
++    app = str(app or "").strip()
++    if not app or len(app) > 60:
++        raise ActionError("open_app needs an app name")
++    if _is_android():
++        package = _find_package(app)
++        if not package:
++            raise ActionError(f"I don't know an app called '{app}'")
++        note = _android_start(["-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER", "-p", package])
++        return f"Opened {app}" + (f" ({note})" if note else "")
++    binary = shutil.which(app.lower().replace(" ", "-"))
++    if not binary:
++        raise ActionError(f"I can't find '{app}' on this computer")
++    subprocess.Popen([binary], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
++    return f"Opened {app}"
++
++
++# ---------------------------------------------------------------- YouTube
++
++_VIDEO_ID = re.compile(r'"videoId":"([\w-]{11})"')
++
++
++def _first_video(html: str):
++    """(id, title) of the first video in a YouTube page's embedded data."""
++    m = _VIDEO_ID.search(html)
++    if not m:
++        return None
++    vid = m.group(1)
++    t = re.search(r'"videoId":"' + vid + r'".{0,1500}?"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"', html, re.DOTALL)
++    try:
++        title = json.loads('"' + t.group(1) + '"') if t else ""
++    except ValueError:
++        title = t.group(1) if t else ""
++    return vid, title
++
++
++def _fetch(url: str) -> str:
++    try:
++        r = requests.get(url, headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", "Cookie": "CONSENT=YES+1; SOCS=CAI"}, timeout=12)
++    except requests.RequestException as e:
++        raise ActionError(f"could not reach YouTube ({type(e).__name__})")
++    if r.status_code != 200:
++        raise ActionError(f"YouTube answered {r.status_code}")
++    return r.text
++
++
++def youtube_find(query: str, latest: bool = False):
++    """(video id, title) for a search; with latest, a bare channel name tries that channel's newest upload first."""
++    query = query.strip()
++    if latest and re.fullmatch(r"@?[A-Za-z0-9._-]{2,40}", query):
++        try:
++            found = _first_video(_fetch(f"https://www.youtube.com/@{query.lstrip('@')}/videos"))
++            if found:
++                return found
++        except ActionError:
++            pass
++    sort = "&sp=CAI%253D" if latest else ""
++    return _first_video(_fetch("https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query) + sort))
++
++
++def youtube_play(query: str, latest: bool = False) -> str:
++    query = str(query or "").strip()
++    if not query or len(query) > 120:
++        raise ActionError("youtube_play needs something to search for")
++    words = query.split()
++    fresh = [w for w in words if w.lower() in ("latest", "newest", "recent", "new", "last")]
++    if fresh:  # "mrwhosetheboss latest video": sort by upload date, drop the filler words
++        latest = True
++        rest = [w for w in words if w.lower() not in ("latest", "newest", "recent", "new", "last", "video", "videos", "upload", "uploads", "the", "a", "of")]
++        query = " ".join(rest) or query
++    found = None
++    try:
++        found = youtube_find(query, bool(latest))
++    except ActionError:
++        pass
++    if found:
++        vid, title = found
++        open_url(f"https://www.youtube.com/watch?v={vid}")
++        return f"Playing {title or 'the top result'} (youtu.be/{vid})"
++    open_url("https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query))
++    return f"Opened YouTube search for '{query}' (couldn't pick a video automatically)"
+diff --git a/core/config_loader.py b/core/config_loader.py
+index a5c1ced..d53c702 100644
+--- a/core/config_loader.py
++++ b/core/config_loader.py
+@@ -36,6 +36,9 @@ DEFAULTS = {
+         "enabled": False,
+         "phrase": "",                      # empty = "hey <assistant name>"
+         "mic_cmd": DEFAULT_MIC_CMD,
++        "engine": "auto",                  # auto: online (Gemini) when possible, else whisper | gemini | whisper
++        "end_silence_ms": 500,             # how long a pause ends the phrase
++        "online_per_min": 10,              # cap on online recognitions, so room chatter cannot eat the quota
+         "cooldown": 6,                     # seconds to ignore the wake word after it fires
+         "open_app": True,                  # open the app when it wakes and the app isn't open
+     },
+@@ -81,6 +84,8 @@ DEFAULTS = {
+     "ui": {"show_model_tag": True, "show_trace": True},
+     # Gemini-written tools: ask = approve each new tool, yolo = auto-approve with a description, off = none
+     "agent": {"mode": "ask", "high_tools": False, "max_rounds": 6},
++    "search": {"engine": "auto"},   # auto: Gemini grounding, then DuckDuckGo | gemini | web
++    "actions": {"root": "auto"},    # auto: retry blocked launches through su | always | never
+ }
+ 
+ # Settings editable with /settings: key -> (type, allowed values or None)
+@@ -107,6 +112,11 @@ SETTINGS = {
+     "boot.chat_while_booting": (str, ("lfm", "gemini", "wait")),
+     "boot.warmup": (bool, None),
+     "boot.qwen": (str, ("lazy", "eager")),
++    "search.engine": (str, ("auto", "gemini", "web")),
++    "actions.root": (str, ("auto", "always", "never")),
++    "wake.engine": (str, ("auto", "gemini", "whisper")),
++    "wake.end_silence_ms": (int, None),
++    "wake.online_per_min": (int, None),
+     "agent.mode": (str, ("off", "ask", "yolo")),
+     "agent.high_tools": (bool, None),
+     "agent.max_rounds": (int, None),
+diff --git a/core/doctor.py b/core/doctor.py
+new file mode 100644
+index 0000000..19bb7df
+--- /dev/null
++++ b/core/doctor.py
+@@ -0,0 +1,115 @@
++"""
++felix-ai Core -- doctor.py
++One command (/doctor) that tests every moving part with a real request and says exactly what fails.
++Network checks cost a handful of tiny API calls.
++"""
++
++import os
++import shutil
++import time
++
++import actions
++import agent
++import stt
++import tts
++import web_search
++
++OK, WARN, FAIL, SKIP = "ok", "warn", "fail", "skip"
++
++
++def _timed(fn):
++    start = time.time()
++    try:
++        status, detail = fn()
++    except Exception as e:  # a check must never take the report down
++        status, detail = FAIL, f"{type(e).__name__}: {str(e)[:200]}"
++    return status, f"{detail} ({time.time() - start:.1f}s)" if status != SKIP else detail
++
++
++def run_checks(config: dict) -> list:
++    from gemini_client import GeminiError, ask_gemini
++    has_key = bool(os.environ.get("GEMINI_API_KEY"))
++    out = []
++
++    def add(name, fn):
++        out.append((name,) + _timed(fn))
++
++    def key():
++        k = os.environ.get("GEMINI_API_KEY", "")
++        return (OK, f"set ({len(k)} characters)") if k else (FAIL, "GEMINI_API_KEY is not set in this process")
++    add("Gemini key", key)
++
++    def need_key(fn):
++        return fn if has_key else (lambda: (SKIP, "needs the key"))
++
++    def chat():
++        r = ask_gemini("", [{"role": "user", "content": "Reply with the single word OK."}])
++        return (OK, "answered") if r["type"] == "text" else (WARN, "returned a tool call")
++    add("Gemini chat", need_key(chat))
++
++    def tool_call():
++        r = ask_gemini("Use a tool when one fits.", [{"role": "user", "content": "What time is it right now? Use a tool."}],
++                       tools_schema=agent.gemini_schema(config))
++        return (OK, f"called {r['name']}") if r["type"] == "function_call" else (WARN, "answered without calling a tool")
++    add("Gemini tool calling", need_key(tool_call))
++
++    def make_tool():
++        if config.get("agent", {}).get("mode", "ask") == "off":
++            return SKIP, "agent mode is off (/agent ask)"
++        r = ask_gemini("Use create_tool when asked to make a tool.", [{"role": "user", "content":
++                       "Make a tool named add_two_numbers that adds two numbers a and b. Use create_tool."}],
++                       tools_schema=agent.gemini_schema(config))
++        return (OK, "proposed a tool (nothing was saved)") if r["type"] == "function_call" and r["name"] == "create_tool" \
++            else (WARN, "did not propose a tool; ask it more directly")
++    add("Gemini writes tools", need_key(make_tool))
++
++    def grounded():
++        r = ask_gemini("Answer briefly.", [{"role": "user", "content": "What is the capital of France?"}], use_search_grounding=True)
++        return (OK, "Google Search grounding works") if r["type"] == "text" else (WARN, "no text")
++    add("Gemini web search", need_key(grounded))
++
++    def ddg():
++        results = web_search.ddg_search("python programming language", 3)
++        return OK, f"{len(results)} results, first: {results[0]['title'][:50]}"
++    add("Backup web search", ddg)
++
++    def device():
++        if actions._is_android():
++            return OK, "am found" + (", su found" if shutil.which("su") else ", no su (background launches may be blocked)")
++        return (OK, "xdg-open found") if shutil.which("xdg-open") else (FAIL, "neither am nor xdg-open found")
++    add("Open apps and links", device)
++
++    def yt():
++        found = actions.youtube_find("mrwhosetheboss", latest=True)
++        return (OK, f"found {found[1][:50] or found[0]}") if found else (FAIL, "no video found (YouTube changed its page?)")
++    add("YouTube lookup", yt)
++
++    def voice():
++        audio, kind = tts.synthesize_audio("Testing.", config["tts"]["voice"], config["tts"]["model"])
++        return OK, f"{len(audio)} bytes of {kind}"
++    add("Gemini voice", need_key(voice))
++
++    def mic():
++        import sys
++        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
++        import pa_record
++        source = pa_record.detect_source()
++        return (OK, f"source {source}") if source else (FAIL, "no microphone source (pactl load-module module-sles-source)")
++    add("Microphone source", mic)
++
++    def speech():
++        online = stt.online_usable(config)
++        offline = stt.available(config)
++        if not (online or offline):
++            return FAIL, "no engine: " + (stt.missing_reason(config) or "whisper missing") + " and no Gemini key"
++        return OK, ("online" if online else "") + (" + " if online and offline else "") + ("whisper installed" if offline else "")
++    add("Wake-word recognition", speech)
++    return out
++
++
++def format_report(results: list) -> str:
++    mark = {OK: "ok  ", WARN: "warn", FAIL: "FAIL", SKIP: "skip"}
++    lines = [f"[{mark[s]}] {name}: {detail}" for name, s, detail in results]
++    bad = sum(1 for _, s, _ in results if s == FAIL)
++    lines.append(f"{len(results)} checks, {bad} failed" if bad else f"{len(results)} checks, none failed")
++    return "\n".join(lines)
+diff --git a/core/gemini_client.py b/core/gemini_client.py
+index 0f3437a..fe446e8 100644
+--- a/core/gemini_client.py
++++ b/core/gemini_client.py
+@@ -151,6 +151,35 @@ def ask_gemini(system_message: str, conversation_messages: list, tools_schema: l
+     return _extract_result(response.json())
+ 
+ 
++TRANSCRIBE_PROMPT = ("Transcribe the speech in this audio word for word. Reply with only the words spoken, "
++                     "nothing else. If there is no clear speech, reply with nothing.")
++
++
++def transcribe_audio(wav: bytes, timeout: float = 12.0) -> str:
++    """Speech to text through Gemini (16 kHz mono WAV in). Empty string when nobody spoke."""
++    import base64
++    if os.environ.get("FAZE_GEMINI_DISABLED") == "1":
++        raise GeminiError("Gemini layer is disabled in config (gemini_enabled=false).")
++    api_key = os.environ.get("GEMINI_API_KEY")
++    if not api_key:
++        raise GeminiError("GEMINI_API_KEY is not set in the environment.")
++    body = {"contents": [{"parts": [{"text": TRANSCRIBE_PROMPT},
++                                    {"inlineData": {"mimeType": "audio/wav", "data": base64.b64encode(wav).decode()}}]}],
++            "generationConfig": {"temperature": 0}}
++    try:
++        response = requests.post(f"{_base_url()}:generateContent", headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
++                                 json=body, timeout=timeout)
++    except requests.RequestException as e:
++        raise GeminiError(f"Network error calling Gemini: {e}")
++    if response.status_code != 200:
++        raise _http_error(response)
++    try:
++        parts = response.json()["candidates"][0]["content"]["parts"]
++    except (KeyError, IndexError, ValueError):
++        return ""
++    return "".join(p.get("text", "") for p in parts).strip()
++
++
+ def ask_gemini_stream(system_message: str, conversation_messages: list, tools_schema: list = None, timeout: int = 60):
+     api_key = os.environ.get("GEMINI_API_KEY")
+     if not api_key:
+diff --git a/core/gemini_tools.py b/core/gemini_tools.py
+index 0d5a20f..5f368aa 100644
+--- a/core/gemini_tools.py
++++ b/core/gemini_tools.py
+@@ -19,6 +19,9 @@ TOOL_DESCRIPTIONS = {
+     "delegate_to_gemini": "Call this for reasoning, knowledge, or judgment beyond your ability. Pass a clear description of needed help.",
+     "enable_thinking_mode": "Call this ONLY if delegate_to_gemini or search_web just failed and the question still needs careful step-by-step reasoning. No arguments.",
+     "search_web": "Call this for current, real-world information like news or live facts. Performs grounded web search. Never answer from memory.",
++    "open_url": "Call this when the user asks to open a link or website. Opens the http(s) link on the device.",
++    "open_app": "Call this when the user asks to open, launch or start an app (YouTube, Spotify, Chrome, Settings...). Launches it by name.",
++    "youtube_play": "Call this when the user asks to play, watch or find a YouTube video or a channel's latest video. Searches YouTube and starts the video.",
+ }
+ 
+ 
+@@ -28,6 +31,9 @@ TOOL_PARAM_DESCRIPTIONS = {}
+ PARAM_DESCRIPTIONS = {
+     "level": "volume level, an integer from 0 to 15",
+     "text": "the exact text to copy to the clipboard",
++    "url": "the full link, starting with https://",
++    "app": "the app's name, for example YouTube or Spotify",
++    "query": "what to search for; for a channel's newest video use the channel name plus the word latest",
+ }
+ 
+ 
+diff --git a/core/orchestrator.py b/core/orchestrator.py
+index d6aa03d..6f1e8ef 100644
+--- a/core/orchestrator.py
++++ b/core/orchestrator.py
+@@ -42,6 +42,7 @@ import agent
+ from prompt_assembler import build_static_system_message, build_turn_context, set_names
+ from tool_schema import validate_tool_call, ToolCallValidationError
+ from permission_policy import get_permission_tier, UnknownToolError
++import tool_executor
+ from tool_executor import execute_tool, ToolExecutionError
+ from tool_replies import format_reply, summarize_error, numbers_preserved
+ from direct_tool_router import try_direct_route
+@@ -103,6 +104,8 @@ COMMANDS = [
+     {"name": "tasks", "description": "List or remove saved tasks",
+      "usage": "/tasks [list|remove <id>|clear]",
+      "args": [{"value": "list", "description": "Show saved tasks"}, {"value": "clear", "description": "Delete all saved tasks"}]},
++    {"name": "doctor", "description": "Test Gemini, search, tools, actions, voice and the mic",
++     "usage": "/doctor", "args": []},
+     {"name": "log", "description": "Show recent tool and routing activity", "usage": "/log [count]", "args": []},
+     {"name": "help", "description": "List every command", "usage": "/help", "args": []},
+ ]
+@@ -123,8 +126,12 @@ TOOLS (call ONLY if the user is asking for one of these things right now):
+ - delegate_to_gemini(request) : ask a vastly more capable model for help
+ - search_web(query) : get a real, current answer from the internet
+ - enable_thinking_mode() : reason step by step instead of answering fast
++- open_url(url) : open a web link on the device
++- open_app(app) : launch an app by name
++- youtube_play(query) : find and play a YouTube video, e.g. "mrwhosetheboss latest video"
+ 
+ RULES:
++- To open, launch or play something, call the matching tool. Never say you cannot.
+ - No tool needed? Just reply normally, no tool call.
+ - Never invent a time, battery %, or clipboard content without a real tool result THIS turn.
+ - You are a small, fast model. You are NOT as capable as Gemini, which
+@@ -208,6 +215,7 @@ class Conversation:
+         self._agent_steps = []
+         self._agent_created = []
+         agent.init(config)
++        tool_executor.configure(config)
+         if config.get("gemini_enabled", True) is False:
+             os.environ["FAZE_GEMINI_DISABLED"] = "1"
+         names = config["assistant"]
+@@ -759,6 +767,9 @@ class Conversation:
+             return self._model_command(args)
+         if cmd == "/log":
+             return self._log_text(args)
++        if cmd == "/doctor":
++            import doctor
++            return doctor.format_report(doctor.run_checks(self.config))
+         if cmd == "/agent":
+             return self._agent_command(args)
+         if cmd == "/elevated":
+@@ -987,6 +998,8 @@ class Conversation:
+             self._rebuild_system()
+         if key in ("gemini.model", "gemini.search_model"):
+             gemini_client.configure(chat=self.config["gemini"]["model"], search=self.config["gemini"]["search_model"])
++        if key.startswith(("search.", "actions.")):
++            tool_executor.configure(self.config)
+         if key == "agent.high_tools":
+             agent.set_policy(high_tools=bool(value))
+         if key == "model.forced":
+@@ -1198,7 +1211,7 @@ if __name__ == "__main__":
+     convo = Conversation(config)
+     convo.start_background()
+ 
+-    if "--serve" in sys.argv[1:]:
++    if "--cli" not in sys.argv[1:]:  # the web app is the default; --cli keeps the terminal chat
+         from web_server import serve
+         serve(convo, config)
+         raise SystemExit(0)
+diff --git a/core/permission_policy.py b/core/permission_policy.py
+index 1f5d2bc..410f221 100644
+--- a/core/permission_policy.py
++++ b/core/permission_policy.py
+@@ -28,6 +28,9 @@ PERMISSION_REGISTRY = {
+     "delegate_to_gemini": "safe",
+     "search_web": "safe",
+     "enable_thinking_mode": "safe",
++    "open_url": "safe",
++    "open_app": "safe",
++    "youtube_play": "safe",
+ }
+ 
+ VALID_TIERS = ("safe", "confirm", "block")
+diff --git a/core/stt.py b/core/stt.py
+index f9216b2..a93b77f 100644
+--- a/core/stt.py
++++ b/core/stt.py
+@@ -10,6 +10,8 @@ leaves the phone.
+ 
+ import os
+ import re
++import time
++from collections import deque
+ import struct
+ import subprocess
+ import tempfile
+@@ -94,3 +96,52 @@ def transcribe_wav(data: bytes, config: dict) -> str:
+         tail = (run.stderr or "").strip().splitlines()[-1:] or ["no error text"]
+         raise TranscribeError(f"whisper-cli failed (code {run.returncode}): {tail[0][:120]}")
+     return clean_text(run.stdout)
++
++
++# ---------------------------------------------------------------- wake word engine (online first)
++
++_ONLINE = {"blocked_until": 0.0, "recent": deque(maxlen=64)}
++
++
++def online_usable(config: dict, now=time.monotonic) -> bool:
++    if config.get("wake", {}).get("engine", "auto") == "whisper":
++        return False
++    if os.environ.get("FAZE_GEMINI_DISABLED") == "1" or not os.environ.get("GEMINI_API_KEY"):
++        return False
++    return now() >= _ONLINE["blocked_until"]
++
++
++def wake_ready(config: dict) -> bool:
++    return available(config) or online_usable(config)
++
++
++def _online_budget(config: dict, now) -> bool:
++    cap = int(config.get("wake", {}).get("online_per_min", 10))
++    recent = _ONLINE["recent"]
++    while recent and now() - recent[0] > 60:
++        recent.popleft()
++    if len(recent) >= cap:
++        return False
++    recent.append(now())
++    return True
++
++
++def transcribe_wake(data: bytes, config: dict, now=time.monotonic, online=None) -> str:
++    """Wake-word recognition: Gemini first (about a second), whisper.cpp when offline, rate limited or
++    out of quota. engine=gemini never falls back; engine=whisper never goes online."""
++    engine = config.get("wake", {}).get("engine", "auto")
++    if online_usable(config, now) and _online_budget(config, now):
++        try:
++            from gemini_client import GeminiError, transcribe_audio
++            return clean_text((online or transcribe_audio)(data))
++        except GeminiError as e:
++            text = str(e)
++            if re.search(r"429|quota|rate", text, re.IGNORECASE):
++                _ONLINE["blocked_until"] = now() + 300
++            if engine == "gemini":
++                raise TranscribeError(text[:160])
++    elif engine == "gemini":
++        raise TranscribeError("online recognition is unavailable right now (no key, quota pause, or too many requests)")
++    if available(config):
++        return transcribe_wav(data, config)
++    raise TranscribeError("no speech engine available (offline whisper is not installed)")
+diff --git a/core/tests/test_patch12.py b/core/tests/test_patch12.py
+new file mode 100644
+index 0000000..ed356b7
+--- /dev/null
++++ b/core/tests/test_patch12.py
+@@ -0,0 +1,508 @@
++"""
++Actions (open links/apps, YouTube), search that survives Gemini's quota, online wake-word recognition,
++background service script, /doctor.
++
++    PYTHONPATH=. python3 -m unittest tests.test_patch12 -v
++"""
++import base64
++import os
++import subprocess
++import sys
++import tempfile
++import time
++import unittest
++from collections import deque
++from unittest import mock
++
++CORE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++ROOT = os.path.dirname(CORE)
++sys.path.insert(0, CORE)
++
++import actions  # noqa: E402
++import doctor  # noqa: E402
++import gemini_client  # noqa: E402
++import gemini_tools  # noqa: E402
++import stt  # noqa: E402
++import tool_executor  # noqa: E402
++import wake  # noqa: E402
++import web_search  # noqa: E402
++from config_loader import SETTINGS, load_config  # noqa: E402
++from gemini_client import GeminiError  # noqa: E402
++from tests.test_patch8 import HAVE_JSDOM, run_smoke  # noqa: E402
++from tool_executor import ToolExecutionError  # noqa: E402
++
++
++def proc(out="", code=0, err=""):
++    return mock.Mock(stdout=out, stderr=err, returncode=code)
++
++
++class ActionCase(unittest.TestCase):
++    def setUp(self):
++        actions.SETTINGS["root"] = "auto"
++        self.addCleanup(lambda: actions.SETTINGS.update(root="auto"))
++
++
++class TestOpenUrl(ActionCase):
++    def test_only_real_web_links(self):
++        for bad in ("", "javascript:alert(1)", "file:///etc/passwd", "intent://x", "https://", "https://a.com/\nx", "https://a.com/" + "x" * 2100, None):
++            with self.assertRaises(actions.ActionError, msg=str(bad)[:20]):
++                actions.open_url(bad)
++
++    def test_android_launch_command(self):
++        with mock.patch.object(actions, "_is_android", return_value=True), mock.patch("subprocess.run", return_value=proc("Starting: Intent")) as run:
++            self.assertEqual(actions.open_url("https://youtu.be/abc"), "Opened youtu.be")
++        self.assertEqual(run.call_args[0][0], ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://youtu.be/abc"])
++
++    def test_blocked_launch_retries_through_root(self):
++        blocked = proc("Error: Activity not started, unable to resolve Intent", 0)
++        with mock.patch.object(actions, "_is_android", return_value=True), mock.patch("shutil.which", return_value="/su"), \
++                mock.patch("subprocess.run", side_effect=[blocked, proc("Starting")]) as run:
++            self.assertEqual(actions.open_url("https://a.com/x?y=1&z=2"), "Opened a.com (via root)")
++        second = run.call_args_list[1][0][0]
++        self.assertEqual(second[:2], ["su", "-c"])
++        self.assertIn("'https://a.com/x?y=1&z=2'", second[2])  # quoted as one argument
++
++    def test_root_modes(self):
++        blocked = proc("Error: boom", 1)
++        with mock.patch.object(actions, "_is_android", return_value=True):
++            actions.SETTINGS["root"] = "never"
++            with mock.patch("subprocess.run", return_value=blocked) as run, self.assertRaises(actions.ActionError) as cm:
++                actions.open_url("https://a.com")
++            self.assertEqual(run.call_count, 1)
++            self.assertIn("actions.root", str(cm.exception))
++            actions.SETTINGS["root"] = "always"
++            with mock.patch("shutil.which", return_value="/su"), mock.patch("subprocess.run", return_value=proc("Starting")) as run:
++                actions.open_url("https://a.com")
++            self.assertEqual(run.call_args[0][0][:2], ["su", "-c"])
++            self.assertEqual(run.call_count, 1)
++            actions.SETTINGS["root"] = "auto"
++            with mock.patch("shutil.which", return_value=None), mock.patch("subprocess.run", return_value=blocked), self.assertRaises(actions.ActionError):
++                actions.open_url("https://a.com")
++
++    def test_desktop_fallback(self):
++        with mock.patch.object(actions, "_is_android", return_value=False), mock.patch("shutil.which", return_value="/usr/bin/xdg-open"), \
++                mock.patch("subprocess.Popen") as popen:
++            actions.open_url("https://a.com")
++        self.assertEqual(popen.call_args[0][0], ["/usr/bin/xdg-open", "https://a.com"])
++        with mock.patch.object(actions, "_is_android", return_value=False), mock.patch("shutil.which", return_value=None), self.assertRaises(actions.ActionError):
++            actions.open_url("https://a.com")
++
++
++class TestOpenApp(ActionCase):
++    def test_known_and_fuzzy_packages(self):
++        with mock.patch.object(actions, "_is_android", return_value=True), mock.patch("subprocess.run", return_value=proc("Starting")) as run:
++            self.assertEqual(actions.open_app("YouTube app"), "Opened YouTube app")
++        self.assertEqual(run.call_args[0][0][-2:], ["-p", "com.google.android.youtube"])
++        listing = proc("package:com.foo.bar\npackage:com.acme.supercalc\npackage:com.acme.supercalc.extra")
++        with mock.patch.object(actions, "_is_android", return_value=True), mock.patch("subprocess.run", side_effect=[listing, proc("Starting")]) as run:
++            actions.open_app("super calc")
++        self.assertEqual(run.call_args[0][0][-1], "com.acme.supercalc")
++        with mock.patch.object(actions, "_is_android", return_value=True), mock.patch("subprocess.run", return_value=proc("package:com.foo.bar")), \
++                self.assertRaises(actions.ActionError) as cm:
++            actions.open_app("nonexistent thing")
++        self.assertIn("don't know an app", str(cm.exception))
++        with self.assertRaises(actions.ActionError):
++            actions.open_app("")
++
++
++PAGE = ('..."videoRenderer":{"videoId":"dQw4w9WgXcQ","thumbnail":{},"title":{"runs":[{"text":"The \\"Best\\" Phone of 2026"}],"accessibility":{}}'
++        ',"x":1},{"videoRenderer":{"videoId":"bbbbbbbbbbb","title":{"runs":[{"text":"Second"}]}}}')
++
++
++class TestYouTube(ActionCase):
++    def test_parse_first_video(self):
++        self.assertEqual(actions._first_video(PAGE), ("dQw4w9WgXcQ", 'The "Best" Phone of 2026'))
++        self.assertEqual(actions._first_video('"videoId":"aaaaaaaaaaa"')[0], "aaaaaaaaaaa")
++        self.assertIsNone(actions._first_video("nothing here"))
++
++    def test_latest_tries_the_channel_then_sorted_search(self):
++        urls = []
++
++        def fetch(url):
++            urls.append(url)
++            if "/videos" in url:
++                raise actions.ActionError("404")
++            return PAGE
++        with mock.patch.object(actions, "_fetch", side_effect=fetch):
++            self.assertEqual(actions.youtube_find("mrwhosetheboss", latest=True)[0], "dQw4w9WgXcQ")
++        self.assertEqual(urls[0], "https://www.youtube.com/@mrwhosetheboss/videos")
++        self.assertIn("results?search_query=mrwhosetheboss&sp=CAI%253D", urls[1])
++        urls.clear()
++        with mock.patch.object(actions, "_fetch", side_effect=fetch):
++            actions.youtube_find("best phone 2026", latest=False)
++        self.assertEqual(len(urls), 1)
++        self.assertNotIn("sp=", urls[0])
++
++    def test_play_opens_the_video_or_falls_back_to_search(self):
++        with mock.patch.object(actions, "_fetch", return_value=PAGE), mock.patch.object(actions, "open_url", return_value="ok") as opened:
++            msg = actions.youtube_play("mrwhosetheboss latest video")
++        opened.assert_called_once_with("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
++        self.assertIn('Playing The "Best" Phone of 2026', msg)
++        with mock.patch.object(actions, "_fetch", side_effect=actions.ActionError("down")), mock.patch.object(actions, "open_url", return_value="ok") as opened:
++            msg = actions.youtube_play("some channel")
++        self.assertIn("results?search_query=some+channel", opened.call_args[0][0])
++        self.assertIn("couldn't pick", msg)
++        with self.assertRaises(actions.ActionError):
++            actions.youtube_play("   ")
++
++    def test_latest_words_are_filler(self):
++        seen = []
++        with mock.patch.object(actions, "youtube_find", side_effect=lambda q, latest: seen.append((q, latest)) or ("aaaaaaaaaaa", "t")), \
++                mock.patch.object(actions, "open_url", return_value="ok"):
++            actions.youtube_play("the newest mkbhd video")
++            actions.youtube_play("lofi beats")
++        self.assertEqual(seen, [("mkbhd", True), ("lofi beats", False)])
++
++
++HTML_PAGE = '''
++<div class="result"><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa%3Fx%3D1&amp;rut=abc">Example &amp; <b>Title</b></a>
++<a class="result__snippet" href="x">First <b>snippet</b> text</a></div>
++<div class="result"><a rel="nofollow" class="result__a" href="https://duckduckgo.com/y.js?ad=1">Sponsored</a><a class="result__snippet">ad</a></div>
++<div class="result"><a rel="nofollow" class="result__a" href="https://second.org/page">Second</a><a class="result__snippet">Second snippet</a></div>'''
++LITE_PAGE = '''<table><tr><td><a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Flite.example%2Fp" class='result-link'>Lite Title</a></td></tr>
++<tr><td class='result-snippet'>Lite snippet</td></tr></table>'''
++
++
++class TestWebSearch(unittest.TestCase):
++    def test_parse_html_layout(self):
++        r = web_search.parse_results(HTML_PAGE)
++        self.assertEqual([x["url"] for x in r], ["https://example.com/a?x=1", "https://second.org/page"])  # ad skipped, redirect unwrapped
++        self.assertEqual((r[0]["title"], r[0]["snippet"]), ("Example & Title", "First snippet text"))
++
++    def test_parse_lite_layout_and_limit(self):
++        r = web_search.parse_results(LITE_PAGE)
++        self.assertEqual((r[0]["title"], r[0]["url"], r[0]["snippet"]), ("Lite Title", "https://lite.example/p", "Lite snippet"))
++        self.assertEqual(len(web_search.parse_results(HTML_PAGE, limit=1)), 1)
++        self.assertEqual(web_search.parse_results("<html>blocked</html>"), [])
++
++    def test_endpoint_fallback_and_errors(self):
++        pages = [mock.Mock(status_code=202, text=""), mock.Mock(status_code=200, text=LITE_PAGE)]
++        calls = []
++        r = web_search.ddg_search("q", post=lambda url, **kw: calls.append(url) or pages.pop(0))
++        self.assertEqual(r[0]["title"], "Lite Title")
++        self.assertEqual(calls, list(web_search.ENDPOINTS))
++        with self.assertRaises(web_search.SearchError):
++            web_search.ddg_search("q", post=lambda *a, **k: mock.Mock(status_code=200, text="<html></html>"))
++        with self.assertRaises(web_search.SearchError):
++            web_search.ddg_search("  ")
++        text = web_search.format_results("q", web_search.parse_results(HTML_PAGE))
++        self.assertIn("1. Example & Title: First snippet text\n   https://example.com/a?x=1", text)
++
++
++class TestSearchTool(unittest.TestCase):
++    def setUp(self):
++        tool_executor.SEARCH.update(engine="auto", blocked_until=0.0)
++        self.addCleanup(lambda: tool_executor.SEARCH.update(engine="auto", blocked_until=0.0))
++        self.results = [{"title": "T", "url": "https://t.example", "snippet": "S"}]
++
++    def test_gemini_answer_is_used_when_it_works(self):
++        with mock.patch("tool_executor.ask_gemini", return_value={"type": "text", "content": "Paris"}), mock.patch("web_search.ddg_search") as ddg:
++            self.assertEqual(tool_executor.search_web({"query": "capital of france"}), "Paris")
++        ddg.assert_not_called()
++
++    def test_quota_error_falls_back_and_pauses_gemini(self):
++        with mock.patch("tool_executor.ask_gemini", side_effect=GeminiError("429 quota exceeded for gemini-3.1-flash-lite")) as gem, \
++                mock.patch("web_search.ddg_search", return_value=self.results):
++            first = tool_executor.search_web({"query": "news"})
++            second = tool_executor.search_web({"query": "more news"})
++        self.assertIn("1. T: S", first)
++        self.assertIn("https://t.example", second)
++        self.assertEqual(gem.call_count, 1)  # the breaker kept it from asking again
++        self.assertGreater(tool_executor.SEARCH["blocked_until"], time.monotonic())
++
++    def test_other_gemini_errors_fall_back_without_pausing(self):
++        with mock.patch("tool_executor.ask_gemini", side_effect=GeminiError("network down")), mock.patch("web_search.ddg_search", return_value=self.results):
++            self.assertIn("1. T: S", tool_executor.search_web({"query": "x"}))
++        self.assertEqual(tool_executor.SEARCH["blocked_until"], 0.0)
++
++    def test_engine_settings(self):
++        tool_executor.SEARCH["engine"] = "web"
++        with mock.patch("tool_executor.ask_gemini") as gem, mock.patch("web_search.ddg_search", return_value=self.results):
++            tool_executor.search_web({"query": "x"})
++        gem.assert_not_called()
++        tool_executor.SEARCH["engine"] = "gemini"
++        with mock.patch("tool_executor.ask_gemini", side_effect=GeminiError("boom")), mock.patch("web_search.ddg_search") as ddg, \
++                self.assertRaises(ToolExecutionError) as cm:
++            tool_executor.search_web({"query": "x"})
++        ddg.assert_not_called()
++        self.assertIn("boom", str(cm.exception))
++
++    def test_everything_fails_with_both_reasons(self):
++        with mock.patch("tool_executor.ask_gemini", side_effect=GeminiError("429 limit")), \
++                mock.patch("web_search.ddg_search", side_effect=web_search.SearchError("no results found")), self.assertRaises(ToolExecutionError) as cm:
++            tool_executor.search_web({"query": "x"})
++        self.assertIn("429 limit", str(cm.exception))
++        self.assertIn("no results found", str(cm.exception))
++        with self.assertRaises(ToolExecutionError):
++            tool_executor.search_web({})
++
++    def test_configure_reads_settings(self):
++        cfg = load_config()
++        cfg["search"]["engine"], cfg["actions"]["root"] = "web", "never"
++        tool_executor.configure(cfg)
++        self.assertEqual((tool_executor.SEARCH["engine"], actions.SETTINGS["root"]), ("web", "never"))
++        cfg["search"]["engine"], cfg["actions"]["root"] = "bogus", "bogus"
++        tool_executor.configure(cfg)
++        self.assertEqual((tool_executor.SEARCH["engine"], actions.SETTINGS["root"]), ("auto", "auto"))
++
++    def test_settings_are_registered(self):
++        for key, choices in (("search.engine", ("auto", "gemini", "web")), ("actions.root", ("auto", "always", "never")), ("wake.engine", ("auto", "gemini", "whisper"))):
++            self.assertEqual(SETTINGS[key], (str, choices))
++        cfg = load_config()
++        self.assertEqual((cfg["wake"]["engine"], cfg["wake"]["end_silence_ms"], cfg["wake"]["online_per_min"]), ("auto", 500, 10))
++
++
++class TestToolTables(unittest.TestCase):
++    def test_new_tools_reach_every_model(self):
++        gem = {t["function"]["name"]: t["function"] for t in gemini_tools.build_gemini_tools_schema()}
++        local = {t["function"]["name"]: t["function"] for t in gemini_tools.build_local_tools_schema()}
++        for name, param in (("open_url", "url"), ("open_app", "app"), ("youtube_play", "query")):
++            for table in (gem, local):
++                self.assertIn(name, table)
++                self.assertEqual(table[name]["parameters"]["required"], [param])
++        self.assertIn("channel", gem["youtube_play"]["parameters"]["properties"]["query"]["description"])
++        from orchestrator import TOOL_INSTRUCTIONS
++        self.assertIn("youtube_play(query)", TOOL_INSTRUCTIONS)
++        self.assertIn("Never say you cannot", TOOL_INSTRUCTIONS)
++
++    def test_executors_translate_errors(self):
++        with mock.patch.object(actions, "youtube_play", side_effect=actions.ActionError("down")), self.assertRaises(ToolExecutionError) as cm:
++            tool_executor.TOOL_EXECUTORS["youtube_play"]({"query": "x"})
++        self.assertEqual(str(cm.exception), "down")
++        with mock.patch.object(actions, "open_app", return_value="Opened x"):
++            self.assertEqual(tool_executor.TOOL_EXECUTORS["open_app"]({"app": "x"}), "Opened x")
++
++
++# ---------------------------------------------------------------- online wake word
++
++class TestOnlineWake(unittest.TestCase):
++    def setUp(self):
++        self.cfg = load_config()
++        self.env = mock.patch.dict(os.environ, {"GEMINI_API_KEY": "k"})
++        self.env.start()
++        self.addCleanup(self.env.stop)
++        stt._ONLINE.update(blocked_until=0.0, recent=deque(maxlen=64))
++        self.t = [1000.0]
++        self.now = lambda: self.t[0]
++
++    def go(self, online, engine="auto", whisper=("whisper words", True), **kw):
++        self.cfg["wake"]["engine"] = engine
++        with mock.patch.object(stt, "available", return_value=whisper[1]), mock.patch.object(stt, "transcribe_wav", return_value=whisper[0]) as w:
++            try:
++                return stt.transcribe_wake(b"wav", self.cfg, now=self.now, online=online, **kw), w
++            except stt.TranscribeError as e:
++                return e, w
++
++    def test_auto_prefers_online(self):
++        text, w = self.go(lambda wav: "Hey Faze")
++        self.assertEqual(text, "Hey Faze")
++        w.assert_not_called()
++
++    def test_quota_error_falls_back_to_whisper_and_pauses_online(self):
++        def boom(wav):
++            raise GeminiError("429 quota")
++        text, w = self.go(boom)
++        self.assertEqual(text, "whisper words")
++        text, w = self.go(lambda wav: self.fail("online must be paused"))
++        self.assertEqual(text, "whisper words")
++        self.t[0] += 301
++        text, _ = self.go(lambda wav: "back online")
++        self.assertEqual(text, "back online")
++
++    def test_engine_modes(self):
++        text, _ = self.go(lambda wav: self.fail("offline only"), engine="whisper")
++        self.assertEqual(text, "whisper words")
++        err, w = self.go(lambda wav: (_ for _ in ()).throw(GeminiError("network down")), engine="gemini")
++        self.assertIsInstance(err, stt.TranscribeError)
++        w.assert_not_called()
++        err, _ = self.go(lambda wav: "x", engine="auto", whisper=("", False))
++        self.assertEqual(err, "x")
++        err, _ = self.go(lambda wav: (_ for _ in ()).throw(GeminiError("network down")), whisper=("", False))
++        self.assertIsInstance(err, stt.TranscribeError)
++        self.assertIn("no speech engine", str(err))
++
++    def test_rate_cap_protects_the_quota(self):
++        self.cfg["wake"]["online_per_min"] = 3
++        calls = []
++        for _ in range(5):
++            self.go(lambda wav: calls.append(1) or "x")
++        self.assertEqual(len(calls), 3)  # the other two used whisper
++        self.t[0] += 61
++        self.go(lambda wav: calls.append(1) or "x")
++        self.assertEqual(len(calls), 4)
++
++    def test_readiness_and_noise_cleanup(self):
++        with mock.patch.object(stt, "available", return_value=False):
++            self.assertTrue(stt.wake_ready(self.cfg))
++            self.cfg["wake"]["engine"] = "whisper"
++            self.assertFalse(stt.wake_ready(self.cfg))
++            self.cfg["wake"]["engine"] = "auto"
++            with mock.patch.dict(os.environ, {"GEMINI_API_KEY": ""}):
++                self.assertFalse(stt.wake_ready(self.cfg))
++        text, _ = self.go(lambda wav: "[BLANK_AUDIO]")
++        self.assertEqual(text, "")
++
++    def test_gemini_transcribe_request(self):
++        sent = {}
++
++        def post(url, headers=None, json=None, timeout=None):
++            sent.update(url=url, body=json, headers=headers)
++            return mock.Mock(status_code=200, json=lambda: {"candidates": [{"content": {"parts": [{"text": " hey faze "}]}}]})
++        with mock.patch("requests.post", side_effect=post):
++            self.assertEqual(gemini_client.transcribe_audio(b"RIFFdata"), "hey faze")
++        parts = sent["body"]["contents"][0]["parts"]
++        self.assertEqual(parts[1]["inlineData"], {"mimeType": "audio/wav", "data": base64.b64encode(b"RIFFdata").decode()})
++        self.assertEqual(sent["headers"]["x-goog-api-key"], "k")
++        with mock.patch("requests.post", return_value=mock.Mock(status_code=200, json=lambda: {"candidates": [{"content": {"parts": []}}]})):
++            self.assertEqual(gemini_client.transcribe_audio(b"x"), "")
++        with mock.patch("requests.post", return_value=mock.Mock(status_code=429, json=lambda: {"error": {"message": "quota"}}, text="quota", headers={})), \
++                self.assertRaises(GeminiError):
++            gemini_client.transcribe_audio(b"x")
++        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": ""}), self.assertRaises(GeminiError):
++            gemini_client.transcribe_audio(b"x")
++
++    def test_listener_uses_the_configured_pause_and_reports_engine(self):
++        cfg = load_config()
++        cfg["wake"]["end_silence_ms"] = 300
++        listener = wake.WakeListener(cfg, on_wake=lambda *a: None)
++        self.assertEqual(listener.status()["engine"], "auto")
++        self.assertEqual(listener.transcribe, stt.transcribe_wake)
++
++
++# ---------------------------------------------------------------- service script and launcher
++
++class TestService(unittest.TestCase):
++    def setUp(self):
++        self.dir = tempfile.mkdtemp(prefix="faze-svc-")
++        self.fake = os.path.join(self.dir, "fake_faze.sh")
++        self.script = os.path.join(ROOT, "scripts", "faze_service.sh")
++        self.env = dict(os.environ, FAZE_STATE=os.path.join(self.dir, "state"), FAZE_LOG=os.path.join(self.dir, "faze.log"),
++                        FAZE_CMD=self.fake, FAZE_RESTART_DELAY="0.2", PATH=os.environ["PATH"])
++        self.addCleanup(lambda: self.run_svc("stop"))
++
++    def write_fake(self, body):
++        with open(self.fake, "w") as f:
++            f.write("#!/bin/bash\n" + body)
++        os.chmod(self.fake, 0o755)
++
++    def log(self):
++        try:
++            return open(self.env["FAZE_LOG"]).read()
++        except FileNotFoundError:
++            return ""
++
++    def run_svc(self, arg):
++        return subprocess.run(["bash", self.script, arg], capture_output=True, text=True, env=self.env, timeout=20)
++
++    def wait_for(self, predicate, seconds=6):
++        end = time.time() + seconds
++        while time.time() < end:
++            if predicate():
++                return True
++            time.sleep(0.1)
++        return False
++
++    def test_start_status_stop(self):
++        self.write_fake("echo started >> \"$FAZE_LOG\"; sleep 60\n")
++        self.assertEqual(self.run_svc("status").returncode, 1)
++        out = self.run_svc("start")
++        self.assertIn("started (pid", out.stdout)
++        self.assertTrue(self.wait_for(lambda: self.run_svc("status").returncode == 0))
++        self.assertIn("already running", self.run_svc("start").stdout)
++        self.assertTrue(self.wait_for(lambda: "started" in self.log()))
++        self.assertIn("stopped", self.run_svc("stop").stdout)
++        self.assertTrue(self.wait_for(lambda: self.run_svc("status").returncode == 1))
++        self.assertFalse(os.path.exists(os.path.join(self.env["FAZE_STATE"], "faze.pid")))
++
++    def test_crashes_are_restarted(self):
++        self.write_fake("echo run >> \"$FAZE_LOG\"; exit 3\n")
++        self.run_svc("start")
++        self.assertTrue(self.wait_for(lambda: self.log().count("run\n") >= 3))
++        log = self.log()
++        self.assertIn("faze exited (code 3); restarting", log)
++        self.run_svc("stop")
++        time.sleep(0.6)
++        count = self.log().count("run\n")
++        time.sleep(0.8)
++        self.assertEqual(self.log().count("run\n"), count)  # stopped means stopped
++
++    def test_boot_script_uses_the_service(self):
++        text = open(os.path.join(ROOT, "scripts", "install_boot.sh")).read()
++        self.assertIn("faze_service.sh\" start", text)
++        self.assertNotIn("--serve", text)
++
++    def test_web_app_is_the_default(self):
++        src = open(os.path.join(CORE, "orchestrator.py")).read()
++        self.assertIn('if "--cli" not in sys.argv[1:]:', src)
++        self.assertNotIn('"--serve" in sys.argv', src)
++        self.assertIn("--cli", open(os.path.join(ROOT, "faze.sh")).read())
++
++
++# ---------------------------------------------------------------- doctor
++
++class TestDoctor(unittest.TestCase):
++    def run_doctor(self, key="k", **patches):
++        cfg = load_config()
++        env = {"GEMINI_API_KEY": key}
++        with mock.patch.dict(os.environ, env), mock.patch("gemini_client.ask_gemini", **patches.get("gemini", {"return_value": {"type": "text", "content": "OK"}})), \
++                mock.patch("web_search.ddg_search", return_value=[{"title": "Python", "url": "u", "snippet": ""}]), \
++                mock.patch.object(actions, "youtube_find", return_value=("aaaaaaaaaaa", "A video")), \
++                mock.patch("tts.synthesize_audio", return_value=(b"x" * 10, "audio/wav")), \
++                mock.patch.object(stt, "available", return_value=True):
++            return {name: (status, detail) for name, status, detail in doctor.run_checks(cfg)}
++
++    def test_report_marks_each_check(self):
++        res = self.run_doctor()
++        self.assertEqual(res["Gemini key"][0], "ok")
++        self.assertEqual(res["Gemini chat"][0], "ok")
++        self.assertEqual(res["Gemini tool calling"][0], "warn")  # the stub answers in text
++        self.assertEqual(res["Backup web search"][0], "ok")
++        self.assertIn("1 results", res["Backup web search"][1])
++        self.assertEqual(res["YouTube lookup"][0], "ok")
++        self.assertEqual(res["Gemini voice"][0], "ok")
++        self.assertEqual(res["Wake-word recognition"][0], "ok")
++
++    def test_tool_writing_is_checked_for_a_create_tool_call(self):
++        res = self.run_doctor(gemini={"return_value": {"type": "function_call", "name": "create_tool", "args": {}}})
++        self.assertEqual(res["Gemini tool calling"], ("ok", mock.ANY))
++        self.assertEqual(res["Gemini writes tools"][0], "ok")
++
++    def test_failures_carry_the_real_error_and_no_key_skips(self):
++        res = self.run_doctor(gemini={"side_effect": GeminiError("429 quota exceeded, retry in 12s")})
++        self.assertEqual(res["Gemini chat"][0], "fail")
++        self.assertIn("429 quota exceeded", res["Gemini chat"][1])
++        self.assertEqual(res["Gemini web search"][0], "fail")
++        res = self.run_doctor(key="")
++        self.assertEqual(res["Gemini key"][0], "fail")
++        for name in ("Gemini chat", "Gemini tool calling", "Gemini web search", "Gemini voice"):
++            self.assertEqual(res[name][0], "skip", name)
++
++    def test_format_and_command(self):
++        text = doctor.format_report([("A", "ok", "fine"), ("B", "fail", "broken (0.1s)"), ("C", "skip", "needs the key")])
++        self.assertEqual(text.splitlines(), ["[ok  ] A: fine", "[FAIL] B: broken (0.1s)", "[skip] C: needs the key", "3 checks, 1 failed"])
++        self.assertEqual(doctor.format_report([("A", "ok", "x")]).splitlines()[-1], "1 checks, none failed")
++        from orchestrator import COMMANDS
++        self.assertIn("doctor", [c["name"] for c in COMMANDS])
++
++    def test_a_crashing_check_cannot_break_the_report(self):
++        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "k"}), mock.patch("gemini_client.ask_gemini", side_effect=RuntimeError("weird")), \
++                mock.patch("web_search.ddg_search", side_effect=KeyError("x")), mock.patch.object(actions, "youtube_find", side_effect=ValueError("y")), \
++                mock.patch("tts.synthesize_audio", side_effect=OSError("z")):
++            res = doctor.run_checks(load_config())
++        self.assertGreaterEqual(len(res), 10)
++        self.assertTrue(all(len(r) == 3 for r in res))
++        self.assertIn("RuntimeError: weird", [d for n, s, d in res if n == "Gemini chat"][0])
++
++
++@unittest.skipUnless(HAVE_JSDOM, "jsdom not installed")
++class TestEngineSetting(unittest.TestCase):
++    def test_voice_tab_has_an_engine_choice(self):
++        res = run_smoke()
++        self.assertNotIn("crash", res, res.get("crash"))
++        self.assertEqual(res["errors"], [])
++        self.assertEqual(res["settings"]["engine"], "auto")
++        self.assertEqual(res["settings"]["engineSaved"], ["gemini"])
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/core/tests/ui_smoke.js b/core/tests/ui_smoke.js
+index fe8d1cf..3f1ad5a 100644
+--- a/core/tests/ui_smoke.js
++++ b/core/tests/ui_smoke.js
+@@ -11,7 +11,7 @@ const calls = [];
+ let ops = 0;
+ 
+ const status = { name: 'Faze', qwen: { state: 'ready', detail: '', note: '' }, lfm: 'idle', gemini: true, mode: 'auto', busy: false, notices: [],
+-  show_tag: true, wake: { enabled: true, state: 'listening', phrase: 'hey faze', detail: '' }, tts: { engine: 'system' }, user_name: 'Felix', forced_turns: 0, turns: 0, think: 'auto',
++  show_tag: true, wake: { enabled: true, state: 'listening', phrase: 'hey faze', detail: '', engine: 'auto' }, tts: { engine: 'system' }, user_name: 'Felix', forced_turns: 0, turns: 0, think: 'auto',
+   stt: { server: false, pref: 'auto', reason: 'no whisper' } };
+ 
+ function sse(events) {
+@@ -208,6 +208,11 @@ async function fakeFetch(url, opts) {
+     hash: w.location.hash, panel: panelOn(), tabs: [...$('settings-tabs').children].map((b) => b.textContent) };
+   d.querySelector('#settings-tabs [data-tab="voice"]').click();
+   out.settings.voicePanel = panelOn();
++  out.settings.engine = $('wake-engine').value;
++  $('wake-engine').value = 'gemini';
++  $('wake-engine').dispatchEvent(new w.Event('change'));
++  await sleep(40);
++  out.settings.engineSaved = calls.filter((c) => c.path === '/api/settings' && c.body && c.body.key === 'wake.engine').map((c) => c.body.value);
+   out.settings.wake = { checked: $('opt-wake').checked, phrase: $('wake-phrase').value, status: $('wake-status').textContent };
+   $('opt-wake').checked = false;
+   $('opt-wake').dispatchEvent(new w.Event('change'));
+diff --git a/core/tool_executor.py b/core/tool_executor.py
+index bda3bd4..11d67d9 100644
+--- a/core/tool_executor.py
++++ b/core/tool_executor.py
+@@ -5,6 +5,7 @@ and enable_thinking_mode -- the local model's real escape hatches for
+ anything beyond its own reliability.
+ """
+ 
++import re
+ import subprocess
+ import json
+ 
+@@ -146,6 +147,41 @@ def delegate_to_gemini(parameters: dict) -> str:
+     return f"Gemini responded with a tool request ({result['name']}) instead of an answer -- unexpected for a delegated request."
+ 
+ 
++SEARCH = {"engine": "auto", "blocked_until": 0.0}
++BREAKER_SECONDS = 600.0
++
++
++def configure(config: dict) -> None:
++    """Pick up settings that tools depend on (search engine, root mode)."""
++    import actions
++    engine = (config.get("search") or {}).get("engine", "auto")
++    SEARCH["engine"] = engine if engine in ("auto", "gemini", "web") else "auto"
++    actions.configure(config)
++
++
++def _run_action(fn, *args):
++    import actions
++    try:
++        return fn(*args)
++    except actions.ActionError as e:
++        raise ToolExecutionError(str(e))
++
++
++def open_url(parameters: dict) -> str:
++    import actions
++    return _run_action(actions.open_url, parameters.get("url"))
++
++
++def open_app(parameters: dict) -> str:
++    import actions
++    return _run_action(actions.open_app, parameters.get("app"))
++
++
++def youtube_play(parameters: dict) -> str:
++    import actions
++    return _run_action(actions.youtube_play, parameters.get("query"))
++
++
+ def search_web(parameters: dict) -> str:
+     """
+     Called by the LOCAL model for anything current, recent, or
+@@ -155,21 +191,33 @@ def search_web(parameters: dict) -> str:
+     in the same request, so this cannot reuse the normal tool-calling
+     call -- it is its own isolated grounded request).
+     """
++    import time
++    import web_search
+     query = parameters.get("query")
+     if not query:
+         raise ToolExecutionError("search_web requires a 'query' parameter.")
++    engine = SEARCH["engine"]
++    why = ""
++    if engine in ("auto", "gemini") and (engine == "gemini" or time.monotonic() >= SEARCH["blocked_until"]):
++        try:
++            result = ask_gemini(
++                system_message="Answer the user's question using real, current web search results. Be specific and cite what you found.",
++                conversation_messages=[{"role": "user", "content": query}],
++                use_search_grounding=True,
++            )
++            if result["type"] == "text":
++                return result["content"]
++            why = "Gemini search gave no usable answer"
++        except GeminiError as e:
++            why = str(e)
++            if re.search(r"429|quota|rate", why, re.IGNORECASE):
++                SEARCH["blocked_until"] = time.monotonic() + BREAKER_SECONDS  # stop asking for a while
++        if engine == "gemini":
++            raise ToolExecutionError(f"Web search failed: {why}")
+     try:
+-        result = ask_gemini(
+-            system_message="Answer the user's question using real, current web search results. Be specific and cite what you found.",
+-            conversation_messages=[{"role": "user", "content": query}],
+-            use_search_grounding=True,
+-        )
+-    except GeminiError as e:
+-        raise ToolExecutionError(f"Web search failed: {e}")
+-
+-    if result["type"] == "text":
+-        return result["content"]
+-    return "Search did not return a usable answer."
++        return web_search.format_results(query, web_search.ddg_search(query))
++    except web_search.SearchError as e:
++        raise ToolExecutionError(f"Web search failed: {why + '; ' if why else ''}{e}")
+ 
+ 
+ def enable_thinking_mode(parameters: dict) -> str:
+@@ -195,6 +243,9 @@ TOOL_EXECUTORS = {
+     "delegate_to_gemini": delegate_to_gemini,
+     "search_web": search_web,
+     "enable_thinking_mode": enable_thinking_mode,
++    "open_url": open_url,
++    "open_app": open_app,
++    "youtube_play": youtube_play,
+ }
+ 
+ 
+diff --git a/core/tool_schema.py b/core/tool_schema.py
+index 69f70f7..d4fb8c2 100644
+--- a/core/tool_schema.py
++++ b/core/tool_schema.py
+@@ -21,6 +21,9 @@ TOOL_REGISTRY = {
+     "delegate_to_gemini": {"request": str},
+     "search_web": {"query": str},
+     "enable_thinking_mode": {},
++    "open_url": {"url": str},
++    "open_app": {"app": str},
++    "youtube_play": {"query": str},
+ }
+ 
+ 
+diff --git a/core/wake.py b/core/wake.py
+index e2cd47d..a15b768 100644
+--- a/core/wake.py
++++ b/core/wake.py
+@@ -154,7 +154,7 @@ class WakeListener:
+         self.config = config
+         self.on_wake = on_wake
+         self.is_busy = is_busy
+-        self.transcribe = transcribe or stt.transcribe_wav
++        self.transcribe = transcribe or stt.transcribe_wake
+         self._popen, self._clock, self.retry_s = popen, clock, retry_s
+         self.state, self.detail = "off", ""
+         self._stop = threading.Event()
+@@ -184,7 +184,8 @@ class WakeListener:
+         self.state, self.detail = "off", ""
+ 
+     def status(self) -> dict:
+-        return {"state": self.state, "detail": self.detail, "phrase": phrase_for(self.config)}
++        return {"state": self.state, "detail": self.detail, "phrase": phrase_for(self.config),
++                "engine": self.config["wake"].get("engine", "auto")}
+ 
+     def _set(self, state, detail=""):
+         self.state, self.detail = state, detail
+@@ -192,8 +193,8 @@ class WakeListener:
+     # -- loop
+     def _run(self):
+         while not self._stop.is_set():
+-            if not stt.available(self.config):
+-                self._set("error", stt.missing_reason(self.config) or "offline speech engine is not installed")
++            if not stt.wake_ready(self.config):
++                self._set("error", stt.missing_reason(self.config) or "no speech engine: add a Gemini key or install whisper")
+                 self._stop.wait(self.retry_s)
+                 continue
+             cmd = shlex.split(self.config["wake"]["mic_cmd"])
+@@ -211,7 +212,7 @@ class WakeListener:
+                 self._stop.wait(self.retry_s)
+ 
+     def _listen(self, proc):
+-        vad, silent = Vad(), 0
++        vad, silent = Vad(end_silence=max(6, int(self.config["wake"].get("end_silence_ms", 500)) // 30)), 0
+         self._set("listening")
+         while not self._stop.is_set():
+             frame = proc.stdout.read(FRAME_BYTES)
+diff --git a/core/web/app.js b/core/web/app.js
+index f958159..a96025e 100644
+--- a/core/web/app.js
++++ b/core/web/app.js
+@@ -1519,6 +1519,7 @@
+     if (!w) return;
+     $('opt-wake').checked = !!w.enabled;
+     if (document.activeElement !== $('wake-phrase')) $('wake-phrase').value = w.phrase || '';
++    if (document.activeElement !== $('wake-engine')) $('wake-engine').value = w.engine || 'auto';
+     const say = '\u201C' + (w.phrase || '') + '\u201D';
+     $('wake-status').textContent = !w.enabled ? 'Off'
+       : w.state === 'listening' ? 'Listening for ' + say
+@@ -1933,6 +1934,7 @@
+       }
+     });
+     $('opt-wake').addEventListener('change', () => saveSetting('wake.enabled', $('opt-wake').checked, () => { $('opt-wake').checked = !$('opt-wake').checked; }));
++    $('wake-engine').addEventListener('change', () => saveSetting('wake.engine', $('wake-engine').value, renderWakeRow));
+     $('wake-phrase').addEventListener('change', () => saveSetting('wake.phrase', $('wake-phrase').value.trim(), renderWakeRow));
+     $('adv-log').addEventListener('click', openLog);
+     for (const b of $('agent-mode-seg').children) b.addEventListener('click', async () => { await saveSetting('agent.mode', b.dataset.v); loadAgent(); });
+diff --git a/core/web/index.html b/core/web/index.html
+index 66be6d1..5e59fb1 100644
+--- a/core/web/index.html
++++ b/core/web/index.html
+@@ -104,6 +104,8 @@
+             <section>
+           <h3>Wake word</h3>
+           <label class="row"><span>Listen for the wake word<small id="wake-status">Off</small></span><input type="checkbox" id="opt-wake"></label>
++          <div class="row"><span>Recognition<small>Online is fast but sends short speech clips to Google</small></span>
++            <select id="wake-engine"><option value="auto">Auto: online, offline backup</option><option value="gemini">Online only</option><option value="whisper">Offline only</option></select></div>
+           <div class="row"><span>Phrase<small>2 to 40 letters</small></span><input type="text" id="wake-phrase" maxlength="40" autocomplete="off" spellcheck="false"></div>
+           <p class="hint">Needs the offline speech engine (scripts/setup_whisper.sh) and a working mic. Check the mic in Termux with <code>python3 core/wake.py --check</code>.</p>
+         </section>
+diff --git a/core/web_search.py b/core/web_search.py
+new file mode 100644
+index 0000000..cdaab7d
+--- /dev/null
++++ b/core/web_search.py
+@@ -0,0 +1,77 @@
++"""
++felix-ai Core -- web_search.py
++Key-free web search (DuckDuckGo) so search never depends on Gemini's quota. Returns plain results
++for the model to read; the model writes the answer.
++"""
++
++import html
++import re
++import urllib.parse
++
++import requests
++
++UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
++ENDPOINTS = ("https://html.duckduckgo.com/html/", "https://lite.duckduckgo.com/lite/")
++
++
++class SearchError(Exception):
++    pass
++
++
++def _text(fragment: str) -> str:
++    return html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", fragment))).strip()
++
++
++def _real_url(href: str) -> str:
++    href = html.unescape(href)
++    if href.startswith("//"):
++        href = "https:" + href
++    q = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
++    return q["uddg"][0] if "uddg" in q else href
++
++
++def parse_results(page: str, limit: int = 5) -> list:
++    """Results from either DuckDuckGo page layout (html and lite)."""
++    links = re.findall(r'<a[^>]+?(?:class=["\'][^"\']*(?:result__a|result-link)[^"\']*["\'])[^>]*?>(.*?)</a>', page, re.DOTALL)
++    hrefs = re.findall(r'<a[^>]+?class=["\'][^"\']*(?:result__a|result-link)[^"\']*["\'][^>]*?href=["\']([^"\']+)["\']|'
++                       r'<a[^>]+?href=["\']([^"\']+)["\'][^>]*?class=["\'][^"\']*(?:result__a|result-link)[^"\']*["\']', page)
++    hrefs = [a or b for a, b in hrefs]
++    snippets = re.findall(r'class=["\'][^"\']*(?:result__snippet|result-snippet)[^"\']*["\'][^>]*>(.*?)</(?:a|td|div)>', page, re.DOTALL)
++    out = []
++    for i, (title, href) in enumerate(zip(links, hrefs)):
++        url = _real_url(href)
++        if not url.startswith("http") or "duckduckgo.com/y.js" in url:
++            continue  # ads
++        out.append({"title": _text(title), "url": url, "snippet": _text(snippets[i]) if i < len(snippets) else ""})
++        if len(out) >= limit:
++            break
++    return out
++
++
++def ddg_search(query: str, limit: int = 5, timeout: float = 10.0, get=None, post=None) -> list:
++    query = query.strip()
++    if not query:
++        raise SearchError("empty query")
++    post = post or requests.post
++    last = "no results"
++    for url in ENDPOINTS:
++        try:
++            r = post(url, data={"q": query}, headers={"User-Agent": UA}, timeout=timeout)
++        except requests.RequestException as e:
++            last = f"network error ({type(e).__name__})"
++            continue
++        if r.status_code != 200:
++            last = f"search engine answered {r.status_code}"
++            continue
++        results = parse_results(r.text, limit)
++        if results:
++            return results
++        last = "no results found"
++    raise SearchError(last)
++
++
++def format_results(query: str, results: list) -> str:
++    lines = [f"Web results for '{query}' (raw search results; answer from them and say if they don't settle it):"]
++    for i, r in enumerate(results, 1):
++        lines.append(f"{i}. {r['title']}" + (f": {r['snippet']}" if r["snippet"] else "") + f"\n   {r['url']}")
++    return "\n".join(lines)
+diff --git a/core/web_server.py b/core/web_server.py
+index f27a300..182ca39 100644
+--- a/core/web_server.py
++++ b/core/web_server.py
+@@ -202,7 +202,7 @@ class FazeServer(ThreadingHTTPServer):
+         if self.wake:
+             return {"enabled": True, "seq": self.wake_seq, **self.wake.status()}
+         return {"enabled": False, "seq": self.wake_seq, "state": "off", "detail": "",
+-                "phrase": wake.phrase_for(self.config)}
++                "phrase": wake.phrase_for(self.config), "engine": self.config["wake"].get("engine", "auto")}
+ 
+     def allowed_hosts(self):
+         if not _loopback(self.bound_host):
+diff --git a/faze.sh b/faze.sh
+index 48d8fd8..797e16a 100755
+--- a/faze.sh
++++ b/faze.sh
+@@ -3,7 +3,9 @@
+ # Faze launcher. Starts the Needle router (fast), then Faze itself.
+ # Faze boots and warms llama-server (Qwen) in the BACKGROUND, so you can
+ # chat immediately; see "boot" in /settings. Extra arguments go to
+-# orchestrator.py, e.g.  ./faze.sh --serve   (web app, see core/web_server.py)
++# orchestrator.py. The web app (core/web_server.py) starts by default; use
++# ./faze.sh --cli for the plain terminal chat. For background use, see
++# scripts/faze_service.sh (start / stop / status / logs).
+ 
+ set -e
+ 
+diff --git a/scripts/faze_service.sh b/scripts/faze_service.sh
+new file mode 100755
+index 0000000..f784e89
+--- /dev/null
++++ b/scripts/faze_service.sh
+@@ -0,0 +1,63 @@
++#!/data/data/com.termux/files/usr/bin/bash
++#
++# Run Faze in the background, restart it if it crashes, no Termux window needed.
++#   scripts/faze_service.sh start | stop | restart | status | logs
++# Env (for tests): FAZE_CMD, FAZE_STATE, FAZE_LOG, FAZE_RESTART_DELAY
++
++STATE="${FAZE_STATE:-$HOME/.felix}"
++PIDFILE="$STATE/faze.pid"
++STOPFILE="$STATE/faze.stop"
++LOG="${FAZE_LOG:-$HOME/felix-ai/faze.log}"
++CMD="${FAZE_CMD:-$HOME/felix-ai/faze.sh}"
++DELAY="${FAZE_RESTART_DELAY:-5}"
++mkdir -p "$STATE"
++
++running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2> /dev/null)" 2> /dev/null; }
++
++supervise() {
++    while [ ! -f "$STOPFILE" ]; do
++        "$CMD" >> "$LOG" 2>&1
++        code=$?
++        [ -f "$STOPFILE" ] && break
++        echo "[service] faze exited (code $code); restarting in ${DELAY}s" >> "$LOG"
++        sleep "$DELAY"
++    done
++    rm -f "$PIDFILE"
++}
++
++case "${1:-status}" in
++    _supervise) supervise ;;
++    start)
++        if running; then echo "already running (pid $(cat "$PIDFILE"))"; exit 0; fi
++        rm -f "$STOPFILE"
++        command -v termux-wake-lock > /dev/null 2>&1 && termux-wake-lock
++        nohup bash "$0" _supervise > /dev/null 2>&1 &
++        echo $! > "$PIDFILE"
++        echo "started (pid $!). Logs: $LOG"
++        ;;
++    stop)
++        touch "$STOPFILE"
++        if running; then
++            pid="$(cat "$PIDFILE")"
++            pkill -TERM -P "$pid" 2> /dev/null
++            kill "$pid" 2> /dev/null
++            echo "stopped"
++        else
++            echo "not running"
++        fi
++        rm -f "$PIDFILE"
++        ;;
++    restart) bash "$0" stop; sleep 1; bash "$0" start ;;
++    status)
++        if running; then
++            echo "running (pid $(cat "$PIDFILE"))"
++            if [ -f "$STATE/token" ]; then echo "Open: http://localhost:8787/#t=$(cat "$STATE/token")"; fi
++            exit 0
++        else
++            echo "not running"
++            exit 1
++        fi
++        ;;
++    logs) tail -n 40 "$LOG" ;;
++    *) echo "usage: $0 start|stop|restart|status|logs"; exit 2 ;;
++esac
+diff --git a/scripts/install_boot.sh b/scripts/install_boot.sh
+index f400df7..0dd45c8 100755
+--- a/scripts/install_boot.sh
++++ b/scripts/install_boot.sh
+@@ -11,12 +11,13 @@ mkdir -p "$BOOT"
+ 
+ cat > "$BOOT/faze" << 'SCRIPT'
+ #!/data/data/com.termux/files/usr/bin/bash
+-termux-wake-lock
+-cd "$HOME/felix-ai"
+-nohup ./faze.sh --serve >> "$HOME/felix-ai/faze.log" 2>&1 &
++"$HOME/felix-ai/scripts/faze_service.sh" start
+ SCRIPT
+ chmod +x "$BOOT/faze"
+ 
++chmod +x "$HOME/felix-ai/scripts/faze_service.sh"
++mkdir -p "$HOME/.local/bin" 2> /dev/null
++ln -sf "$HOME/felix-ai/scripts/faze_service.sh" "${PREFIX:-/usr}/bin/faze" 2> /dev/null && echo "[boot] command: faze start | stop | status | logs"
+ echo "[boot] installed $BOOT/faze"
+ echo "Next:"
+ echo "  1. Open the Termux:Boot app once."

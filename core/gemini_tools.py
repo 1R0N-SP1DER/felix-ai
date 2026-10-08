@@ -19,6 +19,9 @@ TOOL_DESCRIPTIONS = {
     "delegate_to_gemini": "Call this for reasoning, knowledge, or judgment beyond your ability. Pass a clear description of needed help.",
     "enable_thinking_mode": "Call this ONLY if delegate_to_gemini or search_web just failed and the question still needs careful step-by-step reasoning. No arguments.",
     "search_web": "Call this for current, real-world information like news or live facts. Performs grounded web search. Never answer from memory.",
+    "open_url": "Call this when the user asks to open a link or website. Opens the http(s) link on the device.",
+    "open_app": "Call this when the user asks to open, launch or start an app (YouTube, Spotify, Chrome, Settings...). Launches it by name.",
+    "youtube_play": "Call this when the user asks to play, watch or find a YouTube video or a channel's latest video. Searches YouTube and starts the video.",
 }
 
 
@@ -28,6 +31,9 @@ TOOL_PARAM_DESCRIPTIONS = {}
 PARAM_DESCRIPTIONS = {
     "level": "volume level, an integer from 0 to 15",
     "text": "the exact text to copy to the clipboard",
+    "url": "the full link, starting with https://",
+    "app": "the app's name, for example YouTube or Spotify",
+    "query": "what to search for; for a channel's newest video use the channel name plus the word latest",
 }
 
 

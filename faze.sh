@@ -3,7 +3,9 @@
 # Faze launcher. Starts the Needle router (fast), then Faze itself.
 # Faze boots and warms llama-server (Qwen) in the BACKGROUND, so you can
 # chat immediately; see "boot" in /settings. Extra arguments go to
-# orchestrator.py, e.g.  ./faze.sh --serve   (web app, see core/web_server.py)
+# orchestrator.py. The web app (core/web_server.py) starts by default; use
+# ./faze.sh --cli for the plain terminal chat. For background use, see
+# scripts/faze_service.sh (start / stop / status / logs).
 
 set -e
 

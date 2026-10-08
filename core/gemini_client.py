@@ -151,6 +151,35 @@ def ask_gemini(system_message: str, conversation_messages: list, tools_schema: l
     return _extract_result(response.json())
 
 
+TRANSCRIBE_PROMPT = ("Transcribe the speech in this audio word for word. Reply with only the words spoken, "
+                     "nothing else. If there is no clear speech, reply with nothing.")
+
+
+def transcribe_audio(wav: bytes, timeout: float = 12.0) -> str:
+    """Speech to text through Gemini (16 kHz mono WAV in). Empty string when nobody spoke."""
+    import base64
+    if os.environ.get("FAZE_GEMINI_DISABLED") == "1":
+        raise GeminiError("Gemini layer is disabled in config (gemini_enabled=false).")
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise GeminiError("GEMINI_API_KEY is not set in the environment.")
+    body = {"contents": [{"parts": [{"text": TRANSCRIBE_PROMPT},
+                                    {"inlineData": {"mimeType": "audio/wav", "data": base64.b64encode(wav).decode()}}]}],
+            "generationConfig": {"temperature": 0}}
+    try:
+        response = requests.post(f"{_base_url()}:generateContent", headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+                                 json=body, timeout=timeout)
+    except requests.RequestException as e:
+        raise GeminiError(f"Network error calling Gemini: {e}")
+    if response.status_code != 200:
+        raise _http_error(response)
+    try:
+        parts = response.json()["candidates"][0]["content"]["parts"]
+    except (KeyError, IndexError, ValueError):
+        return ""
+    return "".join(p.get("text", "") for p in parts).strip()
+
+
 def ask_gemini_stream(system_message: str, conversation_messages: list, tools_schema: list = None, timeout: int = 60):
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:

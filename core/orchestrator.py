@@ -42,6 +42,7 @@ import agent
 from prompt_assembler import build_static_system_message, build_turn_context, set_names
 from tool_schema import validate_tool_call, ToolCallValidationError
 from permission_policy import get_permission_tier, UnknownToolError
+import tool_executor
 from tool_executor import execute_tool, ToolExecutionError
 from tool_replies import format_reply, summarize_error, numbers_preserved
 from direct_tool_router import try_direct_route
@@ -103,6 +104,8 @@ COMMANDS = [
     {"name": "tasks", "description": "List or remove saved tasks",
      "usage": "/tasks [list|remove <id>|clear]",
      "args": [{"value": "list", "description": "Show saved tasks"}, {"value": "clear", "description": "Delete all saved tasks"}]},
+    {"name": "doctor", "description": "Test Gemini, search, tools, actions, voice and the mic",
+     "usage": "/doctor", "args": []},
     {"name": "log", "description": "Show recent tool and routing activity", "usage": "/log [count]", "args": []},
     {"name": "help", "description": "List every command", "usage": "/help", "args": []},
 ]
@@ -123,8 +126,12 @@ TOOLS (call ONLY if the user is asking for one of these things right now):
 - delegate_to_gemini(request) : ask a vastly more capable model for help
 - search_web(query) : get a real, current answer from the internet
 - enable_thinking_mode() : reason step by step instead of answering fast
+- open_url(url) : open a web link on the device
+- open_app(app) : launch an app by name
+- youtube_play(query) : find and play a YouTube video, e.g. "mrwhosetheboss latest video"
 
 RULES:
+- To open, launch or play something, call the matching tool. Never say you cannot.
 - No tool needed? Just reply normally, no tool call.
 - Never invent a time, battery %, or clipboard content without a real tool result THIS turn.
 - You are a small, fast model. You are NOT as capable as Gemini, which
@@ -208,6 +215,7 @@ class Conversation:
         self._agent_steps = []
         self._agent_created = []
         agent.init(config)
+        tool_executor.configure(config)
         if config.get("gemini_enabled", True) is False:
             os.environ["FAZE_GEMINI_DISABLED"] = "1"
         names = config["assistant"]
@@ -759,6 +767,9 @@ class Conversation:
             return self._model_command(args)
         if cmd == "/log":
             return self._log_text(args)
+        if cmd == "/doctor":
+            import doctor
+            return doctor.format_report(doctor.run_checks(self.config))
         if cmd == "/agent":
             return self._agent_command(args)
         if cmd == "/elevated":
@@ -987,6 +998,8 @@ class Conversation:
             self._rebuild_system()
         if key in ("gemini.model", "gemini.search_model"):
             gemini_client.configure(chat=self.config["gemini"]["model"], search=self.config["gemini"]["search_model"])
+        if key.startswith(("search.", "actions.")):
+            tool_executor.configure(self.config)
         if key == "agent.high_tools":
             agent.set_policy(high_tools=bool(value))
         if key == "model.forced":
@@ -1198,7 +1211,7 @@ if __name__ == "__main__":
     convo = Conversation(config)
     convo.start_background()
 
-    if "--serve" in sys.argv[1:]:
+    if "--cli" not in sys.argv[1:]:  # the web app is the default; --cli keeps the terminal chat
         from web_server import serve
         serve(convo, config)
         raise SystemExit(0)

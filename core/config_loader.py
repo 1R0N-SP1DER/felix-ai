@@ -36,6 +36,9 @@ DEFAULTS = {
         "enabled": False,
         "phrase": "",                      # empty = "hey <assistant name>"
         "mic_cmd": DEFAULT_MIC_CMD,
+        "engine": "auto",                  # auto: online (Gemini) when possible, else whisper | gemini | whisper
+        "end_silence_ms": 500,             # how long a pause ends the phrase
+        "online_per_min": 10,              # cap on online recognitions, so room chatter cannot eat the quota
         "cooldown": 6,                     # seconds to ignore the wake word after it fires
         "open_app": True,                  # open the app when it wakes and the app isn't open
     },
@@ -81,6 +84,8 @@ DEFAULTS = {
     "ui": {"show_model_tag": True, "show_trace": True},
     # Gemini-written tools: ask = approve each new tool, yolo = auto-approve with a description, off = none
     "agent": {"mode": "ask", "high_tools": False, "max_rounds": 6},
+    "search": {"engine": "auto"},   # auto: Gemini grounding, then DuckDuckGo | gemini | web
+    "actions": {"root": "auto"},    # auto: retry blocked launches through su | always | never
 }
 
 # Settings editable with /settings: key -> (type, allowed values or None)
@@ -107,6 +112,11 @@ SETTINGS = {
     "boot.chat_while_booting": (str, ("lfm", "gemini", "wait")),
     "boot.warmup": (bool, None),
     "boot.qwen": (str, ("lazy", "eager")),
+    "search.engine": (str, ("auto", "gemini", "web")),
+    "actions.root": (str, ("auto", "always", "never")),
+    "wake.engine": (str, ("auto", "gemini", "whisper")),
+    "wake.end_silence_ms": (int, None),
+    "wake.online_per_min": (int, None),
     "agent.mode": (str, ("off", "ask", "yolo")),
     "agent.high_tools": (bool, None),
     "agent.max_rounds": (int, None),
