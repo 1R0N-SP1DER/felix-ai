@@ -77,7 +77,8 @@ DEFAULTS = {
         "stop_when_qwen_ready": True,
     },
     "server": {"host": "127.0.0.1", "port": 8787, "open_on_start": False},
-    "gemini": {"model": "gemini-3.1-flash-lite", "search_model": "gemini-3.1-flash-lite"},
+    "gemini": {"stream": True,  # show Gemini's answer as it is written
+               "model": "gemini-3.1-flash-lite", "search_model": "gemini-3.1-flash-lite"},
     "fallback": {"order": "lfm,qwen"},     # used when forced Gemini can't be reached: lfm,qwen | qwen,lfm | lfm | qwen | off
     "gemini_enabled": True,
     "narrate_tool_results": False,
@@ -112,6 +113,7 @@ SETTINGS = {
     "boot.chat_while_booting": (str, ("lfm", "gemini", "wait")),
     "boot.warmup": (bool, None),
     "boot.qwen": (str, ("lazy", "eager")),
+    "gemini.stream": (bool, None),
     "search.engine": (str, ("auto", "gemini", "web")),
     "actions.root": (str, ("auto", "always", "never")),
     "wake.engine": (str, ("auto", "gemini", "whisper")),

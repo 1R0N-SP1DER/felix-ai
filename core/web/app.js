@@ -229,6 +229,31 @@
     }
   }
 
+  // Cuts finished sentences out of text that is still arriving, so speech can start before the reply ends.
+  // Code blocks are skipped (said once as "Code omitted"), tiny fragments wait for the next sentence, and
+  // a trailing "3." style number is not mistaken for a sentence end because a space must follow.
+  function splitSpeakable(buffer, final) {
+    let text = String(buffer).replace(/```[\s\S]*?```/g, ' Code omitted. ');
+    let hold = '';
+    const open = text.indexOf('```');
+    if (open >= 0) { hold = text.slice(open); text = text.slice(0, open); }
+    const sentences = [];
+    let start = 0;
+    const end = /[.!?\u2026]["')\]]*\s+|\n+/g;
+    let m;
+    while ((m = end.exec(text))) {
+      const stop = m.index + m[0].length;
+      const piece = text.slice(start, stop).replace(/[ \t]+/g, ' ').trim();
+      if (piece.length >= 20 || (/\n/.test(m[0]) && piece)) { sentences.push(piece); start = stop; }
+    }
+    if (final) {
+      const tail = text.slice(start).replace(/[ \t]+/g, ' ').trim();
+      if (tail) sentences.push(tail);
+      return { sentences, rest: '' };
+    }
+    return { sentences, rest: text.slice(start) + hold };
+  }
+
   function titleFor(text) {
     const t = String(text || '').replace(/\s+/g, ' ').trim();
     if (!t) return 'New chat';
@@ -287,7 +312,7 @@
 
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { escapeHtml, renderMarkdown, parseSSE, stripForSpeech, greetingFor, GREETINGS,
-      modelLabel, stayLabel, STAY_OPTIONS, resampleMean, encodeWav, commandSuggestions,
+      modelLabel, stayLabel, STAY_OPTIONS, splitSpeakable, resampleMean, encodeWav, commandSuggestions,
       parseTrace, liveLabel, titleFor, groupChats, clipFile, composeMessage, restorePayload, TOOL_VERBS, MODEL_GLYPH, MODEL_NAMES };
     return;
   }
@@ -322,6 +347,7 @@
   let misses = 0;
   let lastWakeState = '';
   let audio = null;
+  let speechStream = null;
   let audioPlaying = false;
   let geminiVoices = null;
   let wakeSeq = 0;
@@ -360,9 +386,58 @@
     root.style.setProperty('--accent-2', pair[1]);
     root.dataset.size = opts.size;
     root.dataset.font = opts.font;
+    root.dataset.platform = /Android/i.test(navigator.userAgent) ? 'android' : 'other';
+    if (opts.font === 'custom') loadCustomFont();
     root.dataset.motion = opts.motion ? 'on' : 'off';
     document.body.classList.toggle('side-closed', opts.sidebar === 'closed');
     if (window.FazeCoreKit) { window.FazeCoreKit.refreshTheme(); window.FazeCoreKit.setReduced(reducedMotion()); }
+  }
+
+  // A font file you pick (a .ttf/.otf, for example the one your phone theme uses) is kept in the browser and
+  // used for the whole app. Up to 3 MB.
+  let customFontLoaded = false;
+
+  function b64FromBuffer(buf) {
+    const bytes = new Uint8Array(buf);
+    let out = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(out);
+  }
+
+  async function registerFont(buf) {
+    if (typeof FontFace === 'undefined' || !document.fonts) throw new Error('This browser cannot load font files');
+    const face = new FontFace('FazeCustom', buf);
+    await face.load();
+    document.fonts.add(face);
+    customFontLoaded = true;
+  }
+
+  async function loadCustomFont() {
+    if (customFontLoaded) return;
+    const data = store.get('opt_fontdata', '');
+    if (!data) return;
+    try {
+      const raw = atob(data);
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+      await registerFont(bytes.buffer);
+    } catch (e) { toast('Your font could not be loaded: ' + e.message); }
+  }
+
+  async function pickFontFile(file) {
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) { toast('Pick a font under 3 MB'); return; }
+    try {
+      const buf = file.arrayBuffer ? await file.arrayBuffer() : await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = reject; r.readAsArrayBuffer(file); });
+      customFontLoaded = false;
+      await registerFont(buf);
+      store.set('opt_fontdata', b64FromBuffer(buf));
+      store.set('opt_fontname', file.name);
+      saveOpt('font', 'custom');
+      applyLook();
+      syncSettingsControls();
+      toast('Using ' + file.name);
+    } catch (e) { toast('Could not use that font: ' + e.message); }
   }
 
   // ---------------------------------------------------------------- api
@@ -418,7 +493,7 @@
     if (m.role === 'user') {
       let h = '<div class="who">YOU</div><div class="text">' + escapeHtml(m.text) + '</div>';
       if (m.files && m.files.length) h += '<div class="files">' + m.files.map((f) => '<span>\uD83D\uDCCE ' + escapeHtml(f) + '</span>').join('') + '</div>';
-      return h;
+      return h + '<div class="acts"><button type="button" class="act-copy">Copy</button><button type="button" class="act-speak">Listen</button></div>';
     }
     let h = '<div class="who"><i class="gl"></i><span>' + escapeHtml(String(names.ai || 'Faze').toUpperCase()) + '</span>' + viaHtml(m) + '</div>';
     if (m.thinking) {
@@ -523,6 +598,7 @@
     renderSidebar();
     maybeRestore(s);
     renderWakeRow();
+    maybeRefreshAgent(s);
     $('menu-think-val').textContent = s.think;
     for (const b of $('think-seg').children) b.classList.toggle('on', b.dataset.v === s.think);
     $('stt-note').textContent = s.stt.server ? 'offline engine ready' : (s.stt.reason || '');
@@ -693,6 +769,7 @@
     setBusy(true);
     setLive('thinking');
     syncCoreModel();
+    const voice = (opts.speak || voiceMode) ? makeSpeechStream() : null;
 
     const paint = () => { renderMessage(m, el); scrollDown(); };
     try {
@@ -712,7 +789,7 @@
         buffer = parsed.rest;
         for (const { event, data } of parsed.events) {
           if (event === 'route') {
-            if (m.text) { m.trace.push('(discarded partial reply from ' + m.tag + ')'); m.text = ''; m.thinking = ''; }
+            if (m.text) { m.trace.push('(discarded partial reply from ' + m.tag + ')'); m.text = ''; m.thinking = ''; if (voice) voice.reset(); }
             m.tag = data.tag; m.note = data.note;
             if (MODEL_FORM_TAGS.has(data.tag) && !turnModels.includes(data.tag)) {
               turnModels.push(data.tag);
@@ -722,9 +799,11 @@
             syncCoreModel();
           } else if (event === 'token') {
             if (data.kind === 'thinking') m.thinking += data.text;
+            else if (data.kind === 'reset') { m.text = ''; if (voice) voice.reset(); }
             else {
               if (!m.text) setLive('writing');
               m.text += data.text;
+              if (voice) voice.feed(data.text);
               tokenLevel = 0.7;
               coreAll((c) => c.pulse(0.02));
             }
@@ -759,7 +838,8 @@
     setBusy(false);
     setLive(m.failed ? 'error' : stopped ? 'stopped' : 'done');
     syncCoreModel();
-    speak(m.failed || stopped ? '' : m.text);
+    if (voice && voice.used() && !m.failed && !stopped) voice.finish();
+    else { if (voice) voice.cancel(); speak(m.failed || stopped ? '' : m.text); }
     pollStatus(true);
   }
 
@@ -880,6 +960,7 @@
   }
 
   function stopAudio() {
+    if (speechStream) { const s = speechStream; speechStream = null; s.cancel(); }
     if (audio) { audio.pause(); audio = null; }
     audioPlaying = false;
   }
@@ -893,6 +974,104 @@
   }
 
   // Natural online voice from the server; resolves false if it can't be played.
+  // Speaks a reply while it is still being written. Gemini voice: sentences are synthesized one request at a
+  // time (the server voices one clip at once) while the previous clip plays, and played back to back. Device
+  // voice: sentences go straight to speechSynthesis, which queues them. Reads ahead of the text, never behind it.
+  function makeSpeechStream() {
+    stopAudio();
+    const gemini = !!(status && status.tts && status.tts.engine === 'gemini' && navigator.onLine);
+    const s = { buffer: '', items: [], gemini, cancelled: false, started: false, finished: false, synthRunning: false, playRunning: false, pending: 0, warned: false, abort: null };
+    speechStream = s;
+    const nap = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    const fetchClip = async (text) => {
+      try {
+        const res = await api('/api/speak', { body: { text } });
+        if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || ('HTTP ' + res.status)); }
+        return URL.createObjectURL(await res.blob());
+      } catch (e) {
+        if (!s.warned) { s.warned = true; toast('Gemini voice unavailable: ' + e.message); }
+        return null;
+      }
+    };
+
+    const synth = async () => {
+      if (s.synthRunning) return;
+      s.synthRunning = true;
+      for (const item of s.items) {
+        if (s.cancelled) break;
+        if (item.url === undefined) item.url = await fetchClip(item.text);
+      }
+      s.synthRunning = false;
+      if (!s.cancelled && s.items.some((i) => i.url === undefined)) synth();
+    };
+
+    const playUrl = (url) => new Promise((resolve) => {
+      const a = new Audio(url);
+      audio = a;
+      const done = () => { URL.revokeObjectURL(url); if (audio === a) audio = null; s.abort = null; resolve(); };
+      s.abort = () => { try { a.pause(); } catch (e) { /* already gone */ } done(); };
+      a.onended = a.onerror = done;
+      a.play().catch(() => { toast('The voice clip could not be played'); done(); });
+    });
+
+    const speakDevice = async (text) => {
+      if (typeof speechSynthesis === 'undefined') return;
+      const u = makeUtterance(text);
+      speechSynthesis.speak(u);
+      while (!s.cancelled && speechSynthesis.speaking) await nap(60);
+    };
+
+    const play = async () => {
+      if (s.playRunning) return;
+      s.playRunning = true;
+      audioPlaying = true;
+      syncSpeechButton();
+      let i = 0;
+      while (!s.cancelled) {
+        const item = s.items[i];
+        if (!item) { if (s.finished) break; await nap(40); continue; }
+        if (item.url === undefined) { await nap(40); continue; }
+        i += 1;
+        if (item.url) await playUrl(item.url); else await speakDevice(item.text);
+      }
+      s.playRunning = false;
+      if (speechStream === s) { audioPlaying = false; syncSpeechButton(); if (!s.cancelled) resumeListening(); }
+    };
+
+    s.enqueue = (sentence) => {
+      const clean = stripForSpeech(sentence, 300);
+      if (!clean || s.cancelled) return;
+      s.started = true;
+      if (gemini) { s.items.push({ text: clean, url: undefined }); synth(); play(); return; }
+      if (typeof speechSynthesis === 'undefined') return;
+      const u = makeUtterance(clean);
+      u.onend = u.onerror = () => { s.pending -= 1; syncSpeechButton(); if (s.finished && !s.pending && !s.cancelled) resumeListening(); };
+      s.pending += 1;
+      speechSynthesis.speak(u);
+      syncSpeechButton();
+    };
+    s.feed = (chunk) => {
+      if (s.cancelled) return;
+      s.buffer += chunk;
+      const r = splitSpeakable(s.buffer, false);
+      s.buffer = r.rest;
+      r.sentences.forEach(s.enqueue);
+    };
+    s.finish = () => {
+      if (s.cancelled) return;
+      const r = splitSpeakable(s.buffer, true);
+      s.buffer = '';
+      r.sentences.forEach(s.enqueue);
+      s.finished = true;
+      if (!gemini && !s.pending) resumeListening();
+    };
+    s.reset = () => { s.buffer = ''; };
+    s.used = () => s.started || s.buffer.length > 0;
+    s.cancel = () => { s.cancelled = true; if (s.abort) s.abort(); if (speechStream === s) speechStream = null; };
+    return s;
+  }
+
   async function playGemini(text, voice, quiet) {
     try {
       const res = await api('/api/speak', { body: voice ? { text, voice } : { text } });
@@ -1381,10 +1560,223 @@
     $('stt-pick').value = status ? status.stt.pref : 'auto';
     for (const b of $('size-seg').children) b.classList.toggle('on', b.dataset.v === opts.size);
     for (const b of $('font-seg').children) b.classList.toggle('on', b.dataset.v === opts.font);
+    $('row-fontfile').hidden = opts.font !== 'custom';
+    $('font-name').textContent = store.get('opt_fontname', '') || 'No font chosen yet';
     for (const b of $('engine-seg').children) b.classList.toggle('on', b.dataset.v === ((status && status.tts && status.tts.engine) || 'system'));
     for (const b of $('swatches').children) b.classList.toggle('on', b.dataset.v === opts.accent);
     loadVoices();
     renderWakeRow();
+  }
+
+  // ---- tools and actions in the sidebar and the Tools menu
+
+  let agentData = { rev: -1, tools: [], tasks: [] };
+  let agentRevSeen = -2;
+  let runningTool = '';
+  const pretty = (name) => name.replace(/_/g, ' ');
+
+  function maybeRefreshAgent(s) {
+    if (s.agent && s.agent.rev !== agentRevSeen) { agentRevSeen = s.agent.rev; refreshAgentUi(); }
+  }
+
+  async function refreshAgentUi() {
+    try {
+      const d = await (await api('/api/agent')).json();
+      agentData = { rev: d.rev, tools: d.tools, tasks: d.tasks };
+    } catch (e) { return; }
+    renderSideSections();
+    renderCustomTools();
+  }
+
+  function sideRow(label, title, onMain, extras, pill) {
+    const row = document.createElement('div');
+    row.className = 'side-row';
+    const main = document.createElement('button');
+    main.type = 'button';
+    main.className = 'side-main';
+    main.textContent = label;
+    main.title = title;
+    main.addEventListener('click', onMain);
+    row.appendChild(main);
+    if (pill) {
+      const p = document.createElement('i');
+      p.className = 'side-pill';
+      p.textContent = pill;
+      p.title = 'Higher-level tool';
+      row.appendChild(p);
+    }
+    const acts = document.createElement('span');
+    acts.className = 'side-acts';
+    for (const [glyph, name, fn] of extras) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = glyph;
+      b.title = name;
+      b.setAttribute('aria-label', name + ': ' + label);
+      b.addEventListener('click', (ev) => { ev.stopPropagation(); fn(); });
+      acts.appendChild(b);
+    }
+    row.appendChild(acts);
+    return row;
+  }
+
+  function emptyNote(text) {
+    const p = document.createElement('p');
+    p.className = 'empty-note';
+    p.textContent = text;
+    return p;
+  }
+
+  function renderSideSections() {
+    const tools = $('tools-list');
+    tools.textContent = '';
+    $('tools-count').textContent = String(agentData.tools.length);
+    if (!agentData.tools.length) tools.appendChild(emptyNote('Tools Gemini makes show up here.'));
+    for (const t of agentData.tools) {
+      tools.appendChild(sideRow(pretty(t.name), t.description, () => openRunTool(t.name),
+        [['\u25B6', 'Use', () => useTool(t)], ['\u2715', 'Delete', () => deleteTool(t.name)]], t.level === 'high' ? '!' : ''));
+    }
+    const actions = $('actions-list');
+    actions.textContent = '';
+    $('actions-count').textContent = String(agentData.tasks.length);
+    if (!agentData.tasks.length) actions.appendChild(emptyNote('Tasks Gemini finishes are saved here to run again.'));
+    for (const t of agentData.tasks) {
+      actions.appendChild(sideRow(t.prompt, t.prompt, () => { closeDrawer(); insertText(t.prompt); },
+        [['\u25B6', 'Run again', () => { closeDrawer(); sendMessage(t.prompt); }], ['\u2715', 'Delete', () => deleteTask(t.id)]]));
+    }
+  }
+
+  function renderCustomTools() {
+    const box = $('tools-custom');
+    box.textContent = '';
+    box.hidden = !agentData.tools.length;
+    if (!agentData.tools.length) return;
+    const head = document.createElement('small');
+    head.textContent = 'Made by Gemini';
+    box.appendChild(head);
+    for (const t of agentData.tools) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = pretty(t.name) + (t.level === 'high' ? ' !' : '');
+      b.title = t.description;
+      b.addEventListener('click', () => { $('tools-menu').hidden = true; useTool(t); });
+      box.appendChild(b);
+    }
+  }
+
+  async function runTool(name, params) {
+    const res = await api('/api/tools/run', { body: { name, params } });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    return data;
+  }
+
+  // No inputs: run it right away. Otherwise ask for them first.
+  async function useTool(t) {
+    if (Object.keys(t.params || {}).length) { openRunTool(t.name); return; }
+    try { const d = await runTool(t.name, {}); toast((d.ok ? '' : 'Failed: ') + d.text.slice(0, 160)); } catch (e) { toast(e.message); }
+  }
+
+  function openRunTool(name) {
+    const t = agentData.tools.find((x) => x.name === name);
+    if (!t) return;
+    closeDrawer();
+    runningTool = name;
+    $('run-title').textContent = pretty(name);
+    $('run-name').textContent = name;
+    $('run-level').textContent = t.level === 'high' ? 'higher-level' : 'normal';
+    $('run-level').classList.toggle('warn-pill', t.level === 'high');
+    $('run-uses').textContent = 'used ' + t.uses + 'x';
+    $('run-desc').textContent = t.description;
+    $('run-how').textContent = t.how_it_works;
+    const box = $('run-fields');
+    box.textContent = '';
+    const params = Object.entries(t.params || {});
+    if (!params.length) box.appendChild(emptyNote('No inputs needed.'));
+    for (const [p, spec] of params) {
+      const label = document.createElement('label');
+      label.className = 'run-field';
+      const span = document.createElement('span');
+      span.textContent = pretty(p) + (spec.description && spec.description !== p ? ' (' + spec.description + ')' : '');
+      const input = document.createElement('input');
+      input.name = p;
+      input.autocomplete = 'off';
+      if (spec.type === 'boolean') input.type = 'checkbox';
+      else { input.type = spec.type === 'string' ? 'text' : 'number'; if (spec.type === 'number') input.step = 'any'; }
+      label.appendChild(span);
+      label.appendChild(input);
+      box.appendChild(label);
+    }
+    $('run-result').hidden = true;
+    $('run-result').classList.remove('bad');
+    $('run-code').textContent = '';
+    $('run-code-box').open = false;
+    $('run-sheet').hidden = false;
+    (box.querySelector('input') || $('run-go')).focus();
+  }
+
+  async function runFromSheet() {
+    const t = agentData.tools.find((x) => x.name === runningTool);
+    if (!t) return;
+    const values = {};
+    for (const input of $('run-fields').querySelectorAll('input')) {
+      const kind = t.params[input.name].type;
+      if (kind === 'boolean') values[input.name] = input.checked;
+      else if (input.value.trim() === '') { toast('Fill in every field first'); return; }
+      else values[input.name] = kind === 'string' ? input.value : Number(input.value);
+    }
+    $('run-go').disabled = true;
+    try {
+      const d = await runTool(runningTool, values);
+      $('run-result').textContent = d.text;
+      $('run-result').classList.toggle('bad', !d.ok);
+    } catch (e) {
+      $('run-result').textContent = e.message;
+      $('run-result').classList.add('bad');
+    }
+    $('run-result').hidden = false;
+    $('run-go').disabled = false;
+  }
+
+  async function deleteTool(name) {
+    if (!confirm('Delete the tool "' + pretty(name) + '"?')) return;
+    try { toast(await command('/tools remove ' + name)); } catch (e) { toast(e.message); }
+    $('run-sheet').hidden = true;
+    agentRevSeen = -2;
+    refreshAgentUi();
+  }
+
+  async function deleteTask(id) {
+    try { toast(await command('/tasks remove ' + id)); } catch (e) { toast(e.message); }
+    agentRevSeen = -2;
+    refreshAgentUi();
+  }
+
+  async function quickAction(btn) {
+    const value = prompt(btn.dataset.ask);
+    if (!value || !value.trim()) return;
+    closeDrawer();
+    try { const d = await runTool(btn.dataset.tool, { [btn.dataset.param]: value.trim() }); toast((d.ok ? '' : 'Failed: ') + d.text.slice(0, 160)); } catch (e) { toast(e.message); }
+  }
+
+  function initToolPanels() {
+    for (const sec of document.querySelectorAll('.side-sec')) {
+      const head = sec.querySelector('.sec-head');
+      const body = sec.querySelector('.sec-body');
+      const key = 'opt_' + sec.id;
+      const set = (open) => { body.hidden = !open; head.setAttribute('aria-expanded', String(open)); sec.classList.toggle('open', open); };
+      set(store.get(key, false) === true);
+      head.addEventListener('click', () => { set(body.hidden); store.set(key, !body.hidden); });
+    }
+    for (const b of document.querySelectorAll('.quick-actions button')) b.addEventListener('click', () => quickAction(b));
+    $('run-go').addEventListener('click', runFromSheet);
+    $('run-delete').addEventListener('click', () => deleteTool(runningTool));
+    $('run-close').addEventListener('click', () => { $('run-sheet').hidden = true; });
+    $('run-sheet').addEventListener('click', (ev) => { if (ev.target === $('run-sheet')) $('run-sheet').hidden = true; });
+    $('run-code-box').addEventListener('toggle', async () => {
+      if (!$('run-code-box').open || $('run-code').textContent) return;
+      try { $('run-code').textContent = (await (await api('/api/tools/code?name=' + encodeURIComponent(runningTool))).json()).code; } catch (e) { $('run-code').textContent = 'Could not load the code.'; }
+    });
   }
 
   // ---- agent: approving tools Gemini wrote, modes, saved tools and tasks
@@ -1794,6 +2186,7 @@
         closeLog();
         $('menu').hidden = true;
         $('tools-menu').hidden = true;
+        $('run-sheet').hidden = true;
         if (!$('approval-sheet').hidden) answerApproval(false, false);
         for (const id of ['model-sheet', 'voice-sheet']) $(id).hidden = true;
         if (!$('settings-view').hidden) closeSettings();
@@ -1846,6 +2239,8 @@
     });
     for (const b of $('size-seg').children) b.addEventListener('click', () => { saveOpt('size', b.dataset.v); applyLook(); syncSettingsControls(); });
     for (const b of $('font-seg').children) b.addEventListener('click', () => { saveOpt('font', b.dataset.v); applyLook(); syncSettingsControls(); });
+    $('font-pick').addEventListener('click', () => $('font-file').click());
+    $('font-file').addEventListener('change', (ev) => { pickFontFile(ev.target.files[0]); ev.target.value = ''; });
     for (const b of $('engine-seg').children) b.addEventListener('click', async () => { await setTts('tts.engine', b.dataset.v); syncSettingsControls(); });
     on('browse-voices', 'click', () => { $('voice-sheet').hidden = false; renderVoices(); });
     on('close-voices', 'click', () => { $('voice-sheet').hidden = true; });
@@ -1876,6 +2271,7 @@
     initSidebar();
     initComposerUi();
     initLogPanel();
+    initToolPanels();
     initShortcuts();
     renderAll();
     newGreeting();

@@ -11,7 +11,7 @@ const calls = [];
 let ops = 0;
 
 const status = { name: 'Faze', qwen: { state: 'ready', detail: '', note: '' }, lfm: 'idle', gemini: true, mode: 'auto', busy: false, notices: [],
-  show_tag: true, wake: { enabled: true, state: 'listening', phrase: 'hey faze', detail: '', engine: 'auto' }, tts: { engine: 'system' }, user_name: 'Felix', forced_turns: 0, turns: 0, think: 'auto',
+  show_tag: true, wake: { enabled: true, state: 'listening', phrase: 'hey faze', detail: '', engine: 'auto' }, tts: { engine: 'system' }, user_name: 'Felix', forced_turns: 0, turns: 0, agent: { mode: 'ask', high_tools: false, tools: 1, tasks: 1, rev: 7 }, think: 'auto',
   stt: { server: false, pref: 'auto', reason: 'no whisper' } };
 
 function sse(events) {
@@ -22,6 +22,7 @@ function sse(events) {
       if (i >= events.length) { controller.close(); return; }
       await sleep(15);
       const [event, data] = events[i++];
+      if (event === 'reply' && WIN) { WIN.__atReply = { spoken: WIN.__spoken.length, clips: WIN.__clipCalls }; }
       controller.enqueue(enc.encode('event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n'));
     },
   });
@@ -31,10 +32,17 @@ function sse(events) {
 let evCtl = null;
 const pushEvent = (event, data) => evCtl && evCtl.enqueue(new TextEncoder().encode('event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n'));
 const AGENT = { mode: 'ask', high_tools: false, modes: { off: 'no tools', ask: 'asks first', yolo: 'auto' }, pending: [],
-  tools: [{ name: 'miles_to_km', description: 'Convert miles to km.', how_it_works: 'Multiplies by 1.609.', level: 'normal', uses: 2, created: 1 }],
+  rev: 7,
+  tools: [{ name: 'miles_to_km', description: 'Convert miles to km.', how_it_works: 'Multiplies by 1.609.', level: 'normal', uses: 2, created: 1,
+    params: { miles: { type: 'number', description: 'distance in miles' } } }],
   tasks: [{ id: 'ab12', prompt: 'convert 5 miles to km', tools: ['miles_to_km'], uses: 1, runs: 2, ts: 1 }] };
 const INFO = { id: 'ap1', kind: 'tool', name: 'miles_to_km', description: 'Convert miles to km.', how_it_works: 'Multiplies by 1.609.', level: 'high',
   reasons: ['imports subprocess'], params: { miles: 'number' }, code: 'def run(args):\n    return "1"', replaces: false };
+
+let WIN = null;
+let speakInflight = 0, speakMax = 0;
+const SPEAK_FULL = 'First sentence is right here. Second one follows it nicely. And a third trailing bit';
+const tok = (text) => ['token', { kind: 'text', text }];
 
 const REPLY = 'Here is **code**:\n```js\nconst a = 1;\n```\n1. first\n2. second';
 
@@ -47,6 +55,8 @@ async function fakeFetch(url, opts) {
   if (p === '/api/events') { return { ok: true, status: 200, body: new ReadableStream({ start(c) { evCtl = c; } }) }; }
   if (p === '/api/agent') return json(AGENT);
   if (p === '/api/approve') return json({ ok: true });
+  if (p === '/api/tools/run') return json({ ok: true, text: '4.83' });
+  if (p === '/api/tools/code') return json({ name: 'miles_to_km', code: 'def run(args):\n    return "x"' });
   if (p === '/api/status') return json(status);
   if (p === '/api/commands') return json({ commands: [
     { name: 'model', description: 'Choose model', usage: '/model [auto]', args: [{ value: 'auto', description: 'x' }] },
@@ -59,6 +69,21 @@ async function fakeFetch(url, opts) {
     return json({ text: 'ok' });
   }
   if (p === '/api/restore') return json({ ok: true, kept: (body.messages || []).length });
+  if (p === '/api/speak') {
+    WIN.__clipCalls += 1;
+    WIN.__clipTexts.push(body.text);
+    speakInflight += 1;
+    speakMax = Math.max(speakMax, speakInflight);
+    await sleep(25);
+    speakInflight -= 1;
+    return { ok: true, status: 200, blob: async () => ({ size: 4 }), json: async () => ({}) };
+  }
+  if (p === '/api/chat' && /^speak test/.test(body.message)) {
+    return sse([tok('First sentence is right here. '), tok('Second one follows it nicely. '), tok('And a third trailing bit'), ['reply', { text: SPEAK_FULL }]]);
+  }
+  if (p === '/api/chat' && /^reset test/.test(body.message)) {
+    return sse([tok('Let me think about that for you now. '), ['token', { kind: 'reset', text: '' }], tok('The real answer is short and clear.'), ['reply', { text: 'The real answer is short and clear.' }]]);
+  }
   if (p === '/api/chat') {
     return sse([
       ['route', { tag: 'qwen', note: 'ready' }],
@@ -91,10 +116,24 @@ async function fakeFetch(url, opts) {
       const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (ops++, /^create/.test(String(k)) ? () => ({ addColorStop() {} }) : () => {})), set: (t, k, v) => { t[k] = v; return true; } });
       w.HTMLCanvasElement.prototype.getContext = () => ctx;
       w.__copied = [];
+      w.__spoken = [];
+      let blobs = 0;
+      w.URL.createObjectURL = () => 'blob:clip' + (++blobs);
+      w.URL.revokeObjectURL = () => {};
+      w.Audio = class { constructor(u) { this.u = u; w.__played.push(u); } play() { setTimeout(() => this.onended && this.onended(), 15); return Promise.resolve(); } pause() {} };
+      w.FontFace = class { constructor(family, buf) { this.family = family; this.size = buf.byteLength; } load() { return Promise.resolve(this); } };
+      w.document.fonts = { add: (f) => w.__fonts.push(f.family + ':' + f.size) };
+      w.SpeechSynthesisUtterance = class { constructor(text) { this.text = text; } };
+      w.speechSynthesis = { speak: (u) => w.__spoken.push(u.text), cancel() {}, getVoices: () => [], speaking: false, onvoiceschanged: null, addEventListener() {} };
       Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: (t) => { w.__copied.push(t); return Promise.resolve(); } } });
       w.addEventListener('error', (e) => errors.push('window error: ' + e.message));
     } });
   const w = dom.window;
+  WIN = w;
+  w.__clipCalls = 0;
+  w.__clipTexts = [];
+  w.__played = [];
+  w.__fonts = [];
   const d = w.document;
   await new Promise((r) => w.addEventListener('load', r));
   await sleep(150);
@@ -193,6 +232,97 @@ async function fakeFetch(url, opts) {
   out.toolsOpen = !$('tools-menu').hidden;
   d.querySelector('#tools-menu [data-insert="ask gemini "]').click();
   out.toolInsert = { value: $('input').value, closed: $('tools-menu').hidden };
+
+  // tools and actions in the sidebar, the Tools menu and the run sheet
+  await sleep(60);
+  const toolCalls = () => calls.filter((c) => c.path === '/api/tools/run').map((c) => c.body);
+  out.side = { toolsCount: $('tools-count').textContent, actionsCount: $('actions-count').textContent, closedByDefault: $('tools-list').hidden && $('actions-body').hidden,
+    quick: [...d.querySelectorAll('.quick-actions button')].map((b) => b.textContent) };
+  d.querySelector('#sec-tools .sec-head').click();
+  d.querySelector('#sec-actions .sec-head').click();
+  out.side.opened = !$('tools-list').hidden && !$('actions-body').hidden;
+  out.side.remembered = w.localStorage.getItem('opt_sec-tools');
+  out.side.toolRow = d.querySelector('#tools-list .side-main').textContent;
+  out.side.taskRow = d.querySelector('#actions-list .side-main').textContent;
+  d.querySelector('#tools-list .side-main').click();
+  out.run = { open: !$('run-sheet').hidden, title: $('run-title').textContent, desc: $('run-desc').textContent, level: $('run-level').textContent,
+    fields: [...d.querySelectorAll('#run-fields input')].map((i) => i.type + ':' + i.name) };
+  $('run-go').click();
+  await sleep(30);
+  out.run.emptyBlocked = toolCalls().length;
+  d.querySelector('#run-fields input').value = '3';
+  $('run-go').click();
+  await sleep(60);
+  out.run.sent = toolCalls().slice(-1)[0];
+  out.run.result = $('run-result').textContent;
+  $('run-code-box').open = true;
+  $('run-code-box').dispatchEvent(new w.Event('toggle'));
+  await sleep(60);
+  out.run.code = $('run-code').textContent;
+  d.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  out.run.escCloses = $('run-sheet').hidden;
+  $('tools-btn').click();
+  out.menu = { custom: [...d.querySelectorAll('#tools-custom button')].map((b) => b.textContent), heading: d.querySelector('#tools-custom small').textContent };
+  d.querySelector('#tools-custom button').click();
+  out.menu.opensSheet = !$('run-sheet').hidden && $('run-name').textContent === 'miles_to_km';
+  out.menu.menuClosed = $('tools-menu').hidden;
+  $('run-close').click();
+  d.querySelector('#actions-list .side-main').click();
+  out.side.taskToInput = $('input').value;
+  $('input').value = '';
+  const chatsBefore = calls.filter((c) => c.path === '/api/chat').length;
+  d.querySelector('#actions-list .side-acts button').click();
+  await sleep(600);
+  const chatCalls = calls.filter((c) => c.path === '/api/chat');
+  out.side.rerun = chatCalls.length - chatsBefore === 1 && chatCalls.slice(-1)[0].body.message === 'convert 5 miles to km';
+  d.querySelector('.quick-actions button').click();
+  await sleep(40);
+  out.side.quickSent = toolCalls().slice(-1)[0];
+  d.querySelector('#actions-list .side-acts button:last-child').click();
+  await sleep(40);
+  d.querySelector('#tools-list .side-acts button:last-child').click();
+  await sleep(40);
+  const cmdLines = calls.filter((c) => c.path === '/api/command').map((c) => c.body.line);
+  out.side.deleted = [cmdLines.lastIndexOf('/tasks remove ab12') >= 0, cmdLines.lastIndexOf('/tools remove miles_to_km') >= 0];
+  const mine = d.querySelector('.turn.user');
+  out.mine = { buttons: [...mine.querySelectorAll('.acts button')].map((b) => b.textContent), text: mine.querySelector('.text').textContent };
+  mine.querySelector('.act-copy').click();
+  mine.querySelector('.act-speak').click();
+  await sleep(30);
+  out.mine.copied = w.__copied.slice(-1)[0];
+  out.mine.spoken = w.__spoken.slice(-1)[0];
+
+  // streamed speech: device voice, then Gemini voice
+  const say = async (text, wait) => { $('input').value = text; $('input').dispatchEvent(new w.Event('input', { bubbles: true })); $('composer').requestSubmit(); await sleep(wait); };
+  $('opt-speak').checked = true;
+  $('opt-speak').dispatchEvent(new w.Event('change'));
+  status.tts.engine = 'system';
+  await say('/help', 150);
+  w.__spoken.length = 0;
+  await say('speak test one', 700);
+  out.voiceDevice = { spoken: w.__spoken.slice(), atReply: w.__atReply.spoken, clips: w.__clipCalls };
+  status.tts.engine = 'gemini';
+  await say('/help', 150);
+  w.__spoken.length = 0;
+  await say('speak test two', 1400);
+  out.voiceGemini = { clipTexts: w.__clipTexts.slice(), played: w.__played.length, maxParallel: speakMax, clipsBeforeReply: w.__atReply.clips, deviceSpoke: w.__spoken.length };
+  $('opt-speak').checked = false;
+  $('opt-speak').dispatchEvent(new w.Event('change'));
+  await say('reset test', 500);
+  out.reset = { text: [...d.querySelectorAll('.turn.faze')].slice(-1)[0].querySelector('.body').textContent };
+
+  // font choices
+  d.querySelector('#font-seg [data-v="serif"]').click();
+  out.font = { serif: d.documentElement.dataset.font, stored: w.localStorage.getItem('opt_font'), platform: d.documentElement.dataset.platform, fileRowHidden: $('row-fontfile').hidden };
+  d.querySelector('#font-seg [data-v="custom"]').click();
+  out.font.fileRowShown = !$('row-fontfile').hidden;
+  const fontFile = new w.File([new Uint8Array([0, 1, 0, 0, 9, 9])], 'MyFont.ttf');
+  Object.defineProperty($('font-file'), 'files', { value: [fontFile], configurable: true });
+  $('font-file').dispatchEvent(new w.Event('change'));
+  await sleep(80);
+  out.font.custom = { attr: d.documentElement.dataset.font, registered: w.__fonts.slice(), name: $('font-name').textContent, savedName: w.localStorage.getItem('opt_fontname'), hasData: !!w.localStorage.getItem('opt_fontdata') };
+  d.querySelector('#font-seg [data-v="system"]').click();
+  out.font.backToSystem = d.documentElement.dataset.font;
 
   $('collapse').click();
   out.collapsed = { cls: d.body.classList.contains('side-closed'), stored: w.localStorage.getItem('opt_sidebar') };

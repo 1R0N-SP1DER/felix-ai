@@ -106,6 +106,8 @@ def assess_code(code: str) -> dict:
                 note(f"imports from {'.' * node.level}{module}")
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in RISKY_CALLS:
             note(f"calls {node.func.id}()")
+        elif isinstance(node, ast.Name) and node.id == "faze_run":
+            note("runs system commands (faze_run)")
         elif isinstance(node, ast.Attribute) and node.attr.startswith("__") and node.attr.endswith("__") \
                 and node.attr not in SAFE_DUNDERS:
             note(f"uses {node.attr}")
@@ -182,8 +184,11 @@ def format_info(info: dict) -> str:
 
 _RUNNER = (
     "import sys, json, importlib.util\n"
+    "sys.path.insert(0, sys.argv[2])\n"
+    "import tool_helpers\n"
     "spec = importlib.util.spec_from_file_location('faze_tool', sys.argv[1])\n"
     "mod = importlib.util.module_from_spec(spec)\n"
+    "mod.faze_run = tool_helpers.run\n"
     "spec.loader.exec_module(mod)\n"
     "out = mod.run(json.loads(sys.stdin.read() or '{}'))\n"
     "sys.stdout.write(out if isinstance(out, str) else json.dumps(out, default=str))\n"
@@ -227,6 +232,7 @@ class AgentStore:
         self.root = Path(root).expanduser()
         self.tools = {}
         self.tasks = []
+        self.rev = 0  # bumps on every change so open apps know to refresh their lists
         self._lock = threading.RLock()
 
     # -- persistence
@@ -241,6 +247,7 @@ class AgentStore:
         tmp = self.root / (name + ".tmp")
         tmp.write_text(json.dumps(data, indent=1))
         os.replace(tmp, self.root / name)
+        self.rev += 1
 
     def load(self):
         with self._lock:
@@ -315,7 +322,7 @@ class AgentStore:
         work = self.root / "work"
         work.mkdir(parents=True, exist_ok=True)
         try:
-            proc = subprocess.run([sys.executable, "-I", "-B", "-c", _RUNNER, str(path)], input=json.dumps(parameters),
+            proc = subprocess.run([sys.executable, "-I", "-B", "-c", _RUNNER, str(path), str(Path(__file__).resolve().parent)], input=json.dumps(parameters),
                                   capture_output=True, text=True, timeout=timeout, cwd=str(work),
                                   env=_clean_env(work), preexec_fn=_limits(timeout) if os.name == "posix" else None)
         except subprocess.TimeoutExpired:
@@ -389,10 +396,18 @@ class AgentStore:
             return n
 
     # -- views
+    def code(self, name):
+        try:
+            return (self.root / "tools" / f"{name}.py").read_text() if name in self.tools else None
+        except OSError:
+            return None
+
     def snapshot(self) -> dict:
         with self._lock:
             return {
-                "tools": [{k: m[k] for k in ("name", "description", "how_it_works", "level", "uses", "created")}
+                "rev": self.rev,
+                "tools": [{**{k: m[k] for k in ("name", "description", "how_it_works", "level", "uses", "created")},
+                           "params": {p: {"type": s["type"], "description": s["description"]} for p, s in m["params"].items()}}
                           for m in sorted(self.tools.values(), key=lambda m: m["name"])],
                 "tasks": [{"id": t["id"], "prompt": t["prompt"], "tools": sorted({s["tool"] for s in t["steps"]}),
                            "uses": t.get("uses", 0), "runs": t.get("runs", 1), "ts": t.get("ts", 0)}
@@ -475,10 +490,11 @@ def agent_note(config: dict) -> str:
             "can't: build the tool with create_tool, then call it. Check the existing tools first; do not recreate one that exists. "
             "If a tool errors, read the error, fix the code and call create_tool again with the same name (up to two fixes) before "
             "telling the user what went wrong, quoting the exact error. "
-            "Your tools run as Python 3 on the user's rooted Android phone inside Termux, not on a desktop: `am start -a "
-            "android.intent.action.VIEW -d URL`, `termux-*` commands and `su -c` exist. Call them with subprocess and a list of "
-            "arguments. If a command prints 'CFI' or a linker error, run it again with env set to a copy of os.environ without "
-            "LD_PRELOAD and LD_LIBRARY_PATH. " + high + "\n")
+            "Your tools run as Python 3 on the user's rooted Android phone inside Termux, not on a desktop. To run a command, call "
+            "the built-in faze_run(['am', 'start', '-a', 'android.intent.action.VIEW', '-d', URL]) (add root=True for su). It returns "
+            "the output text, raises an error with the real message, and already handles Android's linker (CFI) crash, so do not import "
+            "subprocess. Examples: ['settings', 'put', 'system', 'screen_brightness', '120'] and ['screencap', '-p', PATH] need root=True; "
+            "['termux-notification', '--title', T]. Using faze_run makes the tool higher-level. " + high + "\n")
 
 
 def custom_tools_text() -> str:

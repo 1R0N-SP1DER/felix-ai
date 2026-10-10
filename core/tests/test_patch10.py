@@ -418,7 +418,8 @@ class TestAgentServer(AgentCase, WebBase):
     def test_wiring_status_and_agent_endpoint(self):
         self.assertEqual(self.convo.approver, self.httpd.request_approval)
         code, status = self.jget("/api/status")
-        self.assertEqual(status["agent"], {"mode": "ask", "high_tools": False, "tools": 0, "tasks": 0})
+        self.assertEqual({k: status["agent"][k] for k in ("mode", "high_tools", "tools", "tasks")}, {"mode": "ask", "high_tools": False, "tools": 0, "tasks": 0})
+        self.assertIn("rev", status["agent"])
         info, meta, src = agent.prepare_tool(spec(), False)
         agent.STORE.add_tool(meta, src)
         agent.STORE.save_task("convert miles to km", [{"tool": "miles_to_km", "args": {}, "ok": True}], "r")

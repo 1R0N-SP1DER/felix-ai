@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.parse
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -36,6 +37,7 @@ import tts
 import wake
 from icons import make_icon
 from tool_replies import summarize_error
+from tool_schema import TOOL_REGISTRY
 
 WEB_DIR = Path(__file__).parent / "web"
 STATIC = {
@@ -210,6 +212,30 @@ class FazeServer(ThreadingHTTPServer):
         return {f"localhost:{self.port}", f"127.0.0.1:{self.port}", f"[::1]:{self.port}"}
 
 
+UI_BLOCKED_TOOLS = frozenset({"delegate_to_gemini", "enable_thinking_mode", "create_tool"})
+
+
+def coerce_params(name: str, raw: dict) -> dict:
+    """Form values arrive as strings or numbers; make them the types the tool declares."""
+    out = {}
+    for param, kind in TOOL_REGISTRY[name].items():
+        if param not in raw:
+            raise ValueError(f"missing '{param}'")
+        value = raw[param]
+        try:
+            if kind is bool:
+                out[param] = value if isinstance(value, bool) else str(value).strip().lower() in ("1", "true", "yes", "on")
+            elif kind is int:
+                out[param] = int(float(value))
+            elif kind is float:
+                out[param] = float(value)
+            else:
+                out[param] = str(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"'{param}' must be a {kind.__name__}")
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "Faze"
     sys_version = ""
@@ -319,6 +345,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"settings": self.server.convo.settings_list()})
             if path == "/api/commands":
                 return self._json(200, {"commands": self.server.convo.commands()})
+            if path == "/api/tools/code":
+                name = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("name", [""])[0]
+                code = agent.STORE.code(name)
+                if code is None:
+                    return self._error(404, f"no saved tool named '{name}'")
+                return self._json(200, {"name": name, "code": code})
             if path == "/api/agent":
                 cfg = self.server.convo.config["agent"]
                 return self._json(200, {"mode": cfg["mode"], "high_tools": cfg["high_tools"],
@@ -358,6 +390,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/restore":
             kept = self.server.convo.restore_history(data.get("messages"))
             return self._json(200, {"ok": True, "kept": kept})
+        if path == "/api/tools/run":
+            return self._run_tool(data)
         if path == "/api/approve":
             if not self.server.resolve_approval(str(data.get("id", "")), bool(data.get("approve"))):
                 return self._error(404, "nothing is waiting for approval")
@@ -394,7 +428,7 @@ class Handler(BaseHTTPRequestHandler):
             "user_name": convo._names()[1],
             "forced_turns": convo.forced_remaining,
             "agent": {"mode": convo.config["agent"]["mode"], "high_tools": convo.config["agent"]["high_tools"],
-                      "tools": len(agent.STORE.tools), "tasks": len(agent.STORE.tasks)},
+                      "tools": len(agent.STORE.tools), "tasks": len(agent.STORE.tasks), "rev": agent.STORE.rev},
             "turns": max(0, len(convo.messages) - 1),
             "think": convo.config["reasoning"]["mode"],
             "stt": {"server": stt.available(convo.config), "pref": convo.config["voice"]["stt"],
@@ -423,6 +457,19 @@ class Handler(BaseHTTPRequestHandler):
             pass
         finally:
             server.unsubscribe(q)
+
+    def _run_tool(self, data):
+        """Run one tool straight from the sidebar or the Tools menu, no model involved."""
+        name = str(data.get("name", ""))
+        if name not in TOOL_REGISTRY or name in UI_BLOCKED_TOOLS:
+            return self._error(404, f"no tool named '{name}' can be run from here")
+        raw = data.get("params") if isinstance(data.get("params"), dict) else {}
+        try:
+            params = coerce_params(name, raw)
+        except ValueError as e:
+            return self._error(422, str(e))
+        ok, text = self.server.convo._execute_tool(name, params, "ui")
+        self._json(200, {"ok": ok, "text": str(text)[:4000]})
 
     def _speak(self, data):
         cfg = self.server.convo.config["tts"]

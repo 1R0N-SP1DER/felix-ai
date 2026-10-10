@@ -22,16 +22,19 @@
   /* space */
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 40px;
   /* type */
-  --fs: 16px; --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-  --font-read: var(--font-ui); --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --fs: 16px; --font-system: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-ui: var(--font-system); --font-read: var(--font-system); --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   /* motion */
   --ease: cubic-bezier(.22, 1, .36, 1); --spring: cubic-bezier(.34, 1.45, .64, 1); --t-fast: .18s; --t-med: .4s; --t-slow: .7s;
   /* layout */
   --side-w: 292px; --content-w: 780px; --content-left: var(--side-w); --composer-h: 64px; --level: 0;
 }
 html[data-size="s"] { --fs: 14.5px; } html[data-size="l"] { --fs: 18px; }
+/* Android's generic sans-serif is the family a custom system font replaces; system-ui can resolve to plain Roboto there. */
+html[data-platform="android"] { --font-system: sans-serif; }
 html[data-font="serif"] { --font-read: ui-serif, Georgia, "Iowan Old Style", "Times New Roman", serif; }
 html[data-font="mono"] { --font-read: var(--font-mono); }
+html[data-font="custom"] { --font-ui: "FazeCustom", var(--font-system); --font-read: "FazeCustom", var(--font-system); }
 body.side-closed { --content-left: 0px; }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -391,3 +394,27 @@ body.view-settings #cmdmenu, body.view-settings #attachments, body.view-settings
 .warn-pill { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
 .agent-item { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-2); padding: 10px 0; border-bottom: 1px solid var(--line); } .agent-item:last-child { border-bottom: 0; }
 .agent-item > div { min-width: 0; } .agent-item b { overflow-wrap: anywhere; margin-right: 6px; } .agent-item small { display: block; color: var(--text-3); font-size: .78rem; overflow-wrap: anywhere; }
+
+/* ---------------------------------------------------------------- tools + actions in the sidebar, run sheet */
+#side-tools { display: grid; gap: 2px; max-height: 40%; overflow-y: auto; margin: 0 -6px; padding: 0 6px; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+.sec-head { display: flex; align-items: center; gap: var(--sp-2); width: 100%; padding: 8px 10px; border-radius: 12px; color: var(--text-2); text-align: left; transition: background var(--t-fast), color var(--t-fast); }
+.sec-head:hover { background: var(--glow-soft); color: var(--text); }
+.sec-head span { flex: 1; font-size: .68rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; }
+.sec-head b { font-weight: 500; font-size: .74rem; color: var(--text-3); padding: 0 8px; border-radius: 999px; border: 1px solid var(--line); }
+.sec-head i { font-style: normal; font-size: .8rem; color: var(--text-3); transition: transform var(--t-med) var(--spring); } .side-sec.open .sec-head i { transform: rotate(90deg); }
+.sec-body { padding: 2px 0 6px; animation: rise .35s var(--ease) both; }
+.side-row { display: flex; align-items: center; border-radius: 12px; transition: background var(--t-fast); } .side-row:hover, .side-row:focus-within { background: rgba(255, 255, 255, .04); }
+.side-main { flex: 1; min-width: 0; padding: 8px 10px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-size: .92em; }
+.side-pill { font-style: normal; font-weight: 700; font-size: .72rem; color: var(--warn); padding: 0 6px; }
+.side-acts { display: flex; opacity: 0; transition: opacity var(--t-fast); } .side-row:hover .side-acts, .side-row:focus-within .side-acts { opacity: 1; }
+.side-acts button { width: 28px; height: 28px; border-radius: 8px; font-size: 11px; color: var(--text-3); } .side-acts button:hover { background: var(--glow-soft); color: var(--text); }
+.side-acts button:last-child:hover { color: var(--bad); }
+.quick-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 6px 8px; }
+.quick-actions button { padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line); background: rgba(255, 255, 255, .03); color: var(--text-2); font-size: .78rem; transition: border-color var(--t-fast), color var(--t-fast), transform var(--t-med) var(--spring); }
+.quick-actions button:hover { border-color: var(--accent); color: var(--text); transform: translateY(-1px); }
+#tools-custom { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; } #tools-custom small { display: block; padding: 6px 12px 2px; color: var(--text-3); font-size: .7rem; letter-spacing: .1em; text-transform: uppercase; }
+.run-fields { display: grid; gap: var(--sp-2); } .run-field { display: grid; gap: 4px; font-size: .86rem; color: var(--text-2); }
+.run-field input[type="text"], .run-field input[type="number"] { max-width: none; width: 100%; }
+#run-result { margin: 0; padding: 10px 12px; max-height: 30dvh; overflow: auto; white-space: pre-wrap; border-radius: var(--r-m); border: 1px solid var(--line-2); background: rgba(3, 6, 12, .75); font: .82rem / 1.55 var(--font-mono); }
+#run-result.bad { color: var(--bad); }
+@media (hover: none) { .side-acts { opacity: 1; } }

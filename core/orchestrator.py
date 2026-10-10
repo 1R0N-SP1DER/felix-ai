@@ -49,7 +49,7 @@ from direct_tool_router import try_direct_route
 from intents import match_intent
 from needle_router import ask_needle
 import gemini_client
-from gemini_client import ask_gemini, GeminiError
+from gemini_client import ask_gemini, ask_gemini_stream, GeminiError
 from gemini_tools import build_gemini_tools_schema, build_local_tools_schema
 
 GEMINI_TOOLS_SCHEMA = build_gemini_tools_schema()
@@ -619,6 +619,28 @@ class Conversation:
     # Gemini
     # ------------------------------------------------------------------
 
+    def _gemini_round(self, system_message: str, history: list, schema) -> dict:
+        """One Gemini request. With a token hook (the web app) the text streams as it is written;
+        a tool call after some text drops that text (kind 'reset'). If the streaming endpoint itself
+        fails before any text arrived, the plain endpoint gets a turn."""
+        if not self.on_token or not self.config.get("gemini", {}).get("stream", True):
+            return ask_gemini(system_message, history, tools_schema=schema)
+        parts = []
+        try:
+            for chunk in ask_gemini_stream(system_message, history, tools_schema=schema):
+                if chunk["type"] == "text_chunk":
+                    parts.append(chunk["content"])
+                    self.on_token("answer", chunk["content"])
+                else:
+                    if parts:
+                        self.on_token("reset", "")
+                    return chunk
+        except GeminiError:
+            if parts:
+                raise
+            return ask_gemini(system_message, history, tools_schema=schema)
+        return {"type": "text", "content": "".join(parts)}
+
     def _call_gemini_with_tools(self, max_rounds: int = 2) -> str:
         """Gemini picks tools from its own schema (never delegate_to_gemini). With the agent on it
         gets more rounds and create_tool. Identical repeated calls are not re-run, tool errors go
@@ -636,8 +658,7 @@ class Conversation:
         for round_no in range(max_rounds + 1):
             final_round = round_no == max_rounds
             start = time.time()
-            result = ask_gemini(system_message, history,
-                                tools_schema=None if final_round else schema)
+            result = self._gemini_round(system_message, history, None if final_round else schema)
             if result["type"] == "text":
                 log_action("gemini", "reply", {}, f"{len(result['content'])} chars",
                            int((time.time() - start) * 1000))

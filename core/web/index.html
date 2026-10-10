@@ -21,6 +21,23 @@
       </div>
       <button id="new-chat" class="new-chat" type="button"><span>+</span> New chat</button>
       <input id="chat-search" type="search" placeholder="Search chats" autocomplete="off" aria-label="Search chats">
+      <div id="side-tools">
+        <section class="side-sec" id="sec-tools">
+          <button class="sec-head" type="button" aria-expanded="false" aria-controls="tools-list"><span>Tools</span><b id="tools-count">0</b><i>&#9656;</i></button>
+          <div class="sec-body" id="tools-list" hidden></div>
+        </section>
+        <section class="side-sec" id="sec-actions">
+          <button class="sec-head" type="button" aria-expanded="false" aria-controls="actions-body"><span>Actions</span><b id="actions-count">0</b><i>&#9656;</i></button>
+          <div class="sec-body" id="actions-body" hidden>
+            <div class="quick-actions">
+              <button type="button" data-tool="open_app" data-param="app" data-ask="Which app? (for example YouTube)">Open app</button>
+              <button type="button" data-tool="youtube_play" data-param="query" data-ask="What should I play? (for example mrwhosetheboss latest video)">Play on YouTube</button>
+              <button type="button" data-tool="open_url" data-param="url" data-ask="Link to open (https://...)">Open link</button>
+            </div>
+            <div id="actions-list"></div>
+          </div>
+        </section>
+      </div>
       <nav id="chat-groups" aria-label="Chat history"></nav>
       <div class="side-bottom">
         <button id="open-settings" class="side-link" type="button">Settings</button>
@@ -95,7 +112,8 @@
         <div class="row"><span>Text size</span>
           <div class="seg small" id="size-seg"><button type="button" data-v="s">S</button><button type="button" data-v="m">M</button><button type="button" data-v="l">L</button></div></div>
         <div class="row"><span>Font</span>
-          <div class="seg small" id="font-seg"><button type="button" data-v="system">System</button><button type="button" data-v="serif">Serif</button><button type="button" data-v="mono">Mono</button></div></div>
+          <div class="seg small" id="font-seg"><button type="button" data-v="system">System</button><button type="button" data-v="serif">Serif</button><button type="button" data-v="mono">Mono</button><button type="button" data-v="custom">Custom</button></div></div>
+        <div class="row" id="row-fontfile" hidden><span>Font file<small id="font-name"></small></span><button id="font-pick" type="button" class="ghost small">Choose file</button><input id="font-file" type="file" accept=".ttf,.otf,.woff,.woff2,font/*" hidden></div>
         <label class="row"><span>Animations</span><input type="checkbox" id="opt-motion"></label>
         <label class="row"><span>Greeting line</span><input type="checkbox" id="opt-greeting"></label>
       </section>
@@ -179,6 +197,7 @@
     <button type="button" data-insert="whats the time">Time</button>
     <button type="button" data-insert="read my clipboard">Clipboard</button>
     <button type="button" data-insert="vibrate my phone">Vibrate</button>
+    <div id="tools-custom" hidden></div>
   </div>
 
   <div class="overlay" id="model-sheet" hidden>
@@ -216,6 +235,20 @@
       <div class="sheet-head"><h2>Activity</h2><span class="spacer"></span><button id="log-copy" type="button" class="ghost small">Copy</button><button id="close-log" class="icon" aria-label="Close">&#10005;</button></div>
       <div id="log-lines" class="log-lines" tabindex="0"></div>
       <p class="hint">Live from FAZE: routing, tool calls, errors. The same lines the terminal prints.</p>
+    </div>
+  </div>
+
+  <div class="overlay center" id="run-sheet" hidden>
+    <div class="pair-body approval" role="dialog" aria-labelledby="run-title">
+      <h2 id="run-title">Tool</h2>
+      <div class="ap-meta"><span id="run-name" class="key"></span><span id="run-level" class="via"></span><span id="run-uses" class="via"></span></div>
+      <p id="run-desc"></p>
+      <p id="run-how" class="hint"></p>
+      <div id="run-fields" class="run-fields"></div>
+      <pre id="run-result" hidden></pre>
+      <details id="run-code-box"><summary>Show the code</summary><pre id="run-code"></pre></details>
+      <div class="ap-actions"><button id="run-delete" class="wide ghost" type="button">Delete</button><button id="run-go" class="wide" type="button">Run</button></div>
+      <button id="run-close" class="link-btn" type="button">Close</button>
     </div>
   </div>
 

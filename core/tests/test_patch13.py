@@ -93,7 +93,7 @@ class TestAgentInstructions(unittest.TestCase):
     def test_tells_gemini_to_build_a_tool_instead_of_giving_up(self):
         cfg = load_config()
         note = agent.agent_note(cfg)
-        for phrase in ("never say you can't", "create_tool", "same name", "quoting the exact error", "Termux", "am start", "CFI", "LD_PRELOAD"):
+        for phrase in ("never say you can't", "create_tool", "same name", "quoting the exact error", "Termux", "faze_run", "root=True", "do not import subprocess", "CFI"):
             self.assertIn(phrase, note)
         self.assertIn("NOT allowed", note)
         cfg["agent"]["high_tools"] = True
