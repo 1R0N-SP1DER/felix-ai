@@ -210,12 +210,11 @@
       <div id="model-list"></div>
       <p class="hint">Tap a model to stay on it until you turn it off. Tap the &#10003; or arrow to pick how long instead.</p>
       <h3>Thinking</h3>
-      <div class="seg" id="think-seg">
-        <button type="button" data-v="auto">Auto</button>
-        <button type="button" data-v="on">On</button>
-        <button type="button" data-v="off">Off</button>
-      </div>
-      <p class="hint">Thinking applies to Qwen. It is slow on a phone, about 6 words a second, and you can press stop.</p>
+      <select id="think-level" aria-label="Thinking level">
+        <option value="auto">Auto</option><option value="off">Off</option><option value="low">Low</option>
+        <option value="medium">Medium</option><option value="high">High</option><option value="max">Max</option>
+      </select>
+      <p class="hint" id="think-hint"></p>
     </div>
   </div>
 

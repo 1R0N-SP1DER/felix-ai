@@ -1,0 +1,1984 @@
+diff --git a/core/config_loader.py b/core/config_loader.py
+index a225d7f..de55f53 100644
+--- a/core/config_loader.py
++++ b/core/config_loader.py
+@@ -29,8 +29,9 @@ DEFAULTS = {
+     "assistant_name": "Faze",   # kept in sync with assistant.name
+     "assistant": {"name": "Faze", "user_name": "Felix"},
+     "model": {"forced": "auto"},          # auto | qwen | gemini | lfm  (persisted /model choice)
+-    "reasoning": {"mode": "auto"},        # auto | on | off  (Qwen thinking mode)
+-    "voice": {"stt": "auto"},             # auto | server | browser
++    "reasoning": {"mode": "auto", "level": "auto"},  # level: auto|off|low|medium|high|max; mode (auto|on|off) is derived from it
++    "voice": {"stt": "auto", "speak": True, "listen_timeout": 8,  # stt: auto | server | browser
++              "overlay_task": "Faze Overlay", "overlay_close_task": "Faze Overlay Close"},  # Tasker task names (empty: do not ask Tasker)
+     "tts": {"engine": "system", "voice": "kore", "model": "gemini-3.1-flash-tts-preview"},
+     "wake": {
+         "enabled": False,
+@@ -97,7 +98,12 @@ SETTINGS = {
+     "assistant.user_name": (str, None),
+     "model.forced": (str, ("auto", "qwen", "gemini", "lfm")),
+     "reasoning.mode": (str, ("auto", "on", "off")),
++    "reasoning.level": (str, ("auto", "off", "low", "medium", "high", "max")),
+     "voice.stt": (str, ("auto", "server", "browser")),
++    "voice.speak": (bool, None),
++    "voice.listen_timeout": (int, None),
++    "voice.overlay_task": (str, None),
++    "voice.overlay_close_task": (str, None),
+     "tts.engine": (str, ("system", "gemini")),
+     "tts.voice": (str, __import__("tts").VOICE_NAMES),
+     "tts.model": (str, None),
+diff --git a/core/device.py b/core/device.py
+index fd696c0..9bd9fcf 100644
+--- a/core/device.py
++++ b/core/device.py
+@@ -23,6 +23,7 @@ import tool_helpers
+ 
+ CONTROL_MODES = ("off", "ask", "on")
+ SETTINGS = {"control": "off", "max_steps": 30, "cursor": True, "mic_cmd": ""}
++MIC_TAP = {"fn": None}  # set by the web server: seconds -> PCM from the wake-word stream, or None
+ STATE = {"steps": 0, "cursor_on": False, "cursor_prev": "0", "size": None}
+ KEYS = {"home": 3, "back": 4, "enter": 66, "recent": 187, "menu": 82, "search": 84, "tab": 61, "delete": 67, "camera": 27,
+         "volume_up": 24, "volume_down": 25, "up": 19, "down": 20, "left": 21, "right": 22, "escape": 111, "space": 62}
+@@ -120,10 +121,30 @@ def parse_nodes(xml_text: str) -> list:
+     return nodes
+ 
+ 
++_DUMP_HINTS = (
++    ("idle state", "the screen never settles (a camera preview, video or game keeps animating), so it cannot be read"),
++    ("null root node", "no readable window (another accessibility service may be holding the reader, or the window is secure)"),
++    ("locked", "the screen is locked"),
++)
++
++
+ def read_nodes() -> list:
++    """The screen's elements via uiautomator. It prints a success line and writes a file; when it prints an error
++    instead (it still exits 0), that error is what the model and the user need to see, not 'file not found'."""
+     path = "/data/local/tmp/faze_ui.xml"
+-    _root(["uiautomator", "dump", path], 20)
+-    return parse_nodes(_root(["cat", path], 10, cap=400000))
++    said = ""
++    for flags in ([], ["--compressed"]):
++        try:
++            _root(["rm", "-f", path], 5)
++            said = _root(["uiautomator", "dump", *flags, path], 15)
++        except DeviceError as e:
++            said = str(e)
++            continue
++        if "dumped to" in said.lower():
++            return parse_nodes(_root(["cat", path], 10, cap=400000))
++    why = next((hint for key, hint in _DUMP_HINTS if key in said.lower()), "")
++    raise DeviceError(f"uiautomator could not read the screen: {said.strip()[:160] or 'no output'}"
++                      + (f" ({why})" if why else "") + ". Use screen_look instead.")
+ 
+ 
+ def screen_read() -> str:
+@@ -225,7 +246,13 @@ def wait(seconds) -> str:
+ # ---------------------------------------------------------------- hearing
+ 
+ def record_pcm(seconds: int) -> bytes:
+-    """Raw 16 kHz mono 16-bit audio from the mic command (the same one the wake word uses)."""
++    """Raw 16 kHz mono 16-bit audio. The wake-word stream is used when it is running (it already owns the
++    microphone source); otherwise the mic command is started for the duration."""
++    tap = MIC_TAP["fn"]
++    if tap:
++        pcm = tap(seconds)
++        if pcm:
++            return pcm
+     cmd = shlex.split(SETTINGS["mic_cmd"])
+     if not cmd:
+         raise DeviceError("no mic command is configured (wake.mic_cmd)")
+@@ -259,16 +286,70 @@ def record_pcm(seconds: int) -> bytes:
+     return data
+ 
+ 
++def record_termux_api(seconds: int) -> tuple:
++    """Android's own recorder through Termux:API (termux-microphone-record), which runs as its own foreground
++    service and is not silenced the way a background pulse stream can be. Returns (bytes, mime)."""
++    import tempfile
++    path = os.path.join(tempfile.gettempdir(), f"faze_listen_{os.getpid()}.m4a")
++    try:
++        os.remove(path)
++    except OSError:
++        pass
++    try:
++        tool_helpers.run(["termux-microphone-record", "-f", path, "-l", str(seconds), "-e", "aac", "-r", "16000", "-c", "1"], timeout=10)
++        time.sleep(seconds + 1.5)
++        try:
++            tool_helpers.run(["termux-microphone-record", "-q"], timeout=5)
++        except RuntimeError:
++            pass
++        with open(path, "rb") as f:
++            data = f.read()
++    except RuntimeError as e:
++        raise DeviceError(f"Termux:API recording failed ({e})")
++    except OSError:
++        raise DeviceError("Termux:API recorded nothing (is the Termux:API app installed with microphone permission?)")
++    finally:
++        try:
++            os.remove(path)
++        except OSError:
++            pass
++    if len(data) < 2000:
++        raise DeviceError("Termux:API recorded nothing (microphone permission for Termux:API?)")
++    if data[4:8] == b"ftyp":  # an mp4 container: Gemini wants a plain wav, ffmpeg can make one
++        try:
++            wav = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", "pipe:0", "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1"],
++                                 input=data, capture_output=True, timeout=30)
++            if wav.returncode == 0 and wav.stdout[:4] == b"RIFF":
++                return wav.stdout, "audio/wav"
++        except (OSError, subprocess.TimeoutExpired):
++            pass
++        return data, "audio/mp4"
++    return data, "audio/aac"
++
++
+ def listen(seconds) -> str:
+     from gemini_client import GeminiError, ask_media
+     from tts import wav_from_pcm
+     n = max(1, min(MAX_LISTEN_SECONDS, int(seconds)))
+-    pcm = record_pcm(n)
+-    if not any(pcm):
+-        raise DeviceError("the microphone captured only silence (check the mic with python3 core/wake.py --check)")
++    audio, mime, problems = None, None, []
++    try:
++        pcm = record_pcm(n)
++        if any(pcm):
++            audio, mime = wav_from_pcm(pcm, 16000), "audio/wav"
++        else:
++            problems.append("the pulse microphone captured only silence")
++    except DeviceError as e:
++        problems.append(str(e))
++    if audio is None:
++        try:
++            audio, mime = record_termux_api(n)
++        except DeviceError as e:
++            problems.append(str(e))
++    if audio is None:
++        raise DeviceError("could not hear anything: " + "; ".join(problems) + ". Check the mic with python3 core/wake.py --check")
+     try:
+         heard = ask_media("Transcribe any speech in this audio word for word. If there is no speech, describe the main sounds in a few words.",
+-                          wav_from_pcm(pcm, 16000), "audio/wav")
++                          audio, mime)
+     except GeminiError as e:
+         raise DeviceError(f"could not ask Gemini about the audio: {e}")
+     return f"Heard over {n}s: {heard or '(nothing clear)'}"
+diff --git a/core/orchestrator.py b/core/orchestrator.py
+index 03692f2..b3f106b 100644
+--- a/core/orchestrator.py
++++ b/core/orchestrator.py
+@@ -33,7 +33,7 @@ import requests
+ import action_log
+ from action_log import log_action
+ from config_loader import (load_config, get_llm_url, describe_settings,
+-                           set_user_setting, unset_user_setting, SETTINGS)
++                           set_user_setting, unset_user_setting, SETTINGS, load_user_overrides)
+ from local_server import ServerManager
+ from memory_store import init_db, log_message
+ from memory_recall import setup_fts
+@@ -75,12 +75,15 @@ COMMANDS = [
+          {"value": "lfm", "description": "Local LFM, fast chat without tools"},
+          {"value": "gemini", "description": "Gemini online helper"},
+      ]},
+-    {"name": "think", "description": "Turn Qwen's thinking on or off",
+-     "usage": "/think [auto|on|off]",
++    {"name": "think", "description": "How much the model thinks (Qwen: on/off, Gemini: a level)",
++     "usage": "/think [auto|off|low|medium|high|max]",
+      "args": [
+-         {"value": "auto", "description": "Qwen thinks only when it asks to"},
+-         {"value": "on", "description": "Think before every reply (slow)"},
+-         {"value": "off", "description": "Never think"},
++         {"value": "auto", "description": "Qwen thinks only when it asks to; Gemini uses gemini.thinking"},
++         {"value": "off", "description": "Never think (Gemini: minimal)"},
++         {"value": "low", "description": "Think before every reply, lightly"},
++         {"value": "medium", "description": "Think before every reply"},
++         {"value": "high", "description": "Think hard"},
++         {"value": "max", "description": "Gemini: high. Qwen: same as any level"},
+      ]},
+     {"name": "reset", "description": "Start a new chat and clear the history", "usage": "/reset", "args": []},
+     {"name": "status", "description": "Show what is running", "usage": "/status", "args": []},
+@@ -230,7 +233,9 @@ class Conversation:
+             os.environ["FAZE_GEMINI_DISABLED"] = "1"
+         names = config["assistant"]
+         set_names(names["name"], names["user_name"])
+-        gemini_client.configure(chat=config["gemini"]["model"], search=config["gemini"]["search_model"], thinking=config["gemini"]["thinking"])
++        self.config.setdefault("reasoning", {})
++        self._sync_reasoning_startup()
++        gemini_client.configure(chat=config["gemini"]["model"], search=config["gemini"]["search_model"], thinking=self._gemini_thinking())
+         self._gemini_down_until = 0.0
+         self.system_static = build_static_system_message()
+         self.messages = [{"role": "system",
+@@ -990,16 +995,57 @@ class Conversation:
+             self.stop_lfm()
+         return f"Forcing {mode} " + (f"for next {turns} turns" if turns else "until you turn it off")
+ 
++    THINK_LEVELS = ("auto", "off", "low", "medium", "high", "max")
++
+     def _think_command(self, args: list) -> str:
++        level = self.config["reasoning"]["level"]
+         if not args:
+-            return "Reasoning: " + self.config["reasoning"]["mode"]
++            return "Reasoning: " + level
++        word = args[0].lower()
++        key = "reasoning.mode" if word == "on" else "reasoning.level"
+         try:
+-            value, _ = self.change_setting("reasoning.mode", args[0])
++            value, _ = self.change_setting(key, word)
+         except ValueError:
+-            return "Usage: /think auto|on|off"
+-        note = {"on": " (Qwen thinks before every reply; slow on this phone)",
+-                "off": " (Qwen never thinks)", "auto": " (Qwen thinks only when it asks to)"}[value]
+-        return f"Reasoning: {value}{note}"
++            return "Usage: /think auto|off|low|medium|high|max"
++        level = self.config["reasoning"]["level"]
++        shown = "on" if word == "on" else value
++        note = {"auto": " (Qwen thinks only when it asks to; Gemini uses gemini.thinking)",
++                "off": " (Qwen never thinks; Gemini minimal)"}.get(
++            level, f" (Qwen thinks before every reply, slow on this phone; Gemini {self._gemini_thinking() or 'default'})")
++        return f"Reasoning: {shown}{note}"
++
++    def _gemini_thinking(self) -> str:
++        """Gemini's thinking level for the current reasoning level: off -> minimal, low/medium/high as named,
++        max -> high, auto -> the gemini.thinking setting."""
++        level = self.config.get("reasoning", {}).get("level", "auto")
++        return {"off": "minimal", "low": "low", "medium": "medium", "high": "high", "max": "high"}.get(
++            level, self.config["gemini"]["thinking"])
++
++    @staticmethod
++    def _reasoning_pair(key: str, value: str, current_level: str = "auto"):
++        """The other half of the reasoning setting: level decides mode (Qwen has one thinking mode, so any
++        level except off and auto turns it on), and mode on keeps a thinking level or picks medium."""
++        if key == "reasoning.level":
++            return "reasoning.mode", {"auto": "auto", "off": "off"}.get(value, "on")
++        return "reasoning.level", ("medium" if value == "on" and current_level in ("auto", "off") else
++                                   current_level if value == "on" else value)
++
++    def _sync_reasoning_startup(self) -> None:
++        """Both reasoning keys can be saved; the level wins, an old mode-only override still works."""
++        try:
++            over = load_user_overrides().get("reasoning", {}) or {}
++        except Exception:
++            over = {}
++        r = self.config["reasoning"]
++        if over.get("level") in self.THINK_LEVELS:
++            r["level"] = over["level"]
++            r["mode"] = self._reasoning_pair("reasoning.level", r["level"])[1]
++        elif over.get("mode") in ("auto", "on", "off"):
++            r["mode"] = over["mode"]
++            r["level"] = self._reasoning_pair("reasoning.mode", r["mode"], "auto")[1]
++        else:
++            r.setdefault("level", "auto")
++            r["mode"] = self._reasoning_pair("reasoning.level", r["level"])[1]
+ 
+     def _status_text(self) -> str:
+         local = self.local.state if self.local.state != "unmanaged" else "running (not managed)"
+@@ -1009,7 +1055,7 @@ class Conversation:
+             "idle" if self._lfm_configured() else "not configured")
+         mode = self.forced_model or "auto"
+         gem = "on" if self._gemini_on() else "off"
+-        think = self.config["reasoning"]["mode"]
++        think = self.config["reasoning"]["level"]
+         return f"qwen: {local} | lfm: {lfm} | gemini: {gem} | mode: {mode} | think: {think}"
+ 
+     def change_setting(self, key: str, raw: str):
+@@ -1017,10 +1063,19 @@ class Conversation:
+         needs_restart); raises ValueError with a user-facing message."""
+         value, restart = set_user_setting(key, raw)
+         self._apply_setting(key, value)
++        if key in ("reasoning.mode", "reasoning.level"):  # save both halves so a stale one never wins at startup
++            other = "reasoning.level" if key == "reasoning.mode" else "reasoning.mode"
++            set_user_setting(other, self.config["reasoning"][other.split(".")[1]])
+         return value, restart
+ 
+     def reset_setting(self, key: str) -> bool:
+         removed = unset_user_setting(key)
++        if key in ("reasoning.mode", "reasoning.level"):
++            removed = unset_user_setting("reasoning.mode") | unset_user_setting("reasoning.level") | removed
++            if removed:
++                fresh = load_config()["reasoning"]
++                self._apply_setting("reasoning.level", fresh["level"])
++            return removed
+         if removed:
+             cur = load_config()
+             for part in key.split("."):
+@@ -1076,9 +1131,13 @@ class Conversation:
+             set_names(name, user)
+             self.config["assistant_name"] = name
+             self._rebuild_system()
+-        if key in ("gemini.model", "gemini.search_model", "gemini.thinking"):
++        if key in ("reasoning.level", "reasoning.mode"):
++            r = self.config["reasoning"]
++            other, other_value = self._reasoning_pair(key, value, r.get("level", "auto"))
++            r[other.split(".")[1]] = other_value
++        if key in ("gemini.model", "gemini.search_model", "gemini.thinking", "reasoning.level", "reasoning.mode"):
+             gemini_client.configure(chat=self.config["gemini"]["model"], search=self.config["gemini"]["search_model"],
+-                                    thinking=self.config["gemini"]["thinking"])
++                                    thinking=self._gemini_thinking())
+         if key.startswith(("search.", "actions.", "device.")):
+             tool_executor.configure(self.config)
+         if key == "agent.high_tools":
+diff --git a/core/tests/overlay_smoke.js b/core/tests/overlay_smoke.js
+new file mode 100644
+index 0000000..47dd50a
+--- /dev/null
++++ b/core/tests/overlay_smoke.js
+@@ -0,0 +1,92 @@
++// Drives the real web/overlay.html + overlay.js in jsdom against a fake FAZE server.
++// Needs `npm install jsdom` somewhere above this folder; the Python test skips itself otherwise.
++const fs = require('fs');
++const path = require('path');
++const { JSDOM, VirtualConsole } = require('jsdom');
++
++const WEB = path.join(__dirname, '..', 'web');
++const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
++const errors = [];
++const calls = [];
++let evCtl = null;
++let snap = { state: 'idle', transcript: '', reply: '', error: '', note: '', seq: 0, active: false };
++const push = (patch) => {
++  snap = Object.assign({}, snap, patch, { seq: snap.seq + 1 });
++  snap.active = ['listening', 'transcribing', 'thinking', 'speaking'].includes(snap.state);
++  evCtl.enqueue(new TextEncoder().encode('event: voice\ndata: ' + JSON.stringify(snap) + '\n\n'));
++};
++
++async function fakeFetch(url, opts) {
++  opts = opts || {};
++  const p = String(url).split('?')[0];
++  const body = opts.body ? JSON.parse(opts.body) : null;
++  calls.push({ path: p, method: opts.method || 'GET', auth: (opts.headers || {}).Authorization, body });
++  const json = (obj) => ({ ok: true, status: 200, json: async () => obj });
++  if ((opts.headers || {}).Authorization !== 'Bearer tok') return { ok: false, status: 401, json: async () => ({ error: 'no' }) };
++  if (p === '/api/events') return { ok: true, status: 200, body: new ReadableStream({ start(c) { evCtl = c; } }) };
++  if (p === '/api/voice/state') return json(snap);
++  if (p === '/api/voice/start') { snap = Object.assign({}, snap, { state: 'listening', active: true, transcript: '', reply: '', note: '' }); return json(Object.assign({ started: true }, snap)); }
++  if (p === '/api/voice/stop') { snap = Object.assign({}, snap, { state: 'idle', active: false, note: 'Stopped' }); return json(snap); }
++  if (p === '/api/open') return json({ ok: true });
++  return { ok: false, status: 404, json: async () => ({}) };
++}
++
++function boot(hash) {
++  const read = (f) => fs.readFileSync(path.join(WEB, f), 'utf8');
++  const html = read('overlay.html').split('<script src="/overlay.js"></script>').join('<script>' + read('overlay.js') + '</script>');
++  const vc = new VirtualConsole();
++  vc.on('jsdomError', (e) => errors.push('jsdom: ' + (e.detail || e.message)));
++  vc.on('error', (...a) => errors.push('console.error: ' + a.join(' ')));
++  return new JSDOM(html, { url: 'http://localhost:8787/overlay' + hash, runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole: vc,
++    beforeParse(w) { w.fetch = fakeFetch; w.ReadableStream = ReadableStream; w.TextDecoder = TextDecoder; w.TextEncoder = TextEncoder; } });
++}
++
++(async () => {
++  const out = {};
++  let dom = boot('#t=tok&auto');
++  let d = dom.window.document;
++  const $ = (id) => d.getElementById(id);
++  const view = () => ({ state: $('card').dataset.state, label: $('state').textContent, you: $('you').hidden ? '' : $('you').textContent,
++    reply: $('reply').hidden ? '' : $('reply').textContent, note: $('note').hidden ? '' : $('note').textContent,
++    again: !$('again').hidden, stop: !$('stop').hidden });
++  await sleep(150);
++  out.loaded = view();
++  out.autoStarted = calls.filter((c) => c.path === '/api/voice/start').length;
++  out.auth = calls.every((c) => c.auth === 'Bearer tok');
++  out.hashAfter = dom.window.location.hash;
++  out.token = dom.window.localStorage.getItem('faze_overlay_token');
++
++  push({ state: 'transcribing' }); await sleep(30); out.transcribing = view();
++  push({ state: 'thinking', transcript: 'what is the time' }); await sleep(30); out.thinking = view();
++  push({ reply: 'It is' }); await sleep(30); out.streaming = view();
++  push({ state: 'speaking', reply: 'It is half past four.' }); await sleep(30); out.speaking = view();
++  push({ state: 'done' }); await sleep(30); out.done = view();
++  push({ state: 'error', error: 'no microphone' }); await sleep(30); out.error = view();
++
++  $('again').click(); await sleep(60);
++  out.again = { starts: calls.filter((c) => c.path === '/api/voice/start').length, view: view() };
++  $('stop').click(); await sleep(60);
++  out.stop = { call: calls.filter((c) => c.path === '/api/voice/stop').map((c) => c.body), view: view() };
++  $('open').click(); await sleep(40);
++  out.open = calls.filter((c) => c.path === '/api/open').map((c) => c.body);
++  $('close').click(); await sleep(40);
++  out.close = calls.filter((c) => c.path === '/api/voice/stop').map((c) => c.body);
++  dom.window.close();
++
++  // an exchange already running is shown, not restarted; no token is reported, not crashed on
++  snap = { state: 'thinking', transcript: 'hi', reply: '', error: '', note: '', seq: 9, active: true };
++  const before = calls.filter((c) => c.path === '/api/voice/start').length;
++  dom = boot('#t=tok&auto'); d = dom.window.document;
++  await sleep(150);
++  out.running = { view: { state: d.getElementById('card').dataset.state, you: d.getElementById('you').textContent },
++    newStarts: calls.filter((c) => c.path === '/api/voice/start').length - before };
++  dom.window.close();
++  dom = boot(''); d = dom.window.document;
++  await sleep(80);
++  out.noToken = { state: d.getElementById('card').dataset.state, note: d.getElementById('note').textContent };
++  dom.window.close();
++
++  out.errors = errors;
++  console.log(JSON.stringify(out));
++  process.exit(0);
++})().catch((e) => { console.log(JSON.stringify({ crash: String(e && e.stack || e), errors })); process.exit(1); });
+diff --git a/core/tests/test_patch15.py b/core/tests/test_patch15.py
+index e91b6ae..3fa40fe 100644
+--- a/core/tests/test_patch15.py
++++ b/core/tests/test_patch15.py
+@@ -315,6 +315,8 @@ class FakePhone:
+         self.calls.append((cmd, root))
+         if cmd[:2] == ["wm", "size"]:
+             return "Physical size: 1080x2400"
++        if cmd[0] == "rm":
++            return ""
+         if cmd[0] == "uiautomator":
+             return "UI hierchary dumped to: /data/local/tmp/faze_ui.xml"
+         if cmd[0] == "cat":
+@@ -749,24 +751,24 @@ class TestServiceModes(unittest.TestCase):
+             time.sleep(0.1)
+         return False
+ 
+-    def test_voice_starts_the_app_and_opens_it_in_voice_mode_with_the_token(self):
++    def test_app_starts_the_app_and_opens_it_in_voice_mode_with_the_token(self):
+         self.serve()
+         self.write_fake('echo "app started" >> "$FAZE_LOG"; sleep 60\n')
+         open(os.path.join(self.env["FAZE_STATE"], "token"), "w").write("tok123")
+-        out = self.run_svc("start", "--voice")
++        out = self.run_svc("start", "--app")
+         self.assertEqual(out.returncode, 0, out.stderr)
+         self.assertIn("opened in voice mode", out.stdout)
+         self.assertEqual(open(self.opened).read().strip(), f"http://localhost:{self.port}/#t=tok123&voice")
+         self.assertTrue(self.wait_for(lambda: "app started" in self.log()))
+         self.assertEqual(self.run_svc("status").returncode, 0)
+ 
+-    def test_voice_does_not_restart_a_running_app_and_works_without_a_token(self):
++    def test_app_does_not_restart_a_running_app_and_works_without_a_token(self):
+         self.serve()
+         self.write_fake('echo "app started" >> "$FAZE_LOG"; sleep 60\n')
+         self.run_svc("start")
+         self.assertTrue(self.wait_for(lambda: "app started" in self.log()))
+-        self.run_svc("voice")
+-        self.run_svc("start", "--voice")
++        self.run_svc("app")
++        self.run_svc("start", "--app")
+         time.sleep(0.5)
+         self.assertEqual(self.log().count("app started"), 1)
+         self.assertEqual(open(self.opened).read().split(), [f"http://localhost:{self.port}/#voice"] * 2)
+diff --git a/core/tests/test_patch16.py b/core/tests/test_patch16.py
+new file mode 100644
+index 0000000..75b1572
+--- /dev/null
++++ b/core/tests/test_patch16.py
+@@ -0,0 +1,664 @@
++"""
++Patch 16: Tasker/service launch fixes (WIP part), the thinking-level dropdown, and the server-side voice session
++behind `faze start --voice` (no app opens; /overlay shows it).
++
++    PYTHONPATH=. python3 -m unittest tests.test_patch16 -v
++"""
++
++import json
++import os
++import queue
++import socket
++import subprocess
++import sys
++import tempfile
++import threading
++import time
++import unittest
++from http.server import HTTPServer
++from unittest import mock
++
++CORE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++ROOT = os.path.dirname(CORE)
++sys.path.insert(0, CORE)
++
++from tests.test_patch1 import TMP, Base  # noqa: E402
++from tests.test_patch5 import WebBase, TOKEN  # noqa: E402
++from tests.test_patch15 import Quiet  # noqa: E402
++
++import config_loader  # noqa: E402
++import gemini_client  # noqa: E402
++import voice_session  # noqa: E402
++from config_loader import SETTINGS, load_config  # noqa: E402
++from orchestrator import COMMANDS  # noqa: E402
++from voice_session import VoiceSession, speakable  # noqa: E402
++
++HAVE_JSDOM = subprocess.run(["node", "-e", "require('jsdom')"], capture_output=True, cwd=os.path.join(CORE, "tests")).returncode == 0
++
++
++def run_node(script):
++    out = subprocess.run(["node", os.path.join(CORE, "tests", script)], capture_output=True, text=True, timeout=60)
++    return json.loads(out.stdout.strip().splitlines()[-1]) if out.stdout.strip() else {"crash": out.stderr}
++
++
++# ---------------------------------------------------------------- thinking level
++
++class TestThinkingLevel(Base):
++    def setUp(self):
++        super().setUp()
++        self.addCleanup(lambda: gemini_client.configure(thinking="low"))
++
++    def test_defaults_and_settings_table(self):
++        self.assertEqual(SETTINGS["reasoning.level"], (str, ("auto", "off", "low", "medium", "high", "max")))
++        self.assertEqual(SETTINGS["reasoning.mode"], (str, ("auto", "on", "off")))  # still there, still compatible
++        self.assertEqual(load_config()["reasoning"], {"mode": "auto", "level": "auto"})
++
++    def test_think_accepts_levels_and_keeps_mode_in_step(self):
++        c = self.convo()
++        expect = {"auto": "auto", "off": "off", "low": "on", "medium": "on", "high": "on", "max": "on"}
++        for level, mode in expect.items():
++            self.assertTrue(c.handle_command(f"/think {level}").startswith(f"Reasoning: {level}"), level)
++            self.assertEqual((c.config["reasoning"]["level"], c.config["reasoning"]["mode"]), (level, mode))
++            self.assertEqual(c.handle_command("/think"), f"Reasoning: {level}")
++        self.assertEqual(c.handle_command("/think maybe"), "Usage: /think auto|off|low|medium|high|max")
++
++    def test_old_on_still_works_and_picks_medium_unless_a_level_is_set(self):
++        c = self.convo()
++        self.assertTrue(c.handle_command("/think on").startswith("Reasoning: on"))
++        self.assertEqual((c.config["reasoning"]["level"], c.config["reasoning"]["mode"]), ("medium", "on"))
++        c.handle_command("/think high")
++        c.handle_command("/think on")
++        self.assertEqual(c.config["reasoning"]["level"], "high")  # an existing level is kept
++
++    def test_any_level_but_off_makes_qwen_think_every_reply(self):
++        for level, thinks in (("low", True), ("max", True), ("auto", False)):
++            self.llama.requests.clear()
++            self.llama.script = [{"content": "ok"}]
++            c = self.convo()
++            c.handle_command(f"/think {level}")
++            c.send("a question")
++            self.assertEqual(self.llama.requests[0]["chat_template_kwargs"]["enable_thinking"], thinks, level)
++
++    def test_off_still_refuses_the_thinking_tool(self):
++        self.llama.script = [{"tool": ("enable_thinking_mode", "{}")}]
++        c = self.convo()
++        c.handle_command("/think off")
++        self.assertIn("thinking is turned off", c.send("prove something"))
++
++    def test_gemini_level_mapping(self):
++        c = self.convo()
++        table = {"off": "minimal", "low": "low", "medium": "medium", "high": "high", "max": "high"}
++        for level, gem in table.items():
++            c.handle_command(f"/think {level}")
++            self.assertEqual(gemini_client._THINKING["level"], gem, level)
++        c.handle_command("/settings set gemini.thinking minimal")
++        c.handle_command("/think auto")
++        self.assertEqual(gemini_client._THINKING["level"], "minimal")  # auto follows gemini.thinking
++        c.handle_command("/settings set gemini.thinking default")
++        self.assertEqual(gemini_client._THINKING["level"], "")  # and "default" leaves it to the model
++        c.handle_command("/think high")
++        c.handle_command("/settings set gemini.thinking low")
++        self.assertEqual(gemini_client._THINKING["level"], "high")  # an explicit level beats gemini.thinking
++
++    def test_both_halves_are_saved_and_the_level_wins_at_startup(self):
++        c = self.convo()
++        c.handle_command("/think max")
++        saved = config_loader.load_user_overrides()["reasoning"]
++        self.assertEqual(saved, {"level": "max", "mode": "on"})
++        c.handle_command("/think auto")
++        c.handle_command("/think on")  # mode saved after a level of auto: the level must follow, not stay stale
++        self.assertEqual(config_loader.load_user_overrides()["reasoning"], {"level": "medium", "mode": "on"})
++        again = self.convo()
++        self.assertEqual((again.config["reasoning"]["level"], again.config["reasoning"]["mode"]), ("medium", "on"))
++        self.assertEqual(gemini_client._THINKING["level"], "medium")
++
++    def test_a_mode_only_override_from_before_this_patch_still_applies(self):
++        config_loader.set_user_setting("reasoning.mode", "off")
++        c = self.convo()
++        self.assertEqual((c.config["reasoning"]["level"], c.config["reasoning"]["mode"]), ("off", "off"))
++        config_loader.set_user_setting("reasoning.mode", "on")
++        self.assertEqual(self.convo().config["reasoning"]["level"], "medium")
++
++    def test_reset_clears_both(self):
++        c = self.convo()
++        c.handle_command("/think high")
++        self.assertTrue(c.reset_setting("reasoning.level"))
++        self.assertEqual((c.config["reasoning"]["level"], c.config["reasoning"]["mode"]), ("auto", "auto"))
++        self.assertNotIn("reasoning", config_loader.load_user_overrides())
++        self.assertEqual(gemini_client._THINKING["level"], "low")
++
++    def test_status_text_and_command_list(self):
++        c = self.convo()
++        c.handle_command("/think high")
++        self.assertIn("think: high", c.handle_command("/status"))
++        think = [x for x in COMMANDS if x["name"] == "think"][0]
++        self.assertEqual([a["value"] for a in think["args"]], ["auto", "off", "low", "medium", "high", "max"])
++        self.assertEqual(think["usage"], "/think [auto|off|low|medium|high|max]")
++
++
++class TestThinkingWeb(WebBase):
++    def test_status_exposes_level_and_gemini_setting(self):
++        s = self.jget("/api/status")[1]
++        self.assertEqual((s["think"], s["think_level"], s["gemini_thinking"]), ("auto", "auto", "low"))
++        self.jpost("/api/command", {"line": "/think max"})
++        s = self.jget("/api/status")[1]
++        self.assertEqual((s["think"], s["think_level"]), ("on", "max"))
++        self.assertEqual(gemini_client._THINKING["level"], "high")
++        self.addCleanup(lambda: gemini_client.configure(thinking="low"))
++
++    def test_settings_row_for_the_level(self):
++        code, d = self.jpost("/api/settings", {"key": "reasoning.level", "value": "low"})
++        self.assertEqual((code, d["value"]), (200, "low"))
++        self.assertEqual(self.jget("/api/status")[1]["think"], "on")
++        self.addCleanup(lambda: gemini_client.configure(thinking="low"))
++        self.assertEqual(self.jpost("/api/settings", {"key": "reasoning.level", "value": "huge"})[0], 400)
++
++
++@unittest.skipUnless(HAVE_JSDOM, "jsdom not installed")
++class TestThinkingDropdownUi(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.res = run_node("ui_smoke.js")
++
++    def test_dropdown_replaces_the_seg(self):
++        self.assertNotIn("crash", self.res, self.res.get("crash"))
++        self.assertEqual(self.res["errors"], [])
++        t = self.res["think"]
++        self.assertEqual(t["options"], ["auto", "off", "low", "medium", "high", "max"])
++        self.assertFalse(t["oldSeg"])
++        self.assertEqual((t["value"], t["menuVal"]), ("auto", "auto"))
++
++    def test_hint_follows_the_selected_model(self):
++        t = self.res["think"]
++        self.assertIn("whichever model answers", t["hintAuto"])
++        self.assertIn("one thinking mode", t["hintQwen"])
++        self.assertIn("Max is High", t["hintGemini"])
++        self.assertIn("cannot think", t["hintLfm"])
++        self.assertIn("minimal", t["hintAutoHigh"])  # picks up gemini.thinking from status
++
++    def test_lfm_disables_it_and_a_choice_sends_think(self):
++        t = self.res["think"]
++        self.assertEqual((t["disabledAuto"], t["disabledQwen"], t["disabledGemini"], t["disabledLfm"]), (False, False, False, True))
++        self.assertEqual(t["cmds"], ["/think high"])
++        self.assertEqual((t["valueAfter"], t["menuAfter"]), ("high", "high"))
++
++
++# ---------------------------------------------------------------- voice session
++
++class FakeListener:
++    def __init__(self, pcm=b"\x01\x02" * 480, live=True):
++        self.pcm, self.live, self.holds, self.args = pcm, live, [], None
++
++    def hold(self, on):
++        self.holds.append(on)
++
++    def capture_utterance(self, max_seconds=12.0, start_timeout=6.0):
++        self.args = (max_seconds, start_timeout)
++        return self.pcm
++
++    def _live(self):
++        return self.live
++
++
++class FakeProc:
++    def __init__(self, argv, hang=False):
++        self.argv, self.hang, self.terminated, self.polls = argv, hang, False, 0
++
++    def poll(self):
++        if self.terminated:
++            return -15
++        if self.hang:
++            return None
++        self.polls += 1
++        return None if self.polls < 3 else 0
++
++    def terminate(self):
++        self.terminated = True
++
++
++class VoiceBase(WebBase):
++    hang_tts = False
++
++    def setUp(self):
++        super().setUp()
++        self.procs, self.launched = [], []
++
++        def popen(argv, **kw):
++            self.procs.append(FakeProc(argv, hang=self.hang_tts))
++            return self.procs[-1]
++
++        self.listener = FakeListener()
++        self.httpd.wake = self.listener
++        self.httpd.voice = self.voice = VoiceSession(self.httpd, popen=popen, run=lambda argv: self.launched.append(argv))
++        self.events = self.httpd.subscribe()
++        p = mock.patch("stt.transcribe_wake", return_value="what is the time")
++        p.start()
++        self.addCleanup(p.stop)
++
++    def states(self):
++        seen = []
++        while True:
++            try:
++                ev, snap = self.events.get_nowait()
++            except queue.Empty:
++                return seen
++            if ev == "voice":
++                seen.append(snap["state"])
++
++    def wait_state(self, *wanted, seconds=5):
++        end = time.time() + seconds
++        while time.time() < end:
++            if self.voice.state()["state"] in wanted:
++                return self.voice.state()
++            time.sleep(0.02)
++        self.fail(f"never reached {wanted}; at {self.voice.state()}")
++
++    def say(self, reply="It is half past four.", tokens=("It is ", "half past four.")):
++        def send(text):
++            for t in tokens:
++                self.convo.on_token("text", t)
++            return reply
++        return mock.patch.object(self.convo, "send", side_effect=send)
++
++
++class TestVoiceExchange(VoiceBase):
++    def test_full_exchange_streams_and_speaks(self):
++        with self.say("It is **half past** four.") as send:
++            started = self.voice.start()
++            self.assertTrue(started["started"])
++            done = self.wait_state("done")
++        send.assert_called_once_with("what is the time")
++        self.assertEqual((done["transcript"], done["reply"]), ("what is the time", "It is **half past** four."))
++        self.assertEqual(self.states(), ["listening", "transcribing", "thinking", "thinking", "thinking", "speaking", "done"])
++        self.assertEqual(self.procs[0].argv, ["termux-tts-speak", "It is half past four."])
++        self.assertEqual(self.listener.holds, [True, False])  # wake word held off during, released after
++        self.assertEqual(self.listener.args[1], 8.0)
++        self.assertFalse(self.httpd.chat_lock.locked())
++        self.assertIsNone(self.convo.on_token)
++
++    def test_reset_token_replaces_streamed_text(self):
++        def send(text):
++            self.convo.on_token("text", "Let me think. ")
++            self.convo.on_token("reset", "")
++            self.convo.on_token("text", "Four thirty.")
++            return "Four thirty."
++        with mock.patch.object(self.convo, "send", side_effect=send):
++            self.voice.start()
++            self.assertEqual(self.wait_state("done")["reply"], "Four thirty.")
++
++    def test_start_while_running_does_not_restart(self):
++        gate = threading.Event()
++        with mock.patch.object(self.convo, "send", side_effect=lambda t: (gate.wait(5), "ok")[1]):
++            self.assertTrue(self.voice.start()["started"])
++            self.wait_state("thinking")
++            again = self.voice.start()
++            self.assertFalse(again["started"])
++            self.assertEqual(again["state"], "thinking")
++            gate.set()
++            self.wait_state("done")
++
++    def test_nobody_spoke(self):
++        self.listener.pcm = None
++        self.voice.start()
++        s = self.wait_state("idle")
++        self.assertEqual(s["note"], "I did not hear anything")
++        self.assertEqual(self.listener.holds, [True, False])
++
++    def test_unintelligible_audio(self):
++        with mock.patch("stt.transcribe_wake", return_value="   "):
++            self.voice.start()
++            self.assertEqual(self.wait_state("idle")["note"], "I did not catch that")
++
++    def test_transcription_failure_is_an_error_not_a_crash(self):
++        import stt
++        with mock.patch("stt.transcribe_wake", side_effect=stt.TranscribeError("no engine")):
++            self.voice.start()
++            s = self.wait_state("error")
++        self.assertIn("no engine", s["error"])
++        self.assertEqual(self.listener.holds, [True, False])
++
++    def test_busy_chat_is_reported(self):
++        self.httpd.chat_lock.acquire()
++        try:
++            self.voice.start()
++            self.assertIn("still answering", self.wait_state("error")["error"])
++        finally:
++            self.httpd.chat_lock.release()
++
++    def test_model_failure_releases_everything(self):
++        with mock.patch.object(self.convo, "send", side_effect=RuntimeError("boom")):
++            self.voice.start()
++            self.wait_state("error")
++        self.assertFalse(self.httpd.chat_lock.locked())
++        self.assertIsNone(self.convo.on_token)
++        self.assertEqual(self.listener.holds, [True, False])
++        with self.say():  # and it can go again
++            self.voice.start()
++            self.wait_state("done")
++
++    def test_speaking_can_be_switched_off(self):
++        self.convo.config["voice"]["speak"] = False
++        with self.say():
++            self.voice.start()
++            self.wait_state("done")
++        self.assertEqual(self.procs, [])
++
++    def test_missing_tts_binary_still_finishes(self):
++        def broken(argv, **kw):
++            raise FileNotFoundError(2, "No such file")
++        self.voice._popen = broken
++        with self.say():
++            self.voice.start()
++            self.wait_state("done")
++
++    def test_without_the_wake_stream_it_records_directly(self):
++        self.httpd.wake = None
++        with mock.patch("device.record_pcm", return_value=b"\x05\x06" * 800) as rec, self.say():
++            self.voice.start()
++            self.wait_state("done")
++        rec.assert_called_once_with(voice_session.FALLBACK_SECONDS)
++
++    def test_a_silent_direct_recording_is_nothing_heard(self):
++        self.httpd.wake = None
++        with mock.patch("device.record_pcm", return_value=b"\x00" * 1600):
++            self.voice.start()
++            self.assertEqual(self.wait_state("idle")["note"], "I did not hear anything")
++
++    def test_no_microphone_at_all_is_an_error(self):
++        import device
++        self.httpd.wake = None
++        with mock.patch("device.record_pcm", side_effect=device.DeviceError("no recorder")):
++            self.voice.start()
++            self.assertIn("no microphone", self.wait_state("error")["error"])
++
++    def test_speakable_strips_markdown(self):
++        self.assertEqual(speakable("**Bold** `code` [a link](http://x.y) ```\nprint(1)\n``` # Head\nSee https://example.com now"),
++                         "Bold code a link Head See link now")
++        self.assertEqual(len(speakable("word " * 1000)), voice_session.SPEAK_CHARS)
++
++
++class TestVoiceStop(VoiceBase):
++    hang_tts = True
++
++    def test_stop_while_speaking_ends_the_speech(self):
++        with self.say():
++            self.voice.start()
++            self.wait_state("speaking")
++            s = self.voice.stop()
++        self.assertEqual((s["state"], s["note"], s["active"]), ("idle", "Stopped", False))
++        end = time.time() + 3
++        while time.time() < end and not self.procs[0].terminated:
++            time.sleep(0.02)
++        self.assertTrue(self.procs[0].terminated)
++        end = time.time() + 3
++        while time.time() < end and self.listener.holds != [True, False]:
++            time.sleep(0.02)
++        self.assertEqual(self.listener.holds, [True, False])
++        self.assertEqual(self.voice.state()["state"], "idle")  # the old exchange cannot overwrite it afterwards
++
++    def test_stop_while_thinking_cancels_the_turn(self):
++        gate = threading.Event()
++        with mock.patch.object(self.convo, "send", side_effect=lambda t: (gate.wait(5), "late reply")[1]), \
++                mock.patch.object(self.convo, "cancel") as cancel:
++            self.voice.start()
++            self.wait_state("thinking")
++            self.voice.stop()
++            cancel.assert_called_once()
++            gate.set()
++            time.sleep(0.3)
++        self.assertEqual(self.voice.state()["state"], "idle")
++        self.assertEqual(self.procs, [])  # nothing is spoken for a stopped exchange
++
++    def test_stop_when_idle_changes_nothing(self):
++        self.assertEqual(self.voice.stop()["state"], "idle")
++        self.assertEqual(self.states(), [])
++
++    def test_a_new_exchange_after_stop_works(self):
++        self.listener.pcm = None
++        self.voice.start()
++        self.voice.stop()
++        self.listener.pcm = b"\x01\x02" * 480
++        self.hang_tts = False
++        with self.say():
++            self.assertTrue(self.voice.start()["started"])
++            self.wait_state("done")
++
++
++class TestVoiceLaunches(VoiceBase):
++    def test_overlay_start_asks_tasker_for_the_scene(self):
++        self.listener.pcm = None
++        self.voice.start(overlay=True)
++        self.assertEqual(self.launched, [["am", "broadcast", "-a", "net.dinglisch.android.tasker.ACTION_TASK", "--es", "task_name", "Faze Overlay"]])
++
++    def test_plain_start_does_not_touch_tasker(self):
++        self.listener.pcm = None
++        self.voice.start()
++        self.wait_state("idle")
++        self.assertEqual(self.launched, [])
++
++    def test_task_names_are_settings_and_empty_means_off(self):
++        self.convo.config["voice"]["overlay_task"] = "My Scene"
++        self.voice.tasker("My Scene")
++        self.assertEqual(self.launched[-1][-1], "My Scene")
++        self.launched.clear()
++        self.convo.config["voice"]["overlay_task"] = ""
++        self.listener.pcm = None
++        self.voice.start(overlay=True)
++        self.assertEqual(self.launched, [])
++        for key in ("voice.overlay_task", "voice.overlay_close_task", "voice.speak", "voice.listen_timeout"):
++            self.assertIn(key, SETTINGS)
++
++    def test_stop_with_close_asks_tasker_to_close_it(self):
++        self.voice.stop(close_overlay=True)
++        self.assertEqual(self.launched[-1][-1], "Faze Overlay Close")
++
++    def test_open_app_uses_the_token_link_and_falls_back(self):
++        self.assertTrue(self.voice.open_app(close_overlay=True))
++        link = f"http://localhost:{self.httpd.port}/#t={TOKEN}"
++        self.assertEqual(self.launched[0], ["am", "start", "-a", "android.intent.action.VIEW", "-d", link])
++        self.assertEqual(self.launched[1][-1], "Faze Overlay Close")
++        calls = []
++
++        def flaky(argv):
++            calls.append(argv)
++            if argv[0] == "am":
++                raise OSError("am failed")
++        self.voice._run_cmd = flaky
++        self.assertTrue(self.voice.open_app())
++        self.assertEqual([c[0] for c in calls], ["am", "termux-open-url"])
++        self.voice._run_cmd = lambda argv: (_ for _ in ()).throw(OSError("nothing works"))
++        self.assertFalse(self.voice.open_app())
++
++
++class TestVoiceEndpoints(VoiceBase):
++    def test_all_need_the_token(self):
++        for method, path in (("GET", "/api/voice/state"), ("POST", "/api/voice/start"), ("POST", "/api/voice/stop"), ("POST", "/api/open")):
++            resp, _ = self.request(method, path, body={} if method == "POST" else None, token=None)
++            self.assertEqual(resp.status, 401, path)
++
++    def test_start_state_stop(self):
++        self.listener.pcm = None
++        self.assertEqual(self.jget("/api/voice/state")[1]["state"], "idle")
++        code, d = self.jpost("/api/voice/start", {"overlay": True})
++        self.assertEqual((code, d["ok"], d["started"], d["state"]), (200, True, True, "listening"))
++        self.assertEqual(self.launched[0][-1], "Faze Overlay")
++        self.wait_state("idle")
++        code, d = self.jpost("/api/voice/stop", {})
++        self.assertEqual((code, d["ok"], d["state"]), (200, True, "idle"))
++
++    def test_open_endpoint(self):
++        code, d = self.jpost("/api/open", {"close_overlay": True})
++        self.assertEqual((code, d), (200, {"ok": True}))
++        self.assertEqual(self.launched[0][:3], ["am", "start", "-a"])
++
++    def test_voice_events_reach_event_subscribers(self):
++        with self.say():
++            self.jpost("/api/voice/start", {})
++            self.wait_state("done")
++        self.assertIn("done", self.states())
++
++    def test_overlay_assets_are_served_with_the_csp(self):
++        for path, ctype in (("/overlay", "text/html"), ("/overlay.js", "text/javascript"), ("/overlay.css", "text/css")):
++            resp, body = self.request("GET", path, token=None)
++            self.assertEqual(resp.status, 200, path)
++            self.assertTrue(resp.getheader("Content-Type").startswith(ctype), path)
++            self.assertTrue(body, path)
++        resp, body = self.request("GET", "/overlay", token=None)
++        self.assertIn("script-src 'self'", resp.getheader("Content-Security-Policy"))
++        self.assertNotIn(b"<script>", body)  # CSP: no inline script
++
++
++@unittest.skipUnless(HAVE_JSDOM, "jsdom not installed")
++class TestOverlayPage(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.res = run_node("overlay_smoke.js")
++
++    def test_no_crash_and_no_page_errors(self):
++        self.assertNotIn("crash", self.res, self.res.get("crash"))
++        self.assertEqual(self.res["errors"], [])
++
++    def test_loads_authenticated_and_autostarts_once(self):
++        r = self.res
++        self.assertTrue(r["auth"])
++        self.assertEqual((r["autoStarted"], r["loaded"]["state"], r["token"]), (1, "listening", "tok"))
++        self.assertEqual(r["hashAfter"], "#auto")  # the token is not left in the address
++
++    def test_every_state_renders(self):
++        r = self.res
++        self.assertEqual((r["transcribing"]["label"], r["thinking"]["you"], r["streaming"]["reply"]), ("Got it...", "what is the time", "It is"))
++        self.assertEqual((r["speaking"]["label"], r["speaking"]["reply"]), ("Speaking", "It is half past four."))
++        self.assertEqual((r["done"]["again"], r["done"]["stop"]), (True, False))
++        self.assertEqual((r["speaking"]["again"], r["speaking"]["stop"]), (False, True))
++        self.assertEqual((r["error"]["state"], r["error"]["note"]), ("error", "no microphone"))
++
++    def test_buttons_call_the_api(self):
++        r = self.res
++        self.assertEqual((r["again"]["starts"], r["again"]["view"]["state"]), (2, "listening"))
++        self.assertEqual((r["stop"]["call"], r["stop"]["view"]["note"]), ([{}], "Stopped"))
++        self.assertEqual(r["open"], [{"close_overlay": True}])
++        self.assertEqual(r["close"][-1], {"close": True})
++
++    def test_running_exchange_is_shown_not_restarted_and_missing_token_is_explained(self):
++        r = self.res
++        self.assertEqual((r["running"]["view"], r["running"]["newStarts"]), ({"state": "thinking", "you": "hi"}, 0))
++        self.assertEqual(r["noToken"]["state"], "error")
++        self.assertIn("no token", r["noToken"]["note"])
++
++
++# ---------------------------------------------------------------- faze start --voice / --app / overlay
++
++class TestServiceVoice(unittest.TestCase):
++    def setUp(self):
++        self.dir = tempfile.mkdtemp(prefix="faze-svc16-")
++        self.script = os.path.join(ROOT, "scripts", "faze_service.sh")
++        self.fake = os.path.join(self.dir, "fake_faze.sh")
++        self.opened = os.path.join(self.dir, "opened.txt")
++        self.posted = os.path.join(self.dir, "posted.txt")
++        self.reply = os.path.join(self.dir, "reply.txt")
++        self.write("opener.sh", f'echo "$1" >> "{self.opened}"')
++        self.write("http.sh", f'echo "$1 $2 $3" >> "{self.posted}"; cat "{self.reply}"')
++        with open(self.reply, "w") as f:
++            f.write('{"ok": true, "started": true, "state": "listening"}')
++        self.write("fake_faze.sh", 'echo "app started" >> "$FAZE_LOG"; sleep 60')
++        sock = socket.socket()
++        sock.bind(("127.0.0.1", 0))
++        self.port = sock.getsockname()[1]
++        sock.close()
++        self.state = os.path.join(self.dir, "state")
++        os.makedirs(self.state)
++        with open(os.path.join(self.state, "token"), "w") as f:
++            f.write("tok123")
++        self.env = dict(os.environ, FAZE_STATE=self.state, FAZE_LOG=os.path.join(self.dir, "faze.log"), FAZE_CMD=self.fake,
++                        FAZE_RESTART_DELAY="0.2", FAZE_PORT=str(self.port), FAZE_OPEN=os.path.join(self.dir, "opener.sh"),
++                        FAZE_HTTP=os.path.join(self.dir, "http.sh"), FAZE_READY_TIMEOUT="5")
++        httpd = HTTPServer(("127.0.0.1", self.port), Quiet)
++        threading.Thread(target=httpd.serve_forever, daemon=True).start()
++        self.addCleanup(httpd.shutdown)
++        self.addCleanup(httpd.server_close)
++        self.addCleanup(lambda: self.run_svc("stop"))
++
++    def write(self, name, body):
++        path = os.path.join(self.dir, name)
++        with open(path, "w") as f:
++            f.write("#!/bin/bash\n" + body + "\n")
++        os.chmod(path, 0o755)
++
++    def run_svc(self, *args):
++        return subprocess.run(["bash", self.script, *args], capture_output=True, text=True, env=self.env, timeout=30)
++
++    def test_voice_listens_through_the_service_and_does_not_open_the_app(self):
++        out = self.run_svc("start", "--voice")
++        self.assertEqual(out.returncode, 0, out.stderr)
++        self.assertIn("listening", out.stdout)
++        self.assertFalse(os.path.exists(self.opened), "--voice must not open the app")
++        with open(self.posted) as f:
++            self.assertEqual(f.read().strip(), '/api/voice/start {"overlay": true} tok123')
++
++    def test_voice_alias_and_already_listening(self):
++        with open(self.reply, "w") as f:
++            f.write('{"ok": true, "started": false, "state": "thinking"}')
++        out = self.run_svc("voice")
++        self.assertEqual(out.returncode, 0, out.stderr)
++        self.assertIn("already listening", out.stdout)
++        self.assertFalse(os.path.exists(self.opened))
++
++    def test_voice_without_a_token_or_service_fails_clearly(self):
++        os.remove(os.path.join(self.state, "token"))
++        out = self.run_svc("start", "--voice")
++        self.assertEqual(out.returncode, 1)
++        self.assertIn("could not start listening", out.stdout)
++        self.assertFalse(os.path.exists(self.opened))
++
++    def test_app_keeps_the_old_open_the_app_behaviour(self):
++        out = self.run_svc("start", "--app")
++        self.assertEqual(out.returncode, 0, out.stderr)
++        self.assertIn("opened in voice mode", out.stdout)
++        with open(self.opened) as f:
++            self.assertEqual(f.read().strip(), f"http://localhost:{self.port}/#t=tok123&voice")
++        self.assertFalse(os.path.exists(self.posted))
++        self.assertEqual(self.run_svc("app").returncode, 0)
++
++    def test_overlay_prints_the_scene_link(self):
++        out = self.run_svc("overlay")
++        self.assertEqual(out.stdout.strip(), f"http://localhost:{self.port}/overlay#t=tok123&auto")
++        os.remove(os.path.join(self.state, "token"))
++        self.assertEqual(self.run_svc("overlay").returncode, 1)
++
++    def test_modes_are_exclusive(self):
++        for args in (("start", "--voice", "--app"), ("start", "--app", "--cli"), ("start", "--voice", "--cli")):
++            out = self.run_svc(*args)
++            self.assertEqual(out.returncode, 2, args)
++            self.assertIn("--voice|--app|--cli", out.stdout)
++
++    def test_the_real_http_path_posts_json_with_the_token(self):
++        seen = {}
++
++        class Capture(Quiet):
++            def do_POST(self):
++                seen["auth"] = self.headers.get("Authorization")
++                seen["type"] = self.headers.get("Content-Type")
++                seen["path"] = self.path
++                seen["body"] = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
++                data = b'{"ok": true, "started": true}'
++                self.send_response(200)
++                self.send_header("Content-Length", str(len(data)))
++                self.end_headers()
++                self.wfile.write(data)
++
++        httpd = HTTPServer(("127.0.0.1", 0), Capture)
++        threading.Thread(target=httpd.serve_forever, daemon=True).start()
++        self.addCleanup(httpd.shutdown)
++        self.addCleanup(httpd.server_close)
++        env = dict(self.env, FAZE_PORT=str(httpd.server_address[1]))
++        env.pop("FAZE_HTTP")
++        out = subprocess.run(["bash", self.script, "start", "--voice"], capture_output=True, text=True, env=env, timeout=30)
++        subprocess.run(["bash", self.script, "stop"], env=env, capture_output=True)
++        self.assertEqual(out.returncode, 0, out.stderr)
++        self.assertIn("listening", out.stdout)
++        self.assertEqual((seen["auth"], seen["type"], seen["path"], seen["body"]),
++                         ("Bearer tok123", "application/json", "/api/voice/start", '{"overlay": true}'))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/core/tests/test_patch6.py b/core/tests/test_patch6.py
+index d874a4b..f7ee6cf 100644
+--- a/core/tests/test_patch6.py
++++ b/core/tests/test_patch6.py
+@@ -215,7 +215,7 @@ class TestThinking(Base):
+ 
+     def test_bad_argument(self):
+         c = self.convo()
+-        self.assertEqual(c.handle_command("/think maybe"), "Usage: /think auto|on|off")
++        self.assertEqual(c.handle_command("/think maybe"), "Usage: /think auto|off|low|medium|high|max")
+         self.assertIn("think: auto", c.handle_command("/status"))
+ 
+ 
+diff --git a/core/tests/ui_smoke.js b/core/tests/ui_smoke.js
+index 592743f..bf9bb28 100644
+--- a/core/tests/ui_smoke.js
++++ b/core/tests/ui_smoke.js
+@@ -11,7 +11,7 @@ const calls = [];
+ let ops = 0;
+ 
+ const status = { name: 'Faze', qwen: { state: 'ready', detail: '', note: '' }, lfm: 'idle', gemini: true, mode: 'auto', busy: false, notices: [],
+-  show_tag: true, wake: { enabled: true, state: 'listening', phrase: 'hey faze', detail: '', engine: 'auto' }, tts: { engine: 'system' }, user_name: 'Felix', forced_turns: 0, turns: 0, agent: { mode: 'ask', high_tools: false, tools: 1, tasks: 1, rev: 7 }, think: 'auto',
++  show_tag: true, wake: { enabled: true, state: 'listening', phrase: 'hey faze', detail: '', engine: 'auto' }, tts: { engine: 'system' }, user_name: 'Felix', forced_turns: 0, turns: 0, agent: { mode: 'ask', high_tools: false, tools: 1, tasks: 1, rev: 7 }, think: 'auto', think_level: 'auto', gemini_thinking: 'low',
+   stt: { server: false, pref: 'auto', reason: 'no whisper' } };
+ 
+ function sse(events) {
+@@ -66,6 +66,8 @@ async function fakeFetch(url, opts) {
+   if (p === '/api/command') {
+     const m = /^\/model (\w+)(?: (\d+))?$/.exec(body.line || '');
+     if (m) { status.mode = m[1]; status.forced_turns = Number(m[2] || 0); }
++    const t = /^\/think (\w+)$/.exec(body.line || '');
++    if (t) { status.think_level = t[1]; status.think = { auto: 'auto', off: 'off' }[t[1]] || 'on'; }
+     return json({ text: 'ok' });
+   }
+   if (p === '/api/restore') return json({ ok: true, kept: (body.messages || []).length });
+@@ -214,6 +216,27 @@ async function fakeFetch(url, opts) {
+   rowFor('Auto').querySelector('.model-row').click();
+   await sleep(120);
+   out.picker.backToAuto = status.mode;
++
++  // thinking level dropdown: any model that can think, hint follows the selected model
++  const hint = () => $('think-hint').textContent;
++  const pickModel = async (name) => { rowFor(name).querySelector('.model-row').click(); await sleep(120); };
++  out.think = { options: [...$('think-level').querySelectorAll('option')].map((o) => o.value), oldSeg: !!d.getElementById('think-seg'),
++    value: $('think-level').value, menuVal: $('menu-think-val').textContent, hintAuto: hint(), disabledAuto: $('think-level').disabled };
++  await pickModel('Qwen');
++  out.think.hintQwen = hint(); out.think.disabledQwen = $('think-level').disabled;
++  await pickModel('Gemini');
++  out.think.hintGemini = hint(); out.think.disabledGemini = $('think-level').disabled;
++  await pickModel('LFM');
++  out.think.hintLfm = hint(); out.think.disabledLfm = $('think-level').disabled;
++  await pickModel('Gemini');
++  $('think-level').value = 'high';
++  $('think-level').dispatchEvent(new w.Event('change'));
++  await sleep(150);
++  out.think.cmds = calls.filter((c) => c.path === '/api/command' && /^\/think /.test(c.body.line)).map((c) => c.body.line);
++  out.think.valueAfter = $('think-level').value; out.think.menuAfter = $('menu-think-val').textContent;
++  status.gemini_thinking = 'minimal';
++  await pickModel('Auto');
++  out.think.hintAutoHigh = hint();
+   $('model-sheet').hidden = true;
+ 
+   $('input').value = '/lo';
+diff --git a/core/voice_session.py b/core/voice_session.py
+new file mode 100644
+index 0000000..a15b50f
+--- /dev/null
++++ b/core/voice_session.py
+@@ -0,0 +1,259 @@
++"""
++felix-ai Core -- voice_session.py
++One spoken exchange run entirely on the server, so `faze start --voice` never has to open the web app:
++
++    listening -> transcribing -> thinking (reply streams) -> speaking -> done
++
++State is published to every subscriber as a "voice" SSE event (a full snapshot each time, so a dropped event
++costs nothing) and readable at GET /api/voice/state. The /overlay page renders it; a Tasker Scene shows that page
++as a floating overlay. Audio comes from the wake listener's stream (hold() keeps the wake word from reacting to
++it); if the wake listener is off, a short direct recording is used instead.
++"""
++
++import re
++import shutil
++import subprocess
++import threading
++import time
++
++import action_log
++import stt
++import wake
++
++LISTEN_SECONDS_MAX = 15.0
++FALLBACK_SECONDS = 6
++SPEAK_TIMEOUT = 180.0
++SPEAK_CHARS = 1500
++IDLE, LISTENING, TRANSCRIBING, THINKING, SPEAKING, DONE, ERROR = (
++    "idle", "listening", "transcribing", "thinking", "speaking", "done", "error")
++ACTIVE = (LISTENING, TRANSCRIBING, THINKING, SPEAKING)
++TASKER_ACTION = "net.dinglisch.android.tasker.ACTION_TASK"
++
++
++def speakable(text: str) -> str:
++    """Reply text without markdown, code blocks and links, so the phone does not read out symbols."""
++    text = re.sub(r"```.*?```", " ", text or "", flags=re.S)
++    text = re.sub(r"`([^`]*)`", r"\1", text)
++    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
++    text = re.sub(r"https?://\S+", " link ", text)
++    text = re.sub(r"[*_#>~|]+", " ", text)
++    return re.sub(r"\s+", " ", text).strip()[:SPEAK_CHARS]
++
++
++class VoiceSession:
++    def __init__(self, server, popen=subprocess.Popen, run=None):
++        self.server = server
++        self._popen = popen
++        self._run_cmd = run  # run(argv) for am/termux-open-url; defaults to tool_helpers.run (clears LD_PRELOAD)
++        self._lock = threading.Lock()
++        self._cancel = threading.Event()
++        self._gen = 0
++        self._thread = None
++        self._tts = None
++        self._snap = {"state": IDLE, "transcript": "", "reply": "", "error": "", "note": "", "seq": 0, "active": False}
++
++    # ---- state -------------------------------------------------------------
++
++    def state(self) -> dict:
++        with self._lock:
++            return dict(self._snap)
++
++    def active(self) -> bool:
++        return self._snap["state"] in ACTIVE
++
++    def _set(self, gen: int, **fields) -> None:
++        with self._lock:
++            if gen != self._gen:
++                return
++            self._snap.update(fields)
++            self._snap["active"] = self._snap["state"] in ACTIVE
++            self._snap["seq"] += 1
++            snap = dict(self._snap)
++        self.server.publish("voice", snap)
++
++    # ---- control -----------------------------------------------------------
++
++    def start(self, overlay: bool = False) -> dict:
++        """Begin one exchange. Returns {"started": bool, **state}; an exchange already running is left alone."""
++        with self._lock:
++            if self._snap["state"] in ACTIVE:
++                return {"started": False, **self._snap}
++            self._gen += 1
++            gen = self._gen
++            self._cancel = threading.Event()
++            self._snap.update(state=LISTENING, transcript="", reply="", error="", note="", active=True)
++            self._snap["seq"] += 1
++            snap = dict(self._snap)
++            cancel = self._cancel
++        self.server.publish("voice", snap)
++        action_log.log_action("voice", "start", {"overlay": overlay}, "listening", 0, echo=False)
++        self._thread = threading.Thread(target=self._exchange, args=(gen, cancel), daemon=True)
++        self._thread.start()
++        if overlay:
++            self.tasker(self.server.config["voice"].get("overlay_task", ""))
++        return {"started": True, **snap}
++
++    def stop(self, close_overlay: bool = False) -> dict:
++        with self._lock:
++            gen, was_active = self._gen, self._snap["state"] in ACTIVE
++        self._cancel.set()
++        if was_active:
++            self.server.convo.cancel()
++        proc = self._tts
++        if proc is not None:
++            try:
++                proc.terminate()
++            except OSError:
++                pass
++        if was_active:
++            self._set(gen, state=IDLE, note="Stopped", error="")
++        if close_overlay:
++            self.tasker(self.server.config["voice"].get("overlay_close_task", ""))
++        return self.state()
++
++    def open_app(self, close_overlay: bool = False) -> bool:
++        """Open the web app (what the overlay's Open Faze button does)."""
++        link = f"http://localhost:{self.server.port}/#t={self.server.token}"
++        ok = self._launch(["am", "start", "-a", "android.intent.action.VIEW", "-d", link])
++        if not ok:
++            ok = self._launch(["termux-open-url", link])
++        if close_overlay:
++            self.tasker(self.server.config["voice"].get("overlay_close_task", ""))
++        return ok
++
++    # ---- Android launches --------------------------------------------------
++
++    def _launch(self, argv: list) -> bool:
++        if not shutil.which(argv[0]) and self._run_cmd is None:
++            return False
++        try:
++            if self._run_cmd is not None:
++                self._run_cmd(argv)
++            else:
++                import tool_helpers
++                tool_helpers.run(argv, timeout=8)
++            return True
++        except Exception as e:  # a missing launcher must never take the exchange down
++            action_log.log_action("voice", "launch", {"cmd": argv[0]}, f"ERROR {e}", 0, echo=False)
++            return False
++
++    def tasker(self, task: str) -> bool:
++        """Ask Tasker to run a task (it shows or closes the overlay Scene). Needs Tasker's Allow External Access."""
++        if not task:
++            return False
++        return self._launch(["am", "broadcast", "-a", TASKER_ACTION, "--es", "task_name", task])
++
++    # ---- the exchange ------------------------------------------------------
++
++    def _exchange(self, gen: int, cancel: threading.Event) -> None:
++        server = self.server
++        listener = server.wake
++        convo = server.convo
++        held = False
++        locked = False
++        try:
++            if listener is not None:
++                listener.hold(True)
++                held = True
++            pcm = self._hear(listener)
++            if cancel.is_set():
++                return
++            if not pcm:
++                self._set(gen, state=IDLE, note="I did not hear anything")
++                return
++            self._set(gen, state=TRANSCRIBING)
++            text = self._transcribe(pcm)
++            if cancel.is_set():
++                return
++            if not text:
++                self._set(gen, state=IDLE, note="I did not catch that")
++                return
++            self._set(gen, transcript=text, state=THINKING)
++            if not server.chat_lock.acquire(blocking=False):
++                self._set(gen, state=ERROR, error="Faze is still answering the last message")
++                return
++            locked = True
++            streamed = []
++
++            def on_token(kind, piece):
++                if cancel.is_set():
++                    return
++                if kind == "reset":
++                    streamed.clear()
++                elif kind == "text":
++                    streamed.append(piece)
++                    self._set(gen, reply="".join(streamed))
++
++            convo.on_token = on_token
++            try:
++                reply = convo.send(text)
++            finally:
++                convo.on_token = None
++                server.chat_lock.release()
++                locked = False
++            if cancel.is_set():
++                return
++            self._set(gen, reply=reply, state=SPEAKING)
++            self._speak(reply, cancel)
++            if not cancel.is_set():
++                self._set(gen, state=DONE)
++        except Exception as e:  # nothing here may take the server down
++            from tool_replies import summarize_error
++            self._set(gen, state=ERROR, error=summarize_error(e))
++        finally:
++            if locked:
++                server.chat_lock.release()
++            if held and listener is not None:
++                listener.hold(False)
++
++    def _hear(self, listener):
++        """One utterance of PCM, or None. The wake stream when it runs, else a short direct recording."""
++        cfg = self.server.config
++        timeout = float(cfg["voice"].get("listen_timeout", 8))
++        if listener is not None:
++            pcm = listener.capture_utterance(max_seconds=LISTEN_SECONDS_MAX, start_timeout=timeout)
++            if pcm is not None:
++                return pcm
++            if listener._live():
++                return None  # the stream is fine, nobody spoke
++        import device
++        try:
++            pcm = device.record_pcm(FALLBACK_SECONDS)
++        except device.DeviceError as e:
++            raise RuntimeError(f"no microphone: {e}")
++        return pcm if any(pcm) else None
++
++    def _transcribe(self, pcm: bytes) -> str:
++        cfg = self.server.config
++        if not self.server.stt_lock.acquire(timeout=20):
++            raise RuntimeError("still transcribing the last clip")
++        try:
++            text = stt.transcribe_wake(wake.wav_from_pcm(pcm), cfg)
++        finally:
++            self.server.stt_lock.release()
++        return (text or "").strip()
++
++    def _speak(self, reply: str, cancel: threading.Event) -> None:
++        if not self.server.config["voice"].get("speak", True):
++            return
++        text = speakable(reply)
++        if not text:
++            return
++        try:
++            proc = self._popen(["termux-tts-speak", text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
++        except (OSError, ValueError) as e:
++            action_log.log_action("voice", "speak", {}, f"ERROR {getattr(e, 'strerror', None) or e}", 0, echo=False)
++            return
++        self._tts = proc
++        try:
++            deadline = time.monotonic() + SPEAK_TIMEOUT
++            while proc.poll() is None:
++                if cancel.is_set() or time.monotonic() > deadline:
++                    try:
++                        proc.terminate()
++                    except OSError:
++                        pass
++                    break
++                time.sleep(0.1)
++        finally:
++            self._tts = None
+diff --git a/core/wake.py b/core/wake.py
+index a15b768..6849454 100644
+--- a/core/wake.py
++++ b/core/wake.py
+@@ -161,6 +161,9 @@ class WakeListener:
+         self._thread = None
+         self._proc = None
+         self._quiet_until = 0.0
++        self._ring = deque(maxlen=1000)  # the last 30 s of 30 ms frames, so the listen tool and voice sessions can share this stream
++        self._frames = 0
++        self._held = False
+ 
+     # -- control
+     def start(self):
+@@ -218,6 +221,8 @@ class WakeListener:
+             frame = proc.stdout.read(FRAME_BYTES)
+             if len(frame) < FRAME_BYTES:
+                 return
++            self._ring.append(frame)
++            self._frames += 1
+             silent = silent + 1 if not any(frame) else 0
+             if silent == SILENT_FRAMES_WARN:
+                 self._set("silent", "the mic is delivering pure silence; Android may block background mic access "
+@@ -228,8 +233,53 @@ class WakeListener:
+             if utterance is not None:
+                 self._check(utterance)
+ 
++    def hold(self, on: bool) -> None:
++        """While held (a voice session is using the stream) the wake word does not react to what it hears."""
++        self._held = bool(on)
++
++    def _live(self) -> bool:
++        return self.state in ("listening", "transcribing", "silent") and not self._stop.is_set()
++
++    def capture(self, seconds: float, timeout: float = None):
++        """The next `seconds` of audio from the stream the wake word already reads, or None if it is not running.
++        (A second recorder on the same microphone source tends to get silence, so tools borrow this one.)"""
++        if not self._live():
++            return None
++        need = max(1, int(seconds / FRAME_S))
++        start = self._frames
++        deadline = time.monotonic() + (timeout if timeout is not None else seconds + 3)
++        while self._frames - start < need:
++            if not self._live() or time.monotonic() > deadline:
++                return None
++            time.sleep(0.03)
++        return b"".join(list(self._ring)[-need:])
++
++    def capture_utterance(self, max_seconds: float = 12.0, start_timeout: float = 6.0):
++        """One spoken utterance (start to pause) from the shared stream; None if nobody speaks or it is not running."""
++        if not self._live():
++            return None
++        vad = Vad(end_silence=max(6, int(self.config["wake"].get("end_silence_ms", 500)) // 30), max_frames=int(max_seconds / FRAME_S))
++        seen = self._frames
++        began = time.monotonic()
++        while self._live():
++            if self._frames == seen:
++                if vad.active is None and time.monotonic() - began > start_timeout:
++                    return None
++                time.sleep(0.02)
++                continue
++            fresh = min(self._frames - seen, len(self._ring))
++            frames = list(self._ring)[-fresh:]
++            seen = self._frames
++            for frame in frames:
++                utterance = vad.feed(frame)
++                if utterance is not None:
++                    return utterance
++            if vad.active is None and time.monotonic() - began > start_timeout:
++                return None
++        return None
++
+     def _check(self, pcm: bytes):
+-        if self.is_busy() or self._clock() < self._quiet_until:
++        if self._held or self.is_busy() or self._clock() < self._quiet_until:
+             return
+         self._set("transcribing")
+         try:
+diff --git a/core/web/app.css b/core/web/app.css
+index caa71d6..3c764a2 100644
+--- a/core/web/app.css
++++ b/core/web/app.css
+@@ -418,3 +418,5 @@ body.view-settings #cmdmenu, body.view-settings #attachments, body.view-settings
+ #run-result { margin: 0; padding: 10px 12px; max-height: 30dvh; overflow: auto; white-space: pre-wrap; border-radius: var(--r-m); border: 1px solid var(--line-2); background: rgba(3, 6, 12, .75); font: .82rem / 1.55 var(--font-mono); }
+ #run-result.bad { color: var(--bad); }
+ @media (hover: none) { .side-acts { opacity: 1; } }
++#think-level { width: 100%; max-width: 100%; margin: 4px 0 6px; }
++#think-level:disabled { opacity: .5; }
+diff --git a/core/web/app.js b/core/web/app.js
+index 501408a..15d0b6f 100644
+--- a/core/web/app.js
++++ b/core/web/app.js
+@@ -599,8 +599,7 @@
+     maybeRestore(s);
+     renderWakeRow();
+     maybeRefreshAgent(s);
+-    $('menu-think-val').textContent = s.think;
+-    for (const b of $('think-seg').children) b.classList.toggle('on', b.dataset.v === s.think);
++    renderThinking(s);
+     $('stt-note').textContent = s.stt.server ? 'offline engine ready' : (s.stt.reason || '');
+ 
+     if (!$('model-sheet').hidden) renderModelSheet();
+@@ -669,6 +668,23 @@
+     }
+   }
+ 
++  // Thinking is one level for whichever model answers; what it means depends on the model picked in the sheet.
++  function thinkHint(mode, level, gem) {
++    if (mode === 'lfm') return 'LFM cannot think, so this does nothing while LFM is forced. It still applies when Qwen or Gemini answers.';
++    if (mode === 'qwen') return 'Qwen has one thinking mode: any level except Off turns it on, Auto lets Qwen ask for it. Slow on a phone, about 6 words a second, and you can press stop.';
++    if (mode === 'gemini') return 'Gemini: Off is minimal, Low, Medium and High are as named, Max is High, Auto uses your gemini.thinking setting (' + (gem || 'low') + '). Lower is faster.';
++    return 'Applies to whichever model answers. Qwen thinks on any level except Off; Gemini uses the level (Off is minimal, Max is High, Auto follows gemini.thinking, ' + (gem || 'low') + ').';
++  }
++
++  function renderThinking(s) {
++    const level = s.think_level || s.think || 'auto';
++    $('menu-think-val').textContent = level;
++    const sel = $('think-level');
++    if (document.activeElement !== sel) sel.value = level;
++    sel.disabled = s.mode === 'lfm';
++    $('think-hint').textContent = thinkHint(s.mode || 'auto', level, s.gemini_thinking);
++  }
++
+   async function chooseModel(id, n) {
+     try {
+       toast(await command('/model ' + id + (id !== 'auto' && n > 0 ? ' ' + n : '')));
+@@ -2313,11 +2329,7 @@
+     $('model-chip').addEventListener('click', openModelSheet);
+     $('plus').addEventListener('click', (ev) => { ev.stopPropagation(); $('tools-menu').hidden = true; $('menu').hidden = !$('menu').hidden; });
+     document.addEventListener('click', (ev) => { if (!$('menu').contains(ev.target) && !$('plus').contains(ev.target)) $('menu').hidden = true; });
+-    $('menu-think').addEventListener('click', async () => {
+-      const next = { auto: 'on', on: 'off', off: 'auto' }[(status && status.think) || 'auto'];
+-      try { toast(await command('/think ' + next)); } catch (e) { toast(e.message); }
+-      pollStatus(true);
+-    });
++    $('menu-think').addEventListener('click', openModelSheet);
+     $('menu-new').addEventListener('click', newChat);
+     $('menu-settings').addEventListener('click', openSettings);
+     $('open-settings').addEventListener('click', openSettings);
+@@ -2347,12 +2359,10 @@
+     window.addEventListener('popstate', () => showSettings(location.hash === '#settings'));
+     if (location.hash === '#settings') showSettings(true);
+     $('model-sheet').addEventListener('click', (ev) => { if (ev.target === $('model-sheet')) $('model-sheet').hidden = true; });
+-    for (const b of $('think-seg').children) {
+-      b.addEventListener('click', async () => {
+-        try { toast(await command('/think ' + b.dataset.v)); } catch (e) { toast(e.message); }
+-        pollStatus(true);
+-      });
+-    }
++    $('think-level').addEventListener('change', async () => {
++      try { toast(await command('/think ' + $('think-level').value)); } catch (e) { toast(e.message); }
++      pollStatus(true);
++    });
+     $('pair-go').addEventListener('click', () => pairWith($('pair-input').value));
+ 
+     window.addEventListener('beforeinstallprompt', (ev) => {
+diff --git a/core/web/index.html b/core/web/index.html
+index ddc3619..df13ae9 100644
+--- a/core/web/index.html
++++ b/core/web/index.html
+@@ -210,12 +210,11 @@
+       <div id="model-list"></div>
+       <p class="hint">Tap a model to stay on it until you turn it off. Tap the &#10003; or arrow to pick how long instead.</p>
+       <h3>Thinking</h3>
+-      <div class="seg" id="think-seg">
+-        <button type="button" data-v="auto">Auto</button>
+-        <button type="button" data-v="on">On</button>
+-        <button type="button" data-v="off">Off</button>
+-      </div>
+-      <p class="hint">Thinking applies to Qwen. It is slow on a phone, about 6 words a second, and you can press stop.</p>
++      <select id="think-level" aria-label="Thinking level">
++        <option value="auto">Auto</option><option value="off">Off</option><option value="low">Low</option>
++        <option value="medium">Medium</option><option value="high">High</option><option value="max">Max</option>
++      </select>
++      <p class="hint" id="think-hint"></p>
+     </div>
+   </div>
+ 
+diff --git a/core/web/overlay.css b/core/web/overlay.css
+new file mode 100644
+index 0000000..dddc3db
+--- /dev/null
++++ b/core/web/overlay.css
+@@ -0,0 +1,28 @@
++:root { color-scheme: dark; --bg: #11131a; --line: #2a2f3d; --text: #eef0f6; --dim: #99a0b4; --accent: #7aa2ff; --bad: #ff7a8a; }
++* { box-sizing: border-box; }
++html, body { margin: 0; height: 100%; background: transparent; color: var(--text); font: 16px/1.45 sans-serif; }
++body { display: flex; align-items: flex-end; justify-content: center; padding: 12px; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
++#card { width: 100%; max-width: 560px; background: var(--bg); border: 1px solid var(--line); border-radius: 26px; padding: 18px 18px 14px;
++  box-shadow: 0 12px 40px rgba(0, 0, 0, .55); display: grid; grid-template-columns: 64px 1fr; column-gap: 14px; row-gap: 6px; align-items: center; }
++#orb { grid-row: 1 / span 2; width: 64px; height: 64px; position: relative; }
++#orb i { position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--accent); opacity: .5; transition: transform .4s, opacity .4s, border-color .4s; }
++#orb i:nth-child(2) { inset: 8px; opacity: .75; } #orb i:nth-child(3) { inset: 18px; background: var(--accent); opacity: .9; border: 0; }
++#state { font-weight: 600; letter-spacing: .01em; }
++#you, #reply, #note { grid-column: 1 / -1; margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 34vh; overflow-y: auto; }
++#you { color: var(--dim); } #you::before { content: "You: "; opacity: .7; }
++#note { color: var(--dim); font-size: .9rem; }
++#card[data-state="error"] #note { color: var(--bad); }
++#actions { grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 8px; }
++#actions button { flex: 1; min-height: 44px; border-radius: 14px; border: 1px solid var(--line); background: #1a1e29; color: var(--text); font: inherit; }
++#actions button:active { background: #232838; }
++#close { flex: 0 0 48px !important; }
++#card[data-state="listening"] #orb i:nth-child(3) { animation: pulse 1.1s ease-in-out infinite; }
++#card[data-state="listening"] #orb i:nth-child(1) { animation: ring 1.6s ease-out infinite; }
++#card[data-state="transcribing"] #orb i, #card[data-state="thinking"] #orb i { animation: spin 1.4s linear infinite; border-style: dashed; }
++#card[data-state="thinking"] #orb i:nth-child(3), #card[data-state="transcribing"] #orb i:nth-child(3) { animation: pulse .7s ease-in-out infinite; }
++#card[data-state="speaking"] #orb i:nth-child(3) { animation: pulse .5s ease-in-out infinite; }
++#card[data-state="error"] #orb i { border-color: var(--bad); } #card[data-state="error"] #orb i:nth-child(3) { background: var(--bad); }
++@keyframes pulse { 50% { transform: scale(1.25); opacity: .6; } }
++@keyframes ring { from { transform: scale(.8); opacity: .7; } to { transform: scale(1.35); opacity: 0; } }
++@keyframes spin { to { transform: rotate(360deg); } }
++@media (prefers-reduced-motion: reduce) { #orb i { animation: none !important; } }
+diff --git a/core/web/overlay.html b/core/web/overlay.html
+new file mode 100644
+index 0000000..6801277
+--- /dev/null
++++ b/core/web/overlay.html
+@@ -0,0 +1,26 @@
++<!doctype html>
++<html lang="en">
++<head>
++<meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
++<meta name="color-scheme" content="dark">
++<title>Faze</title>
++<link rel="stylesheet" href="/overlay.css">
++</head>
++<body>
++  <main id="card" data-state="idle">
++    <div id="orb" aria-hidden="true"><i></i><i></i><i></i></div>
++    <div id="state" role="status" aria-live="polite">Starting...</div>
++    <p id="you" hidden></p>
++    <p id="reply" hidden></p>
++    <p id="note" hidden></p>
++    <div id="actions">
++      <button id="again" type="button">Again</button>
++      <button id="stop" type="button">Stop</button>
++      <button id="open" type="button">Open Faze</button>
++      <button id="close" type="button" aria-label="Close">&#10005;</button>
++    </div>
++  </main>
++  <script src="/overlay.js"></script>
++</body>
++</html>
+diff --git a/core/web/overlay.js b/core/web/overlay.js
+new file mode 100644
+index 0000000..bb7ded3
+--- /dev/null
++++ b/core/web/overlay.js
+@@ -0,0 +1,81 @@
++// The voice overlay: shows one server-side voice exchange (GET /api/voice/state + the "voice" SSE event).
++// Open it as /overlay#t=<token>&auto  (auto = start listening on load unless an exchange is already running).
++(function () {
++  'use strict';
++  const $ = (id) => document.getElementById(id);
++  const LABELS = { idle: 'Ready', listening: 'Listening...', transcribing: 'Got it...', thinking: 'Thinking...', speaking: 'Speaking', done: 'Done', error: 'Something went wrong' };
++  const params = new URLSearchParams((location.hash || '').replace(/^#/, ''));
++  let token = params.get('t') || '';
++  try {
++    if (token) localStorage.setItem('faze_overlay_token', token); else token = localStorage.getItem('faze_overlay_token') || '';
++  } catch (e) { /* storage can be off in a WebView */ }
++  if (token) history.replaceState(null, '', location.pathname + (params.has('auto') ? '#auto' : ''));
++  const auto = params.has('auto') || location.hash === '#auto';
++
++  async function api(path, body) {
++    const res = await fetch(path, {
++      method: body === undefined ? 'GET' : 'POST',
++      headers: Object.assign({ Authorization: 'Bearer ' + token }, body === undefined ? {} : { 'Content-Type': 'application/json' }),
++      body: body === undefined ? undefined : JSON.stringify(body),
++    });
++    if (!res.ok) throw new Error(res.status === 401 ? 'wrong or missing token' : 'request failed (' + res.status + ')');
++    return res.json();
++  }
++
++  function show(el, text) { el.hidden = !text; el.textContent = text || ''; }
++
++  function render(s) {
++    $('card').dataset.state = s.state;
++    $('state').textContent = LABELS[s.state] || s.state;
++    show($('you'), s.transcript);
++    show($('reply'), s.reply);
++    show($('note'), s.state === 'error' ? s.error : s.note);
++    $('again').hidden = !!s.active;
++    $('stop').hidden = !s.active;
++    const reply = $('reply');
++    reply.scrollTop = reply.scrollHeight;
++  }
++
++  function fail(e) { render({ state: 'error', error: e.message, active: false, transcript: '', reply: '' }); }
++  const start = () => api('/api/voice/start', {}).then(render).catch(fail);
++
++  $('again').addEventListener('click', start);
++  $('stop').addEventListener('click', () => api('/api/voice/stop', {}).then(render).catch(fail));
++  $('open').addEventListener('click', () => api('/api/open', { close_overlay: true }).catch(fail));
++  $('close').addEventListener('click', () => api('/api/voice/stop', { close: true }).then(render).catch(fail));
++
++  // fetch-based event stream (EventSource cannot send the Authorization header)
++  async function listen() {
++    for (;;) {
++      try {
++        const res = await fetch('/api/events', { headers: { Authorization: 'Bearer ' + token } });
++        if (!res.ok) throw new Error('events ' + res.status);
++        const reader = res.body.getReader();
++        const dec = new TextDecoder();
++        let buf = '';
++        for (;;) {
++          const { value, done } = await reader.read();
++          if (done) break;
++          buf += dec.decode(value, { stream: true });
++          let i;
++          while ((i = buf.indexOf('\n\n')) >= 0) {
++            const block = buf.slice(0, i); buf = buf.slice(i + 2);
++            const ev = /^event: (.*)$/m.exec(block), data = /^data: (.*)$/m.exec(block);
++            if (ev && ev[1] === 'voice' && data) { try { render(JSON.parse(data[1])); } catch (e) { /* ignore a bad frame */ } }
++          }
++        }
++      } catch (e) { /* reconnect below */ }
++      await new Promise((r) => setTimeout(r, 1500));
++    }
++  }
++
++  (async function init() {
++    if (!token) return fail(new Error('no token: open /overlay#t=<token>&auto'));
++    try {
++      const s = await api('/api/voice/state');
++      render(s);
++      listen();
++      if (auto && !s.active) await start();
++    } catch (e) { fail(e); }
++  })();
++})();
+diff --git a/core/web/sw.js b/core/web/sw.js
+index cf9a816..8de9c54 100644
+--- a/core/web/sw.js
++++ b/core/web/sw.js
+@@ -1,7 +1,7 @@
+ // Caches the app shell so the installed app opens even when Faze's server
+ // isn't running (it then shows a "can't reach Faze" banner). API calls are
+ // never cached.
+-const CACHE = 'faze-shell-v3';
++const CACHE = 'faze-shell-v4';
+ const SHELL = ['/', '/app.js', '/core.js', '/app.css', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
+ 
+ self.addEventListener('install', (event) => {
+diff --git a/core/web_server.py b/core/web_server.py
+index 7a4842e..135b7cf 100644
+--- a/core/web_server.py
++++ b/core/web_server.py
+@@ -36,6 +36,7 @@ import device
+ import stt
+ import tts
+ import wake
++from voice_session import VoiceSession
+ from icons import make_icon
+ from tool_replies import summarize_error
+ from gemini_tools import DEVICE_TOOLS
+@@ -50,6 +51,9 @@ STATIC = {
+     "/app.css": ("app.css", "text/css; charset=utf-8"),
+     "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
+     "/sw.js": ("sw.js", "text/javascript; charset=utf-8"),
++    "/overlay": ("overlay.html", "text/html; charset=utf-8"),
++    "/overlay.js": ("overlay.js", "text/javascript; charset=utf-8"),
++    "/overlay.css": ("overlay.css", "text/css; charset=utf-8"),
+ }
+ ICONS = {
+     "/icon-192.png": (192, False),
+@@ -108,6 +112,8 @@ class FazeServer(ThreadingHTTPServer):
+         self._approvals = {}
+         self._approval_lock = threading.Lock()
+         convo.approver = self.request_approval
++        self.voice = VoiceSession(self)
++        device.MIC_TAP["fn"] = lambda seconds: self.wake.capture(seconds) if self.wake else None
+ 
+     # ---- asking the user to approve a tool Gemini wrote ------------------
+ 
+@@ -358,6 +364,8 @@ class Handler(BaseHTTPRequestHandler):
+                 return self._json(200, {"mode": cfg["mode"], "high_tools": cfg["high_tools"], "control": device.SETTINGS["control"],
+                                         "modes": {m: agent.MODE_HELP[m] for m in agent.MODES},
+                                         "pending": self.server.pending_approvals(), **agent.STORE.snapshot()})
++            if path == "/api/voice/state":
++                return self._json(200, self.server.voice.state())
+             if path == "/api/log":
+                 try:
+                     n = int((self.path.split("n=", 1) + ["60"])[1].split("&")[0]) if "n=" in self.path else 60
+@@ -386,6 +394,13 @@ class Handler(BaseHTTPRequestHandler):
+             return
+         if path == "/api/speak":
+             return self._speak(data)
++        if path == "/api/voice/start":
++            return self._json(200, {"ok": True, **self.server.voice.start(overlay=bool(data.get("overlay")))})
++        if path == "/api/voice/stop":
++            return self._json(200, {"ok": True, **self.server.voice.stop(close_overlay=bool(data.get("close")))})
++        if path == "/api/open":
++            opened = self.server.voice.open_app(close_overlay=bool(data.get("close_overlay")))
++            return self._json(200, {"ok": opened})
+         if path == "/api/wake":
+             fired = self.server.trigger_wake("api")
+             return self._json(200, {"ok": True, "fired": fired})
+@@ -433,6 +448,8 @@ class Handler(BaseHTTPRequestHandler):
+                       "tools": len(agent.STORE.tools), "tasks": len(agent.STORE.tasks), "rev": agent.STORE.rev},
+             "turns": max(0, len(convo.messages) - 1),
+             "think": convo.config["reasoning"]["mode"],
++            "think_level": convo.config["reasoning"]["level"],
++            "gemini_thinking": convo.config["gemini"]["thinking"],
+             "stt": {"server": stt.available(convo.config), "pref": convo.config["voice"]["stt"],
+                     "reason": stt.missing_reason(convo.config)},
+         }
+@@ -479,11 +496,14 @@ class Handler(BaseHTTPRequestHandler):
+             return self._error(409, "still speaking the last reply")
+         try:
+             audio, kind = tts.synthesize_audio(str(data.get("text", "")), str(data.get("voice") or cfg["voice"]), cfg["model"])
+-            self._send(200, audio, kind, {"Cache-Control": "no-store"})
++            error = None
+         except tts.TtsError as e:
+-            self._error(422, str(e))
++            audio, kind, error = None, None, str(e)
+         finally:
+-            self.server.tts_lock.release()
++            self.server.tts_lock.release()  # before the reply goes out, or a quick next request is refused as "still speaking"
++        if error is not None:
++            return self._error(422, error)
++        self._send(200, audio, kind, {"Cache-Control": "no-store"})
+ 
+     def _transcribe(self):
+         data = self._read_audio()
+diff --git a/scripts/faze_service.sh b/scripts/faze_service.sh
+index cc3a568..32a2f5b 100755
+--- a/scripts/faze_service.sh
++++ b/scripts/faze_service.sh
+@@ -2,11 +2,33 @@
+ #
+ # Run Faze in the background, restart it if it crashes, no Termux window needed.
+ #   faze start                start the background app
+-#   faze start --voice        start it if needed, then open the app in voice mode  (Tasker: long-press both volume keys)
++#   faze start --voice        start it if needed, then listen: one spoken exchange, handled by the background service
++#                             (no app opens; the /overlay page shows it, see Tasker setup)  (Tasker: long-press both volume keys)
++#   faze start --app          start it if needed, then open the web app in voice mode
+ #   faze start --cli          pause the background app and chat in this terminal; it comes back when you exit
+-#   faze voice | faze cli     same as start --voice / start --cli
++#   faze voice | faze app | faze cli     same as start --voice / --app / --cli
++#   faze overlay              print the link the Tasker Scene WebView should load
+ #   faze stop | restart | status | logs
+-# Env (for tests): FAZE_CMD, FAZE_STATE, FAZE_LOG, FAZE_RESTART_DELAY, FAZE_PORT, FAZE_OPEN, FAZE_READY_TIMEOUT
++# Env (for tests): FAZE_CMD, FAZE_STATE, FAZE_LOG, FAZE_RESTART_DELAY, FAZE_PORT, FAZE_OPEN, FAZE_READY_TIMEOUT, FAZE_HTTP
++
++# Tasker's "Run Shell" starts with Android's PATH and, with Use Root, root's HOME: neither is Termux's, which is
++# why `faze` was "not found" (exit 127). Put Termux's paths back, and as root drop to Termux's own user so nothing
++# root-owned ends up inside Termux's home.
++TERMUX_HOME="${FAZE_TERMUX_HOME:-/data/data/com.termux/files/home}"
++TERMUX_PREFIX="${FAZE_TERMUX_PREFIX:-/data/data/com.termux/files/usr}"
++if [ -d "$TERMUX_PREFIX/bin" ]; then
++    case ":$PATH:" in *":$TERMUX_PREFIX/bin:"*) ;; *) export PATH="$TERMUX_PREFIX/bin:$PATH" ;; esac
++    export PREFIX="${PREFIX:-$TERMUX_PREFIX}"
++fi
++if [ ! -d "${HOME:-/nonexistent}/felix-ai" ] && [ -d "$TERMUX_HOME/felix-ai" ]; then export HOME="$TERMUX_HOME"; fi
++if [ "${FAZE_UID:-$(id -u)}" = "0" ] && [ -d "$TERMUX_HOME" ] && [ -z "$FAZE_DROPPED" ]; then
++    owner="${FAZE_TERMUX_OWNER:-$(stat -c %u "$TERMUX_HOME" 2> /dev/null)}"
++    if [ -n "$owner" ] && [ "$owner" != "0" ]; then
++        quoted=""
++        for a in "$0" "$@"; do quoted="$quoted $(printf '%q' "$a")"; done
++        exec "${FAZE_SU:-su}" "$owner" -c "export FAZE_DROPPED=1 HOME=$TERMUX_HOME PATH=$TERMUX_PREFIX/bin:\$PATH PREFIX=$TERMUX_PREFIX; bash$quoted"
++    fi
++fi
+ 
+ STATE="${FAZE_STATE:-$HOME/.felix}"
+ PIDFILE="$STATE/faze.pid"
+@@ -72,13 +94,30 @@ open_url() {
+     else echo "open this yourself: $1"; fi
+ }
+ 
+-usage() { echo "usage: $0 start [--voice|--cli] | voice | cli | stop | restart | status | logs"; }
++# POST a JSON body to the running service with the saved token. Prints the reply body.
++api_post() {
++    local token; token="$(cat "$STATE/token" 2> /dev/null)"
++    [ -n "$token" ] || { echo "no token yet; see: faze logs" >&2; return 1; }
++    if [ -n "$FAZE_HTTP" ]; then $FAZE_HTTP "$1" "$2" "$token"
++    elif command -v curl > /dev/null 2>&1; then
++        curl -fsS -m 10 -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d "$2" "http://localhost:$PORT$1"
++    else
++        python3 - "http://localhost:$PORT$1" "$2" "$token" << 'PY'
++import sys, urllib.request
++req = urllib.request.Request(sys.argv[1], sys.argv[2].encode(), {"Authorization": "Bearer " + sys.argv[3], "Content-Type": "application/json"})
++print(urllib.request.urlopen(req, timeout=10).read().decode())
++PY
++    fi
++}
++
++usage() { echo "usage: $0 start [--voice|--app|--cli] | voice | app | cli | overlay | stop | restart | status | logs"; }
+ 
+ start_command() {
+     local mode=""
+     for arg in "$@"; do
+         case "$arg" in
+             --voice) [ -n "$mode" ] && { usage; exit 2; }; mode=voice ;;
++            --app) [ -n "$mode" ] && { usage; exit 2; }; mode=app ;;
+             --cli) [ -n "$mode" ] && { usage; exit 2; }; mode=cli ;;
+             *) usage; exit 2 ;;
+         esac
+@@ -86,6 +125,16 @@ start_command() {
+     case "$mode" in
+         "") start_service ;;
+         voice)
++            start_service
++            if ! wait_ready; then echo "the service did not come up in time; see: faze logs"; exit 1; fi
++            local reply
++            if ! reply="$(api_post /api/voice/start '{"overlay": true}')"; then echo "could not start listening; see: faze logs"; exit 1; fi
++            case "$reply" in
++                *'"started": true'*) echo "listening" ;;
++                *) echo "already listening" ;;
++            esac
++            ;;
++        app)
+             start_service
+             if ! wait_ready; then echo "the app did not come up in time; see: faze logs"; exit 1; fi
+             local link="http://localhost:$PORT/#voice"
+@@ -109,6 +158,11 @@ case "${1:-status}" in
+     _supervise) supervise ;;
+     start) shift; start_command "$@" ;;
+     voice) start_command --voice ;;
++    app) start_command --app ;;
++    overlay)
++        if [ -f "$STATE/token" ]; then echo "http://localhost:$PORT/overlay#t=$(cat "$STATE/token")&auto"
++        else echo "no token yet: run faze start first"; exit 1; fi
++        ;;
+     cli) start_command --cli ;;
+     stop) stop_service ;;
+     restart) bash "$0" stop; sleep 1; bash "$0" start ;;

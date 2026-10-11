@@ -418,3 +418,5 @@ body.view-settings #cmdmenu, body.view-settings #attachments, body.view-settings
 #run-result { margin: 0; padding: 10px 12px; max-height: 30dvh; overflow: auto; white-space: pre-wrap; border-radius: var(--r-m); border: 1px solid var(--line-2); background: rgba(3, 6, 12, .75); font: .82rem / 1.55 var(--font-mono); }
 #run-result.bad { color: var(--bad); }
 @media (hover: none) { .side-acts { opacity: 1; } }
+#think-level { width: 100%; max-width: 100%; margin: 4px 0 6px; }
+#think-level:disabled { opacity: .5; }

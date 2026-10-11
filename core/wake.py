@@ -161,6 +161,9 @@ class WakeListener:
         self._thread = None
         self._proc = None
         self._quiet_until = 0.0
+        self._ring = deque(maxlen=1000)  # the last 30 s of 30 ms frames, so the listen tool and voice sessions can share this stream
+        self._frames = 0
+        self._held = False
 
     # -- control
     def start(self):
@@ -218,6 +221,8 @@ class WakeListener:
             frame = proc.stdout.read(FRAME_BYTES)
             if len(frame) < FRAME_BYTES:
                 return
+            self._ring.append(frame)
+            self._frames += 1
             silent = silent + 1 if not any(frame) else 0
             if silent == SILENT_FRAMES_WARN:
                 self._set("silent", "the mic is delivering pure silence; Android may block background mic access "
@@ -228,8 +233,53 @@ class WakeListener:
             if utterance is not None:
                 self._check(utterance)
 
+    def hold(self, on: bool) -> None:
+        """While held (a voice session is using the stream) the wake word does not react to what it hears."""
+        self._held = bool(on)
+
+    def _live(self) -> bool:
+        return self.state in ("listening", "transcribing", "silent") and not self._stop.is_set()
+
+    def capture(self, seconds: float, timeout: float = None):
+        """The next `seconds` of audio from the stream the wake word already reads, or None if it is not running.
+        (A second recorder on the same microphone source tends to get silence, so tools borrow this one.)"""
+        if not self._live():
+            return None
+        need = max(1, int(seconds / FRAME_S))
+        start = self._frames
+        deadline = time.monotonic() + (timeout if timeout is not None else seconds + 3)
+        while self._frames - start < need:
+            if not self._live() or time.monotonic() > deadline:
+                return None
+            time.sleep(0.03)
+        return b"".join(list(self._ring)[-need:])
+
+    def capture_utterance(self, max_seconds: float = 12.0, start_timeout: float = 6.0):
+        """One spoken utterance (start to pause) from the shared stream; None if nobody speaks or it is not running."""
+        if not self._live():
+            return None
+        vad = Vad(end_silence=max(6, int(self.config["wake"].get("end_silence_ms", 500)) // 30), max_frames=int(max_seconds / FRAME_S))
+        seen = self._frames
+        began = time.monotonic()
+        while self._live():
+            if self._frames == seen:
+                if vad.active is None and time.monotonic() - began > start_timeout:
+                    return None
+                time.sleep(0.02)
+                continue
+            fresh = min(self._frames - seen, len(self._ring))
+            frames = list(self._ring)[-fresh:]
+            seen = self._frames
+            for frame in frames:
+                utterance = vad.feed(frame)
+                if utterance is not None:
+                    return utterance
+            if vad.active is None and time.monotonic() - began > start_timeout:
+                return None
+        return None
+
     def _check(self, pcm: bytes):
-        if self.is_busy() or self._clock() < self._quiet_until:
+        if self._held or self.is_busy() or self._clock() < self._quiet_until:
             return
         self._set("transcribing")
         try:

@@ -23,6 +23,7 @@ import tool_helpers
 
 CONTROL_MODES = ("off", "ask", "on")
 SETTINGS = {"control": "off", "max_steps": 30, "cursor": True, "mic_cmd": ""}
+MIC_TAP = {"fn": None}  # set by the web server: seconds -> PCM from the wake-word stream, or None
 STATE = {"steps": 0, "cursor_on": False, "cursor_prev": "0", "size": None}
 KEYS = {"home": 3, "back": 4, "enter": 66, "recent": 187, "menu": 82, "search": 84, "tab": 61, "delete": 67, "camera": 27,
         "volume_up": 24, "volume_down": 25, "up": 19, "down": 20, "left": 21, "right": 22, "escape": 111, "space": 62}
@@ -120,10 +121,30 @@ def parse_nodes(xml_text: str) -> list:
     return nodes
 
 
+_DUMP_HINTS = (
+    ("idle state", "the screen never settles (a camera preview, video or game keeps animating), so it cannot be read"),
+    ("null root node", "no readable window (another accessibility service may be holding the reader, or the window is secure)"),
+    ("locked", "the screen is locked"),
+)
+
+
 def read_nodes() -> list:
+    """The screen's elements via uiautomator. It prints a success line and writes a file; when it prints an error
+    instead (it still exits 0), that error is what the model and the user need to see, not 'file not found'."""
     path = "/data/local/tmp/faze_ui.xml"
-    _root(["uiautomator", "dump", path], 20)
-    return parse_nodes(_root(["cat", path], 10, cap=400000))
+    said = ""
+    for flags in ([], ["--compressed"]):
+        try:
+            _root(["rm", "-f", path], 5)
+            said = _root(["uiautomator", "dump", *flags, path], 15)
+        except DeviceError as e:
+            said = str(e)
+            continue
+        if "dumped to" in said.lower():
+            return parse_nodes(_root(["cat", path], 10, cap=400000))
+    why = next((hint for key, hint in _DUMP_HINTS if key in said.lower()), "")
+    raise DeviceError(f"uiautomator could not read the screen: {said.strip()[:160] or 'no output'}"
+                      + (f" ({why})" if why else "") + ". Use screen_look instead.")
 
 
 def screen_read() -> str:
@@ -225,7 +246,13 @@ def wait(seconds) -> str:
 # ---------------------------------------------------------------- hearing
 
 def record_pcm(seconds: int) -> bytes:
-    """Raw 16 kHz mono 16-bit audio from the mic command (the same one the wake word uses)."""
+    """Raw 16 kHz mono 16-bit audio. The wake-word stream is used when it is running (it already owns the
+    microphone source); otherwise the mic command is started for the duration."""
+    tap = MIC_TAP["fn"]
+    if tap:
+        pcm = tap(seconds)
+        if pcm:
+            return pcm
     cmd = shlex.split(SETTINGS["mic_cmd"])
     if not cmd:
         raise DeviceError("no mic command is configured (wake.mic_cmd)")
@@ -259,16 +286,70 @@ def record_pcm(seconds: int) -> bytes:
     return data
 
 
+def record_termux_api(seconds: int) -> tuple:
+    """Android's own recorder through Termux:API (termux-microphone-record), which runs as its own foreground
+    service and is not silenced the way a background pulse stream can be. Returns (bytes, mime)."""
+    import tempfile
+    path = os.path.join(tempfile.gettempdir(), f"faze_listen_{os.getpid()}.m4a")
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    try:
+        tool_helpers.run(["termux-microphone-record", "-f", path, "-l", str(seconds), "-e", "aac", "-r", "16000", "-c", "1"], timeout=10)
+        time.sleep(seconds + 1.5)
+        try:
+            tool_helpers.run(["termux-microphone-record", "-q"], timeout=5)
+        except RuntimeError:
+            pass
+        with open(path, "rb") as f:
+            data = f.read()
+    except RuntimeError as e:
+        raise DeviceError(f"Termux:API recording failed ({e})")
+    except OSError:
+        raise DeviceError("Termux:API recorded nothing (is the Termux:API app installed with microphone permission?)")
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    if len(data) < 2000:
+        raise DeviceError("Termux:API recorded nothing (microphone permission for Termux:API?)")
+    if data[4:8] == b"ftyp":  # an mp4 container: Gemini wants a plain wav, ffmpeg can make one
+        try:
+            wav = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", "pipe:0", "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1"],
+                                 input=data, capture_output=True, timeout=30)
+            if wav.returncode == 0 and wav.stdout[:4] == b"RIFF":
+                return wav.stdout, "audio/wav"
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        return data, "audio/mp4"
+    return data, "audio/aac"
+
+
 def listen(seconds) -> str:
     from gemini_client import GeminiError, ask_media
     from tts import wav_from_pcm
     n = max(1, min(MAX_LISTEN_SECONDS, int(seconds)))
-    pcm = record_pcm(n)
-    if not any(pcm):
-        raise DeviceError("the microphone captured only silence (check the mic with python3 core/wake.py --check)")
+    audio, mime, problems = None, None, []
+    try:
+        pcm = record_pcm(n)
+        if any(pcm):
+            audio, mime = wav_from_pcm(pcm, 16000), "audio/wav"
+        else:
+            problems.append("the pulse microphone captured only silence")
+    except DeviceError as e:
+        problems.append(str(e))
+    if audio is None:
+        try:
+            audio, mime = record_termux_api(n)
+        except DeviceError as e:
+            problems.append(str(e))
+    if audio is None:
+        raise DeviceError("could not hear anything: " + "; ".join(problems) + ". Check the mic with python3 core/wake.py --check")
     try:
         heard = ask_media("Transcribe any speech in this audio word for word. If there is no speech, describe the main sounds in a few words.",
-                          wav_from_pcm(pcm, 16000), "audio/wav")
+                          audio, mime)
     except GeminiError as e:
         raise DeviceError(f"could not ask Gemini about the audio: {e}")
     return f"Heard over {n}s: {heard or '(nothing clear)'}"

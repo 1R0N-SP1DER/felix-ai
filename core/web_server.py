@@ -36,6 +36,7 @@ import device
 import stt
 import tts
 import wake
+from voice_session import VoiceSession
 from icons import make_icon
 from tool_replies import summarize_error
 from gemini_tools import DEVICE_TOOLS
@@ -50,6 +51,9 @@ STATIC = {
     "/app.css": ("app.css", "text/css; charset=utf-8"),
     "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
     "/sw.js": ("sw.js", "text/javascript; charset=utf-8"),
+    "/overlay": ("overlay.html", "text/html; charset=utf-8"),
+    "/overlay.js": ("overlay.js", "text/javascript; charset=utf-8"),
+    "/overlay.css": ("overlay.css", "text/css; charset=utf-8"),
 }
 ICONS = {
     "/icon-192.png": (192, False),
@@ -108,6 +112,8 @@ class FazeServer(ThreadingHTTPServer):
         self._approvals = {}
         self._approval_lock = threading.Lock()
         convo.approver = self.request_approval
+        self.voice = VoiceSession(self)
+        device.MIC_TAP["fn"] = lambda seconds: self.wake.capture(seconds) if self.wake else None
 
     # ---- asking the user to approve a tool Gemini wrote ------------------
 
@@ -358,6 +364,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"mode": cfg["mode"], "high_tools": cfg["high_tools"], "control": device.SETTINGS["control"],
                                         "modes": {m: agent.MODE_HELP[m] for m in agent.MODES},
                                         "pending": self.server.pending_approvals(), **agent.STORE.snapshot()})
+            if path == "/api/voice/state":
+                return self._json(200, self.server.voice.state())
             if path == "/api/log":
                 try:
                     n = int((self.path.split("n=", 1) + ["60"])[1].split("&")[0]) if "n=" in self.path else 60
@@ -386,6 +394,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/speak":
             return self._speak(data)
+        if path == "/api/voice/start":
+            return self._json(200, {"ok": True, **self.server.voice.start(overlay=bool(data.get("overlay")))})
+        if path == "/api/voice/stop":
+            return self._json(200, {"ok": True, **self.server.voice.stop(close_overlay=bool(data.get("close")))})
+        if path == "/api/open":
+            opened = self.server.voice.open_app(close_overlay=bool(data.get("close_overlay")))
+            return self._json(200, {"ok": opened})
         if path == "/api/wake":
             fired = self.server.trigger_wake("api")
             return self._json(200, {"ok": True, "fired": fired})
@@ -433,6 +448,8 @@ class Handler(BaseHTTPRequestHandler):
                       "tools": len(agent.STORE.tools), "tasks": len(agent.STORE.tasks), "rev": agent.STORE.rev},
             "turns": max(0, len(convo.messages) - 1),
             "think": convo.config["reasoning"]["mode"],
+            "think_level": convo.config["reasoning"]["level"],
+            "gemini_thinking": convo.config["gemini"]["thinking"],
             "stt": {"server": stt.available(convo.config), "pref": convo.config["voice"]["stt"],
                     "reason": stt.missing_reason(convo.config)},
         }
@@ -479,11 +496,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(409, "still speaking the last reply")
         try:
             audio, kind = tts.synthesize_audio(str(data.get("text", "")), str(data.get("voice") or cfg["voice"]), cfg["model"])
-            self._send(200, audio, kind, {"Cache-Control": "no-store"})
+            error = None
         except tts.TtsError as e:
-            self._error(422, str(e))
+            audio, kind, error = None, None, str(e)
         finally:
-            self.server.tts_lock.release()
+            self.server.tts_lock.release()  # before the reply goes out, or a quick next request is refused as "still speaking"
+        if error is not None:
+            return self._error(422, error)
+        self._send(200, audio, kind, {"Cache-Control": "no-store"})
 
     def _transcribe(self):
         data = self._read_audio()

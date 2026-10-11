@@ -215,7 +215,7 @@ class TestThinking(Base):
 
     def test_bad_argument(self):
         c = self.convo()
-        self.assertEqual(c.handle_command("/think maybe"), "Usage: /think auto|on|off")
+        self.assertEqual(c.handle_command("/think maybe"), "Usage: /think auto|off|low|medium|high|max")
         self.assertIn("think: auto", c.handle_command("/status"))
 
 

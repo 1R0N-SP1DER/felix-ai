@@ -33,7 +33,7 @@ import requests
 import action_log
 from action_log import log_action
 from config_loader import (load_config, get_llm_url, describe_settings,
-                           set_user_setting, unset_user_setting, SETTINGS)
+                           set_user_setting, unset_user_setting, SETTINGS, load_user_overrides)
 from local_server import ServerManager
 from memory_store import init_db, log_message
 from memory_recall import setup_fts
@@ -75,12 +75,15 @@ COMMANDS = [
          {"value": "lfm", "description": "Local LFM, fast chat without tools"},
          {"value": "gemini", "description": "Gemini online helper"},
      ]},
-    {"name": "think", "description": "Turn Qwen's thinking on or off",
-     "usage": "/think [auto|on|off]",
+    {"name": "think", "description": "How much the model thinks (Qwen: on/off, Gemini: a level)",
+     "usage": "/think [auto|off|low|medium|high|max]",
      "args": [
-         {"value": "auto", "description": "Qwen thinks only when it asks to"},
-         {"value": "on", "description": "Think before every reply (slow)"},
-         {"value": "off", "description": "Never think"},
+         {"value": "auto", "description": "Qwen thinks only when it asks to; Gemini uses gemini.thinking"},
+         {"value": "off", "description": "Never think (Gemini: minimal)"},
+         {"value": "low", "description": "Think before every reply, lightly"},
+         {"value": "medium", "description": "Think before every reply"},
+         {"value": "high", "description": "Think hard"},
+         {"value": "max", "description": "Gemini: high. Qwen: same as any level"},
      ]},
     {"name": "reset", "description": "Start a new chat and clear the history", "usage": "/reset", "args": []},
     {"name": "status", "description": "Show what is running", "usage": "/status", "args": []},
@@ -230,7 +233,9 @@ class Conversation:
             os.environ["FAZE_GEMINI_DISABLED"] = "1"
         names = config["assistant"]
         set_names(names["name"], names["user_name"])
-        gemini_client.configure(chat=config["gemini"]["model"], search=config["gemini"]["search_model"], thinking=config["gemini"]["thinking"])
+        self.config.setdefault("reasoning", {})
+        self._sync_reasoning_startup()
+        gemini_client.configure(chat=config["gemini"]["model"], search=config["gemini"]["search_model"], thinking=self._gemini_thinking())
         self._gemini_down_until = 0.0
         self.system_static = build_static_system_message()
         self.messages = [{"role": "system",
@@ -990,16 +995,57 @@ class Conversation:
             self.stop_lfm()
         return f"Forcing {mode} " + (f"for next {turns} turns" if turns else "until you turn it off")
 
+    THINK_LEVELS = ("auto", "off", "low", "medium", "high", "max")
+
     def _think_command(self, args: list) -> str:
+        level = self.config["reasoning"]["level"]
         if not args:
-            return "Reasoning: " + self.config["reasoning"]["mode"]
+            return "Reasoning: " + level
+        word = args[0].lower()
+        key = "reasoning.mode" if word == "on" else "reasoning.level"
         try:
-            value, _ = self.change_setting("reasoning.mode", args[0])
+            value, _ = self.change_setting(key, word)
         except ValueError:
-            return "Usage: /think auto|on|off"
-        note = {"on": " (Qwen thinks before every reply; slow on this phone)",
-                "off": " (Qwen never thinks)", "auto": " (Qwen thinks only when it asks to)"}[value]
-        return f"Reasoning: {value}{note}"
+            return "Usage: /think auto|off|low|medium|high|max"
+        level = self.config["reasoning"]["level"]
+        shown = "on" if word == "on" else value
+        note = {"auto": " (Qwen thinks only when it asks to; Gemini uses gemini.thinking)",
+                "off": " (Qwen never thinks; Gemini minimal)"}.get(
+            level, f" (Qwen thinks before every reply, slow on this phone; Gemini {self._gemini_thinking() or 'default'})")
+        return f"Reasoning: {shown}{note}"
+
+    def _gemini_thinking(self) -> str:
+        """Gemini's thinking level for the current reasoning level: off -> minimal, low/medium/high as named,
+        max -> high, auto -> the gemini.thinking setting."""
+        level = self.config.get("reasoning", {}).get("level", "auto")
+        return {"off": "minimal", "low": "low", "medium": "medium", "high": "high", "max": "high"}.get(
+            level, self.config["gemini"]["thinking"])
+
+    @staticmethod
+    def _reasoning_pair(key: str, value: str, current_level: str = "auto"):
+        """The other half of the reasoning setting: level decides mode (Qwen has one thinking mode, so any
+        level except off and auto turns it on), and mode on keeps a thinking level or picks medium."""
+        if key == "reasoning.level":
+            return "reasoning.mode", {"auto": "auto", "off": "off"}.get(value, "on")
+        return "reasoning.level", ("medium" if value == "on" and current_level in ("auto", "off") else
+                                   current_level if value == "on" else value)
+
+    def _sync_reasoning_startup(self) -> None:
+        """Both reasoning keys can be saved; the level wins, an old mode-only override still works."""
+        try:
+            over = load_user_overrides().get("reasoning", {}) or {}
+        except Exception:
+            over = {}
+        r = self.config["reasoning"]
+        if over.get("level") in self.THINK_LEVELS:
+            r["level"] = over["level"]
+            r["mode"] = self._reasoning_pair("reasoning.level", r["level"])[1]
+        elif over.get("mode") in ("auto", "on", "off"):
+            r["mode"] = over["mode"]
+            r["level"] = self._reasoning_pair("reasoning.mode", r["mode"], "auto")[1]
+        else:
+            r.setdefault("level", "auto")
+            r["mode"] = self._reasoning_pair("reasoning.level", r["level"])[1]
 
     def _status_text(self) -> str:
         local = self.local.state if self.local.state != "unmanaged" else "running (not managed)"
@@ -1009,7 +1055,7 @@ class Conversation:
             "idle" if self._lfm_configured() else "not configured")
         mode = self.forced_model or "auto"
         gem = "on" if self._gemini_on() else "off"
-        think = self.config["reasoning"]["mode"]
+        think = self.config["reasoning"]["level"]
         return f"qwen: {local} | lfm: {lfm} | gemini: {gem} | mode: {mode} | think: {think}"
 
     def change_setting(self, key: str, raw: str):
@@ -1017,10 +1063,19 @@ class Conversation:
         needs_restart); raises ValueError with a user-facing message."""
         value, restart = set_user_setting(key, raw)
         self._apply_setting(key, value)
+        if key in ("reasoning.mode", "reasoning.level"):  # save both halves so a stale one never wins at startup
+            other = "reasoning.level" if key == "reasoning.mode" else "reasoning.mode"
+            set_user_setting(other, self.config["reasoning"][other.split(".")[1]])
         return value, restart
 
     def reset_setting(self, key: str) -> bool:
         removed = unset_user_setting(key)
+        if key in ("reasoning.mode", "reasoning.level"):
+            removed = unset_user_setting("reasoning.mode") | unset_user_setting("reasoning.level") | removed
+            if removed:
+                fresh = load_config()["reasoning"]
+                self._apply_setting("reasoning.level", fresh["level"])
+            return removed
         if removed:
             cur = load_config()
             for part in key.split("."):
@@ -1076,9 +1131,13 @@ class Conversation:
             set_names(name, user)
             self.config["assistant_name"] = name
             self._rebuild_system()
-        if key in ("gemini.model", "gemini.search_model", "gemini.thinking"):
+        if key in ("reasoning.level", "reasoning.mode"):
+            r = self.config["reasoning"]
+            other, other_value = self._reasoning_pair(key, value, r.get("level", "auto"))
+            r[other.split(".")[1]] = other_value
+        if key in ("gemini.model", "gemini.search_model", "gemini.thinking", "reasoning.level", "reasoning.mode"):
             gemini_client.configure(chat=self.config["gemini"]["model"], search=self.config["gemini"]["search_model"],
-                                    thinking=self.config["gemini"]["thinking"])
+                                    thinking=self._gemini_thinking())
         if key.startswith(("search.", "actions.", "device.")):
             tool_executor.configure(self.config)
         if key == "agent.high_tools":

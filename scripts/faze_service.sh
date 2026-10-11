@@ -2,11 +2,33 @@
 #
 # Run Faze in the background, restart it if it crashes, no Termux window needed.
 #   faze start                start the background app
-#   faze start --voice        start it if needed, then open the app in voice mode  (Tasker: long-press both volume keys)
+#   faze start --voice        start it if needed, then listen: one spoken exchange, handled by the background service
+#                             (no app opens; the /overlay page shows it, see Tasker setup)  (Tasker: long-press both volume keys)
+#   faze start --app          start it if needed, then open the web app in voice mode
 #   faze start --cli          pause the background app and chat in this terminal; it comes back when you exit
-#   faze voice | faze cli     same as start --voice / start --cli
+#   faze voice | faze app | faze cli     same as start --voice / --app / --cli
+#   faze overlay              print the link the Tasker Scene WebView should load
 #   faze stop | restart | status | logs
-# Env (for tests): FAZE_CMD, FAZE_STATE, FAZE_LOG, FAZE_RESTART_DELAY, FAZE_PORT, FAZE_OPEN, FAZE_READY_TIMEOUT
+# Env (for tests): FAZE_CMD, FAZE_STATE, FAZE_LOG, FAZE_RESTART_DELAY, FAZE_PORT, FAZE_OPEN, FAZE_READY_TIMEOUT, FAZE_HTTP
+
+# Tasker's "Run Shell" starts with Android's PATH and, with Use Root, root's HOME: neither is Termux's, which is
+# why `faze` was "not found" (exit 127). Put Termux's paths back, and as root drop to Termux's own user so nothing
+# root-owned ends up inside Termux's home.
+TERMUX_HOME="${FAZE_TERMUX_HOME:-/data/data/com.termux/files/home}"
+TERMUX_PREFIX="${FAZE_TERMUX_PREFIX:-/data/data/com.termux/files/usr}"
+if [ -d "$TERMUX_PREFIX/bin" ]; then
+    case ":$PATH:" in *":$TERMUX_PREFIX/bin:"*) ;; *) export PATH="$TERMUX_PREFIX/bin:$PATH" ;; esac
+    export PREFIX="${PREFIX:-$TERMUX_PREFIX}"
+fi
+if [ ! -d "${HOME:-/nonexistent}/felix-ai" ] && [ -d "$TERMUX_HOME/felix-ai" ]; then export HOME="$TERMUX_HOME"; fi
+if [ "${FAZE_UID:-$(id -u)}" = "0" ] && [ -d "$TERMUX_HOME" ] && [ -z "$FAZE_DROPPED" ]; then
+    owner="${FAZE_TERMUX_OWNER:-$(stat -c %u "$TERMUX_HOME" 2> /dev/null)}"
+    if [ -n "$owner" ] && [ "$owner" != "0" ]; then
+        quoted=""
+        for a in "$0" "$@"; do quoted="$quoted $(printf '%q' "$a")"; done
+        exec "${FAZE_SU:-su}" "$owner" -c "export FAZE_DROPPED=1 HOME=$TERMUX_HOME PATH=$TERMUX_PREFIX/bin:\$PATH PREFIX=$TERMUX_PREFIX; bash$quoted"
+    fi
+fi
 
 STATE="${FAZE_STATE:-$HOME/.felix}"
 PIDFILE="$STATE/faze.pid"
@@ -72,13 +94,30 @@ open_url() {
     else echo "open this yourself: $1"; fi
 }
 
-usage() { echo "usage: $0 start [--voice|--cli] | voice | cli | stop | restart | status | logs"; }
+# POST a JSON body to the running service with the saved token. Prints the reply body.
+api_post() {
+    local token; token="$(cat "$STATE/token" 2> /dev/null)"
+    [ -n "$token" ] || { echo "no token yet; see: faze logs" >&2; return 1; }
+    if [ -n "$FAZE_HTTP" ]; then $FAZE_HTTP "$1" "$2" "$token"
+    elif command -v curl > /dev/null 2>&1; then
+        curl -fsS -m 10 -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d "$2" "http://localhost:$PORT$1"
+    else
+        python3 - "http://localhost:$PORT$1" "$2" "$token" << 'PY'
+import sys, urllib.request
+req = urllib.request.Request(sys.argv[1], sys.argv[2].encode(), {"Authorization": "Bearer " + sys.argv[3], "Content-Type": "application/json"})
+print(urllib.request.urlopen(req, timeout=10).read().decode())
+PY
+    fi
+}
+
+usage() { echo "usage: $0 start [--voice|--app|--cli] | voice | app | cli | overlay | stop | restart | status | logs"; }
 
 start_command() {
     local mode=""
     for arg in "$@"; do
         case "$arg" in
             --voice) [ -n "$mode" ] && { usage; exit 2; }; mode=voice ;;
+            --app) [ -n "$mode" ] && { usage; exit 2; }; mode=app ;;
             --cli) [ -n "$mode" ] && { usage; exit 2; }; mode=cli ;;
             *) usage; exit 2 ;;
         esac
@@ -86,6 +125,16 @@ start_command() {
     case "$mode" in
         "") start_service ;;
         voice)
+            start_service
+            if ! wait_ready; then echo "the service did not come up in time; see: faze logs"; exit 1; fi
+            local reply
+            if ! reply="$(api_post /api/voice/start '{"overlay": true}')"; then echo "could not start listening; see: faze logs"; exit 1; fi
+            case "$reply" in
+                *'"started": true'*) echo "listening" ;;
+                *) echo "already listening" ;;
+            esac
+            ;;
+        app)
             start_service
             if ! wait_ready; then echo "the app did not come up in time; see: faze logs"; exit 1; fi
             local link="http://localhost:$PORT/#voice"
@@ -109,6 +158,11 @@ case "${1:-status}" in
     _supervise) supervise ;;
     start) shift; start_command "$@" ;;
     voice) start_command --voice ;;
+    app) start_command --app ;;
+    overlay)
+        if [ -f "$STATE/token" ]; then echo "http://localhost:$PORT/overlay#t=$(cat "$STATE/token")&auto"
+        else echo "no token yet: run faze start first"; exit 1; fi
+        ;;
     cli) start_command --cli ;;
     stop) stop_service ;;
     restart) bash "$0" stop; sleep 1; bash "$0" start ;;

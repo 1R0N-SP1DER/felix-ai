@@ -29,8 +29,9 @@ DEFAULTS = {
     "assistant_name": "Faze",   # kept in sync with assistant.name
     "assistant": {"name": "Faze", "user_name": "Felix"},
     "model": {"forced": "auto"},          # auto | qwen | gemini | lfm  (persisted /model choice)
-    "reasoning": {"mode": "auto"},        # auto | on | off  (Qwen thinking mode)
-    "voice": {"stt": "auto"},             # auto | server | browser
+    "reasoning": {"mode": "auto", "level": "auto"},  # level: auto|off|low|medium|high|max; mode (auto|on|off) is derived from it
+    "voice": {"stt": "auto", "speak": True, "listen_timeout": 8,  # stt: auto | server | browser
+              "overlay_task": "Faze Overlay", "overlay_close_task": "Faze Overlay Close"},  # Tasker task names (empty: do not ask Tasker)
     "tts": {"engine": "system", "voice": "kore", "model": "gemini-3.1-flash-tts-preview"},
     "wake": {
         "enabled": False,
@@ -97,7 +98,12 @@ SETTINGS = {
     "assistant.user_name": (str, None),
     "model.forced": (str, ("auto", "qwen", "gemini", "lfm")),
     "reasoning.mode": (str, ("auto", "on", "off")),
+    "reasoning.level": (str, ("auto", "off", "low", "medium", "high", "max")),
     "voice.stt": (str, ("auto", "server", "browser")),
+    "voice.speak": (bool, None),
+    "voice.listen_timeout": (int, None),
+    "voice.overlay_task": (str, None),
+    "voice.overlay_close_task": (str, None),
     "tts.engine": (str, ("system", "gemini")),
     "tts.voice": (str, __import__("tts").VOICE_NAMES),
     "tts.model": (str, None),

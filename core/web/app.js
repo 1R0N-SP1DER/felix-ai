@@ -599,8 +599,7 @@
     maybeRestore(s);
     renderWakeRow();
     maybeRefreshAgent(s);
-    $('menu-think-val').textContent = s.think;
-    for (const b of $('think-seg').children) b.classList.toggle('on', b.dataset.v === s.think);
+    renderThinking(s);
     $('stt-note').textContent = s.stt.server ? 'offline engine ready' : (s.stt.reason || '');
 
     if (!$('model-sheet').hidden) renderModelSheet();
@@ -667,6 +666,23 @@
       if (id !== 'auto') item.appendChild(stayControl(id));
       list.appendChild(item);
     }
+  }
+
+  // Thinking is one level for whichever model answers; what it means depends on the model picked in the sheet.
+  function thinkHint(mode, level, gem) {
+    if (mode === 'lfm') return 'LFM cannot think, so this does nothing while LFM is forced. It still applies when Qwen or Gemini answers.';
+    if (mode === 'qwen') return 'Qwen has one thinking mode: any level except Off turns it on, Auto lets Qwen ask for it. Slow on a phone, about 6 words a second, and you can press stop.';
+    if (mode === 'gemini') return 'Gemini: Off is minimal, Low, Medium and High are as named, Max is High, Auto uses your gemini.thinking setting (' + (gem || 'low') + '). Lower is faster.';
+    return 'Applies to whichever model answers. Qwen thinks on any level except Off; Gemini uses the level (Off is minimal, Max is High, Auto follows gemini.thinking, ' + (gem || 'low') + ').';
+  }
+
+  function renderThinking(s) {
+    const level = s.think_level || s.think || 'auto';
+    $('menu-think-val').textContent = level;
+    const sel = $('think-level');
+    if (document.activeElement !== sel) sel.value = level;
+    sel.disabled = s.mode === 'lfm';
+    $('think-hint').textContent = thinkHint(s.mode || 'auto', level, s.gemini_thinking);
   }
 
   async function chooseModel(id, n) {
@@ -2313,11 +2329,7 @@
     $('model-chip').addEventListener('click', openModelSheet);
     $('plus').addEventListener('click', (ev) => { ev.stopPropagation(); $('tools-menu').hidden = true; $('menu').hidden = !$('menu').hidden; });
     document.addEventListener('click', (ev) => { if (!$('menu').contains(ev.target) && !$('plus').contains(ev.target)) $('menu').hidden = true; });
-    $('menu-think').addEventListener('click', async () => {
-      const next = { auto: 'on', on: 'off', off: 'auto' }[(status && status.think) || 'auto'];
-      try { toast(await command('/think ' + next)); } catch (e) { toast(e.message); }
-      pollStatus(true);
-    });
+    $('menu-think').addEventListener('click', openModelSheet);
     $('menu-new').addEventListener('click', newChat);
     $('menu-settings').addEventListener('click', openSettings);
     $('open-settings').addEventListener('click', openSettings);
@@ -2347,12 +2359,10 @@
     window.addEventListener('popstate', () => showSettings(location.hash === '#settings'));
     if (location.hash === '#settings') showSettings(true);
     $('model-sheet').addEventListener('click', (ev) => { if (ev.target === $('model-sheet')) $('model-sheet').hidden = true; });
-    for (const b of $('think-seg').children) {
-      b.addEventListener('click', async () => {
-        try { toast(await command('/think ' + b.dataset.v)); } catch (e) { toast(e.message); }
-        pollStatus(true);
-      });
-    }
+    $('think-level').addEventListener('change', async () => {
+      try { toast(await command('/think ' + $('think-level').value)); } catch (e) { toast(e.message); }
+      pollStatus(true);
+    });
     $('pair-go').addEventListener('click', () => pairWith($('pair-input').value));
 
     window.addEventListener('beforeinstallprompt', (ev) => {

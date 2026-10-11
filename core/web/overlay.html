@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Faze</title>
+<link rel="stylesheet" href="/overlay.css">
+</head>
+<body>
+  <main id="card" data-state="idle">
+    <div id="orb" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div id="state" role="status" aria-live="polite">Starting...</div>
+    <p id="you" hidden></p>
+    <p id="reply" hidden></p>
+    <p id="note" hidden></p>
+    <div id="actions">
+      <button id="again" type="button">Again</button>
+      <button id="stop" type="button">Stop</button>
+      <button id="open" type="button">Open Faze</button>
+      <button id="close" type="button" aria-label="Close">&#10005;</button>
+    </div>
+  </main>
+  <script src="/overlay.js"></script>
+</body>
+</html>

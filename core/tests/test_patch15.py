@@ -315,6 +315,8 @@ class FakePhone:
         self.calls.append((cmd, root))
         if cmd[:2] == ["wm", "size"]:
             return "Physical size: 1080x2400"
+        if cmd[0] == "rm":
+            return ""
         if cmd[0] == "uiautomator":
             return "UI hierchary dumped to: /data/local/tmp/faze_ui.xml"
         if cmd[0] == "cat":
@@ -749,24 +751,24 @@ class TestServiceModes(unittest.TestCase):
             time.sleep(0.1)
         return False
 
-    def test_voice_starts_the_app_and_opens_it_in_voice_mode_with_the_token(self):
+    def test_app_starts_the_app_and_opens_it_in_voice_mode_with_the_token(self):
         self.serve()
         self.write_fake('echo "app started" >> "$FAZE_LOG"; sleep 60\n')
         open(os.path.join(self.env["FAZE_STATE"], "token"), "w").write("tok123")
-        out = self.run_svc("start", "--voice")
+        out = self.run_svc("start", "--app")
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("opened in voice mode", out.stdout)
         self.assertEqual(open(self.opened).read().strip(), f"http://localhost:{self.port}/#t=tok123&voice")
         self.assertTrue(self.wait_for(lambda: "app started" in self.log()))
         self.assertEqual(self.run_svc("status").returncode, 0)
 
-    def test_voice_does_not_restart_a_running_app_and_works_without_a_token(self):
+    def test_app_does_not_restart_a_running_app_and_works_without_a_token(self):
         self.serve()
         self.write_fake('echo "app started" >> "$FAZE_LOG"; sleep 60\n')
         self.run_svc("start")
         self.assertTrue(self.wait_for(lambda: "app started" in self.log()))
-        self.run_svc("voice")
-        self.run_svc("start", "--voice")
+        self.run_svc("app")
+        self.run_svc("start", "--app")
         time.sleep(0.5)
         self.assertEqual(self.log().count("app started"), 1)
         self.assertEqual(open(self.opened).read().split(), [f"http://localhost:{self.port}/#voice"] * 2)

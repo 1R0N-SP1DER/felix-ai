@@ -11,7 +11,7 @@ const calls = [];
 let ops = 0;
 
 const status = { name: 'Faze', qwen: { state: 'ready', detail: '', note: '' }, lfm: 'idle', gemini: true, mode: 'auto', busy: false, notices: [],
-  show_tag: true, wake: { enabled: true, state: 'listening', phrase: 'hey faze', detail: '', engine: 'auto' }, tts: { engine: 'system' }, user_name: 'Felix', forced_turns: 0, turns: 0, agent: { mode: 'ask', high_tools: false, tools: 1, tasks: 1, rev: 7 }, think: 'auto',
+  show_tag: true, wake: { enabled: true, state: 'listening', phrase: 'hey faze', detail: '', engine: 'auto' }, tts: { engine: 'system' }, user_name: 'Felix', forced_turns: 0, turns: 0, agent: { mode: 'ask', high_tools: false, tools: 1, tasks: 1, rev: 7 }, think: 'auto', think_level: 'auto', gemini_thinking: 'low',
   stt: { server: false, pref: 'auto', reason: 'no whisper' } };
 
 function sse(events) {
@@ -66,6 +66,8 @@ async function fakeFetch(url, opts) {
   if (p === '/api/command') {
     const m = /^\/model (\w+)(?: (\d+))?$/.exec(body.line || '');
     if (m) { status.mode = m[1]; status.forced_turns = Number(m[2] || 0); }
+    const t = /^\/think (\w+)$/.exec(body.line || '');
+    if (t) { status.think_level = t[1]; status.think = { auto: 'auto', off: 'off' }[t[1]] || 'on'; }
     return json({ text: 'ok' });
   }
   if (p === '/api/restore') return json({ ok: true, kept: (body.messages || []).length });
@@ -214,6 +216,27 @@ async function fakeFetch(url, opts) {
   rowFor('Auto').querySelector('.model-row').click();
   await sleep(120);
   out.picker.backToAuto = status.mode;
+
+  // thinking level dropdown: any model that can think, hint follows the selected model
+  const hint = () => $('think-hint').textContent;
+  const pickModel = async (name) => { rowFor(name).querySelector('.model-row').click(); await sleep(120); };
+  out.think = { options: [...$('think-level').querySelectorAll('option')].map((o) => o.value), oldSeg: !!d.getElementById('think-seg'),
+    value: $('think-level').value, menuVal: $('menu-think-val').textContent, hintAuto: hint(), disabledAuto: $('think-level').disabled };
+  await pickModel('Qwen');
+  out.think.hintQwen = hint(); out.think.disabledQwen = $('think-level').disabled;
+  await pickModel('Gemini');
+  out.think.hintGemini = hint(); out.think.disabledGemini = $('think-level').disabled;
+  await pickModel('LFM');
+  out.think.hintLfm = hint(); out.think.disabledLfm = $('think-level').disabled;
+  await pickModel('Gemini');
+  $('think-level').value = 'high';
+  $('think-level').dispatchEvent(new w.Event('change'));
+  await sleep(150);
+  out.think.cmds = calls.filter((c) => c.path === '/api/command' && /^\/think /.test(c.body.line)).map((c) => c.body.line);
+  out.think.valueAfter = $('think-level').value; out.think.menuAfter = $('menu-think-val').textContent;
+  status.gemini_thinking = 'minimal';
+  await pickModel('Auto');
+  out.think.hintAutoHigh = hint();
   $('model-sheet').hidden = true;
 
   $('input').value = '/lo';
