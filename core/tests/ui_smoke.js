@@ -31,7 +31,7 @@ function sse(events) {
 
 let evCtl = null;
 const pushEvent = (event, data) => evCtl && evCtl.enqueue(new TextEncoder().encode('event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n'));
-const AGENT = { mode: 'ask', high_tools: false, modes: { off: 'no tools', ask: 'asks first', yolo: 'auto' }, pending: [],
+const AGENT = { mode: 'ask', control: 'off', high_tools: false, modes: { off: 'no tools', ask: 'asks first', yolo: 'auto' }, pending: [],
   rev: 7,
   tools: [{ name: 'miles_to_km', description: 'Convert miles to km.', how_it_works: 'Multiplies by 1.609.', level: 'normal', uses: 2, created: 1,
     params: { miles: { type: 'number', description: 'distance in miles' } } }],
@@ -311,6 +311,11 @@ async function fakeFetch(url, opts) {
   await say('reset test', 500);
   out.reset = { text: [...d.querySelectorAll('.turn.faze')].slice(-1)[0].querySelector('.body').textContent };
 
+  // a Tasker/faze link: pairing token and the voice flag together
+  w.location.hash = '#t=newtoken&voice';
+  await sleep(300);
+  out.voiceLink = { voiceMode: d.body.classList.contains('voice'), hashCleared: w.location.hash === '', pairedToken: w.localStorage.getItem('faze_token') };
+
   // font choices
   d.querySelector('#font-seg [data-v="serif"]').click();
   out.font = { serif: d.documentElement.dataset.font, stored: w.localStorage.getItem('opt_font'), platform: d.documentElement.dataset.platform, fileRowHidden: $('row-fontfile').hidden };
@@ -371,9 +376,18 @@ async function fakeFetch(url, opts) {
   await sleep(60);
   const lines = calls.filter((c) => c.path === '/api/command').map((c) => c.body.line);
   out.agent.commands = ['/tasks clear', '/tools clear', '/tools remove miles_to_km', '/tasks remove ab12'].map((l) => lines.includes(l));
+  d.querySelector('#control-seg [data-v="ask"]').click();
+  await sleep(60);
+  out.agent.controlSaved = calls.some((c) => c.path === '/api/settings' && c.body && c.body.key === 'device.control' && c.body.value === 'ask');
+  out.agent.controlOn = [...$('control-seg').children].filter((b) => b.classList.contains('on')).map((b) => b.dataset.v);
+  pushEvent('approval', { id: 'c1', kind: 'control', name: 'Control your phone', description: 'Faze wants to look at your screen.', how_it_works: 'uiautomator.', level: 'high', reasons: ['uses root'], params: {}, code: '', replaces: false });
+  await sleep(60);
+  out.control = { title: $('ap-title').textContent, codeHidden: $('ap-code').closest('details').hidden };
+  $('ap-allow').click();
+  await sleep(40);
   pushEvent('approval', INFO);
   await sleep(80);
-  out.approval = { open: !$('approval-sheet').hidden, name: $('ap-name').textContent, level: $('ap-level').textContent, warn: $('ap-level').classList.contains('warn-pill'),
+  out.approval = { codeShown: !$('ap-code').closest('details').hidden, title: $('ap-title').textContent, open: !$('approval-sheet').hidden, name: $('ap-name').textContent, level: $('ap-level').textContent, warn: $('ap-level').classList.contains('warn-pill'),
     desc: $('ap-desc').textContent, how: $('ap-how').textContent, reasons: $('ap-reasons').textContent, code: $('ap-code').textContent.includes('def run') };
   $('ap-allow').click();
   await sleep(60);

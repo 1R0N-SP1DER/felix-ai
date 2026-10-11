@@ -32,11 +32,13 @@ from pathlib import Path
 
 import action_log
 import agent
+import device
 import stt
 import tts
 import wake
 from icons import make_icon
 from tool_replies import summarize_error
+from gemini_tools import DEVICE_TOOLS
 from tool_schema import TOOL_REGISTRY
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -212,7 +214,7 @@ class FazeServer(ThreadingHTTPServer):
         return {f"localhost:{self.port}", f"127.0.0.1:{self.port}", f"[::1]:{self.port}"}
 
 
-UI_BLOCKED_TOOLS = frozenset({"delegate_to_gemini", "enable_thinking_mode", "create_tool"})
+UI_BLOCKED_TOOLS = frozenset({"delegate_to_gemini", "enable_thinking_mode", "create_tool"}) | DEVICE_TOOLS
 
 
 def coerce_params(name: str, raw: dict) -> dict:
@@ -353,7 +355,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"name": name, "code": code})
             if path == "/api/agent":
                 cfg = self.server.convo.config["agent"]
-                return self._json(200, {"mode": cfg["mode"], "high_tools": cfg["high_tools"],
+                return self._json(200, {"mode": cfg["mode"], "high_tools": cfg["high_tools"], "control": device.SETTINGS["control"],
                                         "modes": {m: agent.MODE_HELP[m] for m in agent.MODES},
                                         "pending": self.server.pending_approvals(), **agent.STORE.snapshot()})
             if path == "/api/log":

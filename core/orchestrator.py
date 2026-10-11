@@ -39,6 +39,8 @@ from memory_store import init_db, log_message
 from memory_recall import setup_fts
 from identity import fix_identity
 import agent
+import device
+from gemini_tools import DEVICE_TOOLS
 from prompt_assembler import build_static_system_message, build_turn_context, set_names
 from tool_schema import validate_tool_call, ToolCallValidationError
 from permission_policy import get_permission_tier, UnknownToolError
@@ -57,6 +59,7 @@ LOCAL_TOOLS_SCHEMA = build_local_tools_schema()
 
 DEVICE = "phone"
 MAX_TOOL_CALLS_PER_TURN = 5
+MAX_PARALLEL_CALLS = 4  # tool calls Gemini may make in one round
 MAX_HISTORY_MESSAGES = 20
 FORCEABLE_MODELS = ("qwen", "gemini", "lfm")
 
@@ -104,6 +107,11 @@ COMMANDS = [
     {"name": "tasks", "description": "List or remove saved tasks",
      "usage": "/tasks [list|remove <id>|clear]",
      "args": [{"value": "list", "description": "Show saved tasks"}, {"value": "clear", "description": "Delete all saved tasks"}]},
+    {"name": "control", "description": "Let Gemini see and operate the phone",
+     "usage": "/control [off|ask|on]",
+     "args": [{"value": "ask", "description": "Ask once per request, then Gemini can look, tap and type"},
+              {"value": "on", "description": "No questions asked (still needs /elevated on)"},
+              {"value": "off", "description": "Gemini cannot touch the screen"}]},
     {"name": "doctor", "description": "Test Gemini, search, tools, actions, voice and the mic",
      "usage": "/doctor", "args": []},
     {"name": "log", "description": "Show recent tool and routing activity", "usage": "/log [count]", "args": []},
@@ -128,6 +136,7 @@ TOOLS (call ONLY if the user is asking for one of these things right now):
 - enable_thinking_mode() : reason step by step instead of answering fast
 - open_url(url) : open a web link on the device
 - open_app(app) : launch an app by name
+- list_apps(search) : list installed apps whose name contains the text (use when open_app cannot find one)
 - youtube_play(query) : find and play a YouTube video, e.g. "mrwhosetheboss latest video"
 
 RULES:
@@ -214,13 +223,14 @@ class Conversation:
         self._agent_notes = []
         self._agent_steps = []
         self._agent_created = []
+        self._control_ok = False      # the user has allowed phone control for the current request
         agent.init(config)
         tool_executor.configure(config)
         if config.get("gemini_enabled", True) is False:
             os.environ["FAZE_GEMINI_DISABLED"] = "1"
         names = config["assistant"]
         set_names(names["name"], names["user_name"])
-        gemini_client.configure(chat=config["gemini"]["model"], search=config["gemini"]["search_model"])
+        gemini_client.configure(chat=config["gemini"]["model"], search=config["gemini"]["search_model"], thinking=config["gemini"]["thinking"])
         self._gemini_down_until = 0.0
         self.system_static = build_static_system_message()
         self.messages = [{"role": "system",
@@ -510,6 +520,11 @@ class Conversation:
         """Validate, permission-check and run one tool. Returns
         (ok, text): the raw result on success, a short real error on
         failure. Always logged."""
+        if name in DEVICE_TOOLS:
+            blocked = self._control_gate(name)
+            if blocked:
+                log_action(layer, name, args, f"ERROR {blocked}", 0)
+                return False, blocked
         if name == "create_tool":
             return self._create_tool(args, layer)
         call = {"tool": name, "parameters": args}
@@ -541,6 +556,33 @@ class Conversation:
         if self._cancel.is_set():
             raise TurnCancelled()
         return approved
+
+    def _control_gate(self, name: str) -> str:
+        """Phone control needs: /control on or ask, higher-level tools allowed, the user's yes once per request
+        (in ask mode), and a step budget. Returns why not, or '' when the action may go ahead."""
+        mode = device.SETTINGS["control"]
+        if mode == "off":
+            return "Phone control is off. Ask the user to run /control ask (or /control on)."
+        if not agent.POLICY["high_tools"]:
+            return "Phone control needs higher-level tools. Ask the user to run /elevated on."
+        if not self._control_ok:
+            if mode == "ask":
+                info = {"kind": "control", "name": "Control your phone", "level": "high", "replaces": False, "params": {}, "code": "",
+                        "description": "Faze wants to look at your screen and tap, swipe, type and press keys for this request.",
+                        "how_it_works": f"It reads the screen with uiautomator and screenshots, and sends taps and keys with root input commands. "
+                                        f"Touches show on screen as circles. It stops after {device.SETTINGS['max_steps']} actions or when you press Stop.",
+                        "reasons": ["uses root to read and control the screen"]}
+                if not self._approve(info):
+                    return "The user declined phone control for this request. Do not try again; tell them what you could not do."
+            self._control_ok = True
+        if name != "wait":
+            try:
+                device.count_step()
+            except device.DeviceError as e:
+                return str(e)
+        if name in ("tap", "tap_text", "swipe", "type_text", "press_key"):
+            device.cursor(True)
+        return ""
 
     def _create_tool(self, args: dict, layer: str):
         """Gemini's create_tool: check it, get approval per the agent mode, save and register it."""
@@ -625,20 +667,22 @@ class Conversation:
         fails before any text arrived, the plain endpoint gets a turn."""
         if not self.on_token or not self.config.get("gemini", {}).get("stream", True):
             return ask_gemini(system_message, history, tools_schema=schema)
-        parts = []
+        parts, calls = [], []
         try:
             for chunk in ask_gemini_stream(system_message, history, tools_schema=schema):
                 if chunk["type"] == "text_chunk":
                     parts.append(chunk["content"])
                     self.on_token("answer", chunk["content"])
                 else:
-                    if parts:
-                        self.on_token("reset", "")
-                    return chunk
+                    calls.append(chunk)
         except GeminiError:
-            if parts:
+            if parts or calls:
                 raise
             return ask_gemini(system_message, history, tools_schema=schema)
+        if calls:
+            if parts:
+                self.on_token("reset", "")
+            return {**calls[0], "calls": calls} if len(calls) > 1 else calls[0]
         return {"type": "text", "content": "".join(parts)}
 
     def _call_gemini_with_tools(self, max_rounds: int = 2) -> str:
@@ -664,30 +708,32 @@ class Conversation:
                            int((time.time() - start) * 1000))
                 return result["content"]
 
-            name, args = result["name"], result["args"]
-            key = (name, json.dumps(args, sort_keys=True, default=str))
-            if name not in allowed:
-                tool_text = f"Tool '{name}' is not available. Available: {', '.join(sorted(allowed))}."
-                log_action("gemini", name, args, "ERROR not offered to Gemini", 0)
-            elif key in seen:
-                tool_text = "You already made this exact call. Do not repeat it; answer now with what you have."
-                log_action("gemini", name, args, "duplicate call skipped", 0)
-            else:
-                seen.add(key)
-                ok, res = self._execute_tool(name, args, "gemini")
-                if name != "create_tool":
-                    self._agent_steps.append({"tool": name, "args": args, "ok": ok, "result": str(res)[:120]})
-                if name == "create_tool":
-                    schema = agent.gemini_schema(self.config)
-                    allowed = {t["function"]["name"] for t in schema}
-                    tool_text = res if ok else f"create_tool failed: {res}. Fix the problem and try once more, or answer without it."
+            # Gemini may ask for several independent tools at once; run them all this round.
+            for call in (result.get("calls") or [result])[:MAX_PARALLEL_CALLS]:
+                name, args = call["name"], call["args"]
+                key = (name, json.dumps(args, sort_keys=True, default=str))
+                if name not in allowed:
+                    tool_text = f"Tool '{name}' is not available. Available: {', '.join(sorted(allowed))}."
+                    log_action("gemini", name, args, "ERROR not offered to Gemini", 0)
+                elif key in seen:
+                    tool_text = "You already made this exact call. Do not repeat it; answer now with what you have."
+                    log_action("gemini", name, args, "duplicate call skipped", 0)
                 else:
-                    tool_text = res if ok else (
-                        f"{name} failed: {res}. Do not retry; answer from your own "
-                        f"knowledge or say you could not check.")
+                    seen.add(key)
+                    ok, res = self._execute_tool(name, args, "gemini")
+                    if name != "create_tool":
+                        self._agent_steps.append({"tool": name, "args": args, "ok": ok, "result": str(res)[:120]})
+                    if name == "create_tool":
+                        schema = agent.gemini_schema(self.config)
+                        allowed = {t["function"]["name"] for t in schema}
+                        tool_text = res if ok else f"create_tool failed: {res}. Fix the problem and try once more, or answer without it."
+                    else:
+                        tool_text = res if ok else (
+                            f"{name} failed: {res}. Do not retry; answer from your own "
+                            f"knowledge or say you could not check.")
 
-            history.append({"role": "assistant", "content": f"[called {name}]"})
-            history.append({"role": "user", "content": f"[tool result from {name}] {tool_text}"})
+                history.append({"role": "assistant", "content": f"[called {name}]"})
+                history.append({"role": "user", "content": f"[tool result from {name}] {tool_text}"})
 
         raise GeminiError("Gemini returned no final answer")
 
@@ -788,6 +834,8 @@ class Conversation:
             return self._model_command(args)
         if cmd == "/log":
             return self._log_text(args)
+        if cmd == "/control":
+            return self._control_command(args)
         if cmd == "/doctor":
             import doctor
             return doctor.format_report(doctor.run_checks(self.config))
@@ -819,6 +867,17 @@ class Conversation:
             return "Usage: /agent off|ask|yolo"
         self.change_setting("agent.mode", args[0].lower())
         return self._agent_text()
+
+    def _control_command(self, args: list) -> str:
+        helps = {"off": "Gemini cannot see or touch the screen", "ask": "Gemini asks once per request, then can look, tap and type",
+                 "on": "Gemini can look, tap and type without asking"}
+        if args:
+            if args[0].lower() not in device.CONTROL_MODES:
+                return "Usage: /control off|ask|on"
+            self.change_setting("device.control", args[0].lower())
+        mode = self.config["device"]["control"]
+        need = "" if self.config["agent"]["high_tools"] or mode == "off" else "\nIt also needs higher-level tools: run /elevated on"
+        return f"Phone control: {mode} ({helps[mode]}){need}"
 
     def _elevated_command(self, args: list) -> str:
         if args:
@@ -1017,9 +1076,10 @@ class Conversation:
             set_names(name, user)
             self.config["assistant_name"] = name
             self._rebuild_system()
-        if key in ("gemini.model", "gemini.search_model"):
-            gemini_client.configure(chat=self.config["gemini"]["model"], search=self.config["gemini"]["search_model"])
-        if key.startswith(("search.", "actions.")):
+        if key in ("gemini.model", "gemini.search_model", "gemini.thinking"):
+            gemini_client.configure(chat=self.config["gemini"]["model"], search=self.config["gemini"]["search_model"],
+                                    thinking=self.config["gemini"]["thinking"])
+        if key.startswith(("search.", "actions.", "device.")):
             tool_executor.configure(self.config)
         if key == "agent.high_tools":
             agent.set_policy(high_tools=bool(value))
@@ -1042,6 +1102,7 @@ class Conversation:
     # ------------------------------------------------------------------
 
     def _finish(self, reply: str) -> str:
+        device.cursor(False)
         reply = (reply or "").strip() or "[no reply produced]"
         self.messages.append({"role": "assistant", "content": reply})
         log_message(DEVICE, "assistant", reply)
@@ -1049,6 +1110,7 @@ class Conversation:
 
     def _fail(self, message: str) -> str:
         """A turn with no real answer: keep the error out of history."""
+        device.cursor(False)
         if self.messages and self.messages[-1]["role"] == "user":
             self.messages.pop()
         self.last_reply_streamed = False
@@ -1152,6 +1214,8 @@ class Conversation:
         self.messages.append({"role": "user", "content": user_message})
         log_message(DEVICE, "user", user_message)
         self._agent_steps, self._agent_created = [], []
+        self._control_ok = False
+        device.begin_turn()
 
         try:
             self._turn_context = build_turn_context(user_message)

@@ -157,6 +157,8 @@ def configure(config: dict) -> None:
     engine = (config.get("search") or {}).get("engine", "auto")
     SEARCH["engine"] = engine if engine in ("auto", "gemini", "web") else "auto"
     actions.configure(config)
+    import device
+    device.configure(config)
 
 
 def _run_action(fn, *args):
@@ -175,6 +177,64 @@ def open_url(parameters: dict) -> str:
 def open_app(parameters: dict) -> str:
     import actions
     return _run_action(actions.open_app, parameters.get("app"))
+
+
+def list_apps(parameters: dict) -> str:
+    import actions
+    return _run_action(actions.list_apps, parameters.get("search"))
+
+
+def _device(fn, *args):
+    import device
+    try:
+        return fn(*args)
+    except device.DeviceError as e:
+        raise ToolExecutionError(str(e))
+
+
+def screen_read(parameters: dict) -> str:
+    import device
+    return _device(device.screen_read)
+
+
+def screen_look(parameters: dict) -> str:
+    import device
+    return _device(device.screen_look, parameters.get("question"))
+
+
+def tap(parameters: dict) -> str:
+    import device
+    return _device(device.tap, parameters.get("x"), parameters.get("y"))
+
+
+def tap_text(parameters: dict) -> str:
+    import device
+    return _device(device.tap_text, parameters.get("label"))
+
+
+def swipe(parameters: dict) -> str:
+    import device
+    return _device(device.swipe, *(parameters.get(k) for k in ("x1", "y1", "x2", "y2")))
+
+
+def type_text(parameters: dict) -> str:
+    import device
+    return _device(device.type_text, parameters.get("content"))
+
+
+def press_key(parameters: dict) -> str:
+    import device
+    return _device(device.press_key, parameters.get("key"))
+
+
+def listen(parameters: dict) -> str:
+    import device
+    return _device(device.listen, parameters.get("seconds"))
+
+
+def wait(parameters: dict) -> str:
+    import device
+    return _device(device.wait, parameters.get("seconds"))
 
 
 def youtube_play(parameters: dict) -> str:
@@ -245,6 +305,9 @@ TOOL_EXECUTORS = {
     "enable_thinking_mode": enable_thinking_mode,
     "open_url": open_url,
     "open_app": open_app,
+    "list_apps": list_apps,
+    "screen_read": screen_read, "screen_look": screen_look, "tap": tap, "tap_text": tap_text, "swipe": swipe,
+    "type_text": type_text, "press_key": press_key, "listen": listen, "wait": wait,
     "youtube_play": youtube_play,
 }
 

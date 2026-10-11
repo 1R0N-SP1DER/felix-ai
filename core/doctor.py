@@ -90,6 +90,24 @@ def run_checks(config: dict) -> list:
         return (OK, "am runs") if "usage" in text.lower() or proc.returncode == 0 else (WARN, f"am said: {first}")
     add("Android system commands", system_commands)
 
+    def apps():
+        if not actions._is_android():
+            return SKIP, "not on Android"
+        packages, launchers = actions.installed_apps(force=True)
+        return OK, f"{len(packages)} packages, {len(launchers)} launchable" + ("" if launchers else " (cannot tell which are launchable)")
+    add("Installed apps", apps)
+
+    def control():
+        import device
+        if not actions._is_android():
+            return SKIP, "not on Android"
+        if device.SETTINGS["control"] == "off":
+            return SKIP, "phone control is off (/control ask to turn it on)"
+        w, h = device.screen_size()
+        nodes = device.read_nodes()
+        return OK, f"screen {w}x{h}, {len(nodes)} readable elements"
+    add("Phone control", control)
+
     def yt():
         found = actions.youtube_find("mrwhosetheboss", latest=True)
         return (OK, f"found {found[1][:50] or found[0]}") if found else (FAIL, "no video found (YouTube changed its page?)")

@@ -117,36 +117,148 @@ def open_url(url: str) -> str:
     return f"Opened {parts.netloc}"
 
 
-def _find_package(name: str) -> str:
-    key = re.sub(r"\s+(app|application)$", "", name.strip().lower())
-    if key in APP_PACKAGES:
-        return APP_PACKAGES[key]
-    if re.fullmatch(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+", key):
-        return key
+# ---------------------------------------------------------------- installed apps
+
+_APPS = {"at": 0.0, "packages": None, "launchers": None}
+APP_CACHE_SECONDS = 60.0
+
+
+def _sys(cmd: list, root: bool = False, timeout: float = 20.0) -> str:
+    import tool_helpers
     try:
-        listing = _run(["pm", "list", "packages"], 10).stdout
+        return tool_helpers.run(cmd, root=root, timeout=timeout)
+    except RuntimeError as e:
+        raise ActionError(str(e))
+
+
+def _root_modes() -> list:
+    """Root first when allowed (without it Android hides most installed apps from Termux), then plain."""
+    modes = []
+    if SETTINGS["root"] in ("auto", "always") and shutil.which("su"):
+        modes.append(True)
+    if SETTINGS["root"] != "always":
+        modes.append(False)
+    return modes
+
+
+def installed_apps(force: bool = False) -> tuple:
+    """(all packages, {launchable package: component}). Cached for a minute."""
+    import time
+    if not force and _APPS["packages"] is not None and time.monotonic() - _APPS["at"] < APP_CACHE_SECONDS:
+        return _APPS["packages"], _APPS["launchers"]
+    last = "no packages found"
+    for root in _root_modes():
+        try:
+            out = _sys(["pm", "list", "packages"], root)
+        except ActionError as e:
+            last = str(e)
+            continue
+        packages = sorted({l.split(":", 1)[1].strip() for l in out.splitlines() if l.startswith("package:")})
+        if not packages:
+            continue
+        launchers = {}
+        try:
+            listing = _sys(["cmd", "package", "query-activities", "--brief", "-a", "android.intent.action.MAIN",
+                            "-c", "android.intent.category.LAUNCHER"], root)
+            for m in re.finditer(r"^\s*([A-Za-z0-9_.]+)/([A-Za-z0-9_.$]+)\s*$", listing, re.MULTILINE):
+                launchers.setdefault(m.group(1), m.group(2))
+        except ActionError:
+            pass
+        _APPS.update(at=time.monotonic(), packages=packages, launchers=launchers)
+        return packages, launchers
+    raise ActionError(f"could not list the installed apps ({last})")
+
+
+def _score(key: str, package: str) -> int:
+    squashed = re.sub(r"[^a-z0-9]", "", package.lower())
+    segments = [re.sub(r"[^a-z0-9]", "", seg) for seg in package.lower().split(".")]
+    if key in segments:
+        return 3
+    if any(seg.startswith(key) or key in seg for seg in segments):
+        return 2
+    return 1 if key in squashed else 0
+
+
+def find_app(name: str) -> tuple:
+    """(package, component or None, notes). Known names first, but only if that app is really installed:
+    a modded YouTube has a different package, so it is found by name instead."""
+    key = re.sub(r"[^a-z0-9]", "", re.sub(r"\s+(app|application)$", "", name.strip().lower()))
+    if re.fullmatch(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+", name.strip().lower()):
+        return name.strip().lower(), None, ""
+    try:
+        packages, launchers = installed_apps()
     except ActionError:
-        return ""
-    squashed = re.sub(r"[^a-z0-9]", "", key)
-    hits = [p.split(":", 1)[1] for p in listing.split() if p.startswith("package:") and squashed and squashed in p.lower()]
-    return sorted(hits, key=len)[0] if hits else ""
+        known = APP_PACKAGES.get(re.sub(r"\s+(app|application)$", "", name.strip().lower()))
+        if known:
+            return known, None, ""  # cannot check, so trust the built-in name
+        raise
+    known = APP_PACKAGES.get(re.sub(r"\s+(app|application)$", "", name.strip().lower()))
+    if known and known in packages:
+        return known, launchers.get(known), ""
+    pool = [p for p in packages if p in launchers] or packages
+    scored = sorted(((_score(key, p), p in launchers, -len(p), p) for p in pool if key and _score(key, p)), reverse=True)
+    if not scored:
+        raise ActionError(f"no installed app matches '{name}' (try list_apps)")
+    best = scored[0][3]
+    others = [s[3] for s in scored[1:3]]
+    return best, launchers.get(best), (f"; also matched {', '.join(others)}" if others else "")
+
+
+def list_apps(search: str = "") -> str:
+    packages, launchers = installed_apps()
+    pool = [p for p in packages if p in launchers] or packages
+    needle = re.sub(r"[^a-z0-9]", "", str(search or "").lower())
+    hits = [p for p in pool if not needle or needle in re.sub(r"[^a-z0-9]", "", p.lower())]
+    if not hits:
+        return f"No installed app matches '{str(search).strip()}'." if needle else "No apps found."
+    shown = hits[:40]
+    more = f"\n...and {len(hits) - 40} more; narrow the search" if len(hits) > 40 else ""
+    return f"{len(hits)} app{'s' if len(hits) != 1 else ''}" + (f" matching '{str(search).strip()}'" if needle else "") + ":\n" + "\n".join(shown) + more
+
+
+def _component_of(package: str):
+    """The launcher activity as pkg/Activity, asked of the package manager (root sees every package)."""
+    for root in _root_modes():
+        try:
+            out = _sys(["cmd", "package", "resolve-activity", "--brief", "-c", "android.intent.category.LAUNCHER", package], root)
+        except ActionError:
+            continue
+        for line in reversed(out.splitlines()):
+            if "/" in line and not line.startswith(("priority", "No ")):
+                return line.strip()
+    return None
 
 
 def open_app(app: str) -> str:
     app = str(app or "").strip()
     if not app or len(app) > 60:
         raise ActionError("open_app needs an app name")
-    if _is_android():
-        package = _find_package(app)
-        if not package:
-            raise ActionError(f"I don't know an app called '{app}'")
-        note = _android_start(["-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER", "-p", package])
-        return f"Opened {app}" + (f" ({note})" if note else "")
-    binary = shutil.which(app.lower().replace(" ", "-"))
-    if not binary:
-        raise ActionError(f"I can't find '{app}' on this computer")
-    subprocess.Popen([binary], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    return f"Opened {app}"
+    if not _is_android():
+        binary = shutil.which(app.lower().replace(" ", "-"))
+        if not binary:
+            raise ActionError(f"I can't find '{app}' on this computer")
+        subprocess.Popen([binary], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        return f"Opened {app}"
+    package, component, note = find_app(app)
+    tried = []
+
+    def explicit():
+        found = component or _component_of(package)
+        if not found:
+            raise ActionError("no launcher activity found")
+        return _android_start(["-n", found if "/" in found else f"{package}/{found}"])
+
+    for label, start in (
+        ("launch intent", lambda: _android_start(["-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER", "-p", package])),
+        ("component", explicit),
+        ("monkey", lambda: _sys(["monkey", "-p", package, "-c", "android.intent.category.LAUNCHER", "1"], bool(_root_modes() and _root_modes()[0]))),
+    ):
+        try:
+            start()
+            return f"Opened {app} ({package}{note})"
+        except ActionError as e:
+            tried.append(f"{label}: {str(e)[:110]}")
+    raise ActionError(f"could not open {app} ({package}). Tried " + "; ".join(tried))
 
 
 # ---------------------------------------------------------------- YouTube

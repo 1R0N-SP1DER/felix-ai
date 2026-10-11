@@ -1156,7 +1156,7 @@
 
   function handleHash() {
     const hash = location.hash.slice(1);
-    if (hash === 'voice') {
+    if (hash === 'voice' || new URLSearchParams(hash).has('voice')) {
       history.replaceState(null, '', location.pathname);
       onWake();
     }
@@ -1785,7 +1785,7 @@
 
   function showApproval(info) {
     approvalId = info.id;
-    $('ap-title').textContent = info.replaces ? 'Update a tool?' : 'Add a new tool?';
+    $('ap-title').textContent = info.kind === 'control' ? 'Let Faze control your phone?' : (info.replaces ? 'Update a tool?' : 'Add a new tool?');
     $('ap-name').textContent = info.name;
     $('ap-level').textContent = info.level === 'high' ? 'higher-level' : 'normal';
     $('ap-level').classList.toggle('warn-pill', info.level === 'high');
@@ -1795,6 +1795,7 @@
     $('ap-reasons').hidden = !why.length;
     $('ap-reasons').textContent = 'Higher-level because it ' + why.join('; ');
     $('ap-code').textContent = info.code || '';
+    $('ap-code').closest('details').hidden = !info.code;
     $('approval-sheet').hidden = false;
     $('ap-allow').focus();
   }
@@ -1852,6 +1853,7 @@
     let d;
     try { d = await (await api('/api/agent')).json(); } catch (e) { return; }
     for (const b of $('agent-mode-seg').children) b.classList.toggle('on', b.dataset.v === d.mode);
+    for (const b of $('control-seg').children) b.classList.toggle('on', b.dataset.v === d.control);
     $('agent-mode-help').textContent = d.modes[d.mode];
     $('opt-elevated').checked = d.high_tools;
     agentList($('agent-tools'), d.tools, (t) => agentItem(t.name, t.level === 'high' ? 'higher-level' : '', t.description + ' ' + t.how_it_works,
@@ -2257,6 +2259,7 @@
 
   function init() {
     const hash = new URLSearchParams(location.hash.slice(1));
+    const wantVoice = hash.has('voice');
     if (hash.get('t')) {
       token = hash.get('t');
       store.set('faze_token', token);
@@ -2334,6 +2337,7 @@
     $('wake-phrase').addEventListener('change', () => saveSetting('wake.phrase', $('wake-phrase').value.trim(), renderWakeRow));
     $('adv-log').addEventListener('click', openLog);
     for (const b of $('agent-mode-seg').children) b.addEventListener('click', async () => { await saveSetting('agent.mode', b.dataset.v); loadAgent(); });
+    for (const b of $('control-seg').children) b.addEventListener('click', async () => { await saveSetting('device.control', b.dataset.v); loadAgent(); });
     $('opt-elevated').addEventListener('change', async () => { await saveSetting('agent.high_tools', $('opt-elevated').checked, () => { $('opt-elevated').checked = !$('opt-elevated').checked; }); loadAgent(); });
     $('clear-tools').addEventListener('click', () => clearAgent('tools'));
     $('clear-tasks').addEventListener('click', () => clearAgent('tasks'));
@@ -2373,7 +2377,7 @@
     connectEvents();
     window.addEventListener('hashchange', handleHash);
     setInterval(syncAura, 250);
-    setTimeout(handleHash, 600);
+    setTimeout(() => { if (wantVoice) onWake(); else handleHash(); }, 600);
     pollStatus(true);
     setInterval(pollStatus, 3000);
     document.addEventListener('visibilitychange', () => pollStatus(true));

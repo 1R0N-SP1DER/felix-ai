@@ -38,6 +38,7 @@ def proc(out="", code=0, err=""):
 
 class ActionCase(unittest.TestCase):
     def setUp(self):
+        actions._APPS.update(at=0.0, packages=None, launchers=None)
         actions.SETTINGS["root"] = "auto"
         self.addCleanup(lambda: actions.SETTINGS.update(root="auto"))
 
@@ -91,16 +92,16 @@ class TestOpenUrl(ActionCase):
 class TestOpenApp(ActionCase):
     def test_known_and_fuzzy_packages(self):
         with mock.patch.object(actions, "_is_android", return_value=True), mock.patch("subprocess.run", return_value=proc("Starting")) as run:
-            self.assertEqual(actions.open_app("YouTube app"), "Opened YouTube app")
+            self.assertEqual(actions.open_app("YouTube app"), "Opened YouTube app (com.google.android.youtube)")
         self.assertEqual(run.call_args[0][0][-2:], ["-p", "com.google.android.youtube"])
         listing = proc("package:com.foo.bar\npackage:com.acme.supercalc\npackage:com.acme.supercalc.extra")
-        with mock.patch.object(actions, "_is_android", return_value=True), mock.patch("subprocess.run", side_effect=[listing, proc("Starting")]) as run:
+        with mock.patch.object(actions, "_is_android", return_value=True), mock.patch("subprocess.run", side_effect=[listing, proc(""), proc("Starting")]) as run:
             actions.open_app("super calc")
         self.assertEqual(run.call_args[0][0][-1], "com.acme.supercalc")
         with mock.patch.object(actions, "_is_android", return_value=True), mock.patch("subprocess.run", return_value=proc("package:com.foo.bar")), \
                 self.assertRaises(actions.ActionError) as cm:
             actions.open_app("nonexistent thing")
-        self.assertIn("don't know an app", str(cm.exception))
+        self.assertIn("no installed app matches", str(cm.exception))
         with self.assertRaises(actions.ActionError):
             actions.open_app("")
 

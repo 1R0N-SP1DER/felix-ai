@@ -78,6 +78,7 @@ DEFAULTS = {
     },
     "server": {"host": "127.0.0.1", "port": 8787, "open_on_start": False},
     "gemini": {"stream": True,  # show Gemini's answer as it is written
+               "thinking": "low",  # minimal | low | medium | high | default (the model decides): lower is faster
                "model": "gemini-3.1-flash-lite", "search_model": "gemini-3.1-flash-lite"},
     "fallback": {"order": "lfm,qwen"},     # used when forced Gemini can't be reached: lfm,qwen | qwen,lfm | lfm | qwen | off
     "gemini_enabled": True,
@@ -85,6 +86,7 @@ DEFAULTS = {
     "ui": {"show_model_tag": True, "show_trace": True},
     # Gemini-written tools: ask = approve each new tool, yolo = auto-approve with a description, off = none
     "agent": {"mode": "ask", "high_tools": False, "max_rounds": 6},
+    "device": {"control": "off", "max_steps": 30, "cursor": True},  # Gemini operating the phone: off | ask | on
     "search": {"engine": "auto"},   # auto: Gemini grounding, then DuckDuckGo | gemini | web
     "actions": {"root": "auto"},    # auto: retry blocked launches through su | always | never
 }
@@ -114,6 +116,10 @@ SETTINGS = {
     "boot.warmup": (bool, None),
     "boot.qwen": (str, ("lazy", "eager")),
     "gemini.stream": (bool, None),
+    "gemini.thinking": (str, ("default", "minimal", "low", "medium", "high")),
+    "device.control": (str, ("off", "ask", "on")),
+    "device.max_steps": (int, None),
+    "device.cursor": (bool, None),
     "search.engine": (str, ("auto", "gemini", "web")),
     "actions.root": (str, ("auto", "always", "never")),
     "wake.engine": (str, ("auto", "gemini", "whisper")),

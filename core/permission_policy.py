@@ -30,6 +30,9 @@ PERMISSION_REGISTRY = {
     "enable_thinking_mode": "safe",
     "open_url": "safe",
     "open_app": "safe",
+    "list_apps": "safe",
+    "screen_read": "safe", "screen_look": "safe", "tap": "safe", "tap_text": "safe", "swipe": "safe",
+    "type_text": "safe", "press_key": "safe", "listen": "safe", "wait": "safe",
     "youtube_play": "safe",
 }
 

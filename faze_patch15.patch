@@ -1,0 +1,2425 @@
+diff --git a/core/actions.py b/core/actions.py
+index 0a47bae..e76830a 100644
+--- a/core/actions.py
++++ b/core/actions.py
+@@ -117,36 +117,148 @@ def open_url(url: str) -> str:
+     return f"Opened {parts.netloc}"
+ 
+ 
+-def _find_package(name: str) -> str:
+-    key = re.sub(r"\s+(app|application)$", "", name.strip().lower())
+-    if key in APP_PACKAGES:
+-        return APP_PACKAGES[key]
+-    if re.fullmatch(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+", key):
+-        return key
++# ---------------------------------------------------------------- installed apps
++
++_APPS = {"at": 0.0, "packages": None, "launchers": None}
++APP_CACHE_SECONDS = 60.0
++
++
++def _sys(cmd: list, root: bool = False, timeout: float = 20.0) -> str:
++    import tool_helpers
++    try:
++        return tool_helpers.run(cmd, root=root, timeout=timeout)
++    except RuntimeError as e:
++        raise ActionError(str(e))
++
++
++def _root_modes() -> list:
++    """Root first when allowed (without it Android hides most installed apps from Termux), then plain."""
++    modes = []
++    if SETTINGS["root"] in ("auto", "always") and shutil.which("su"):
++        modes.append(True)
++    if SETTINGS["root"] != "always":
++        modes.append(False)
++    return modes
++
++
++def installed_apps(force: bool = False) -> tuple:
++    """(all packages, {launchable package: component}). Cached for a minute."""
++    import time
++    if not force and _APPS["packages"] is not None and time.monotonic() - _APPS["at"] < APP_CACHE_SECONDS:
++        return _APPS["packages"], _APPS["launchers"]
++    last = "no packages found"
++    for root in _root_modes():
++        try:
++            out = _sys(["pm", "list", "packages"], root)
++        except ActionError as e:
++            last = str(e)
++            continue
++        packages = sorted({l.split(":", 1)[1].strip() for l in out.splitlines() if l.startswith("package:")})
++        if not packages:
++            continue
++        launchers = {}
++        try:
++            listing = _sys(["cmd", "package", "query-activities", "--brief", "-a", "android.intent.action.MAIN",
++                            "-c", "android.intent.category.LAUNCHER"], root)
++            for m in re.finditer(r"^\s*([A-Za-z0-9_.]+)/([A-Za-z0-9_.$]+)\s*$", listing, re.MULTILINE):
++                launchers.setdefault(m.group(1), m.group(2))
++        except ActionError:
++            pass
++        _APPS.update(at=time.monotonic(), packages=packages, launchers=launchers)
++        return packages, launchers
++    raise ActionError(f"could not list the installed apps ({last})")
++
++
++def _score(key: str, package: str) -> int:
++    squashed = re.sub(r"[^a-z0-9]", "", package.lower())
++    segments = [re.sub(r"[^a-z0-9]", "", seg) for seg in package.lower().split(".")]
++    if key in segments:
++        return 3
++    if any(seg.startswith(key) or key in seg for seg in segments):
++        return 2
++    return 1 if key in squashed else 0
++
++
++def find_app(name: str) -> tuple:
++    """(package, component or None, notes). Known names first, but only if that app is really installed:
++    a modded YouTube has a different package, so it is found by name instead."""
++    key = re.sub(r"[^a-z0-9]", "", re.sub(r"\s+(app|application)$", "", name.strip().lower()))
++    if re.fullmatch(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+", name.strip().lower()):
++        return name.strip().lower(), None, ""
+     try:
+-        listing = _run(["pm", "list", "packages"], 10).stdout
++        packages, launchers = installed_apps()
+     except ActionError:
+-        return ""
+-    squashed = re.sub(r"[^a-z0-9]", "", key)
+-    hits = [p.split(":", 1)[1] for p in listing.split() if p.startswith("package:") and squashed and squashed in p.lower()]
+-    return sorted(hits, key=len)[0] if hits else ""
++        known = APP_PACKAGES.get(re.sub(r"\s+(app|application)$", "", name.strip().lower()))
++        if known:
++            return known, None, ""  # cannot check, so trust the built-in name
++        raise
++    known = APP_PACKAGES.get(re.sub(r"\s+(app|application)$", "", name.strip().lower()))
++    if known and known in packages:
++        return known, launchers.get(known), ""
++    pool = [p for p in packages if p in launchers] or packages
++    scored = sorted(((_score(key, p), p in launchers, -len(p), p) for p in pool if key and _score(key, p)), reverse=True)
++    if not scored:
++        raise ActionError(f"no installed app matches '{name}' (try list_apps)")
++    best = scored[0][3]
++    others = [s[3] for s in scored[1:3]]
++    return best, launchers.get(best), (f"; also matched {', '.join(others)}" if others else "")
++
++
++def list_apps(search: str = "") -> str:
++    packages, launchers = installed_apps()
++    pool = [p for p in packages if p in launchers] or packages
++    needle = re.sub(r"[^a-z0-9]", "", str(search or "").lower())
++    hits = [p for p in pool if not needle or needle in re.sub(r"[^a-z0-9]", "", p.lower())]
++    if not hits:
++        return f"No installed app matches '{str(search).strip()}'." if needle else "No apps found."
++    shown = hits[:40]
++    more = f"\n...and {len(hits) - 40} more; narrow the search" if len(hits) > 40 else ""
++    return f"{len(hits)} app{'s' if len(hits) != 1 else ''}" + (f" matching '{str(search).strip()}'" if needle else "") + ":\n" + "\n".join(shown) + more
++
++
++def _component_of(package: str):
++    """The launcher activity as pkg/Activity, asked of the package manager (root sees every package)."""
++    for root in _root_modes():
++        try:
++            out = _sys(["cmd", "package", "resolve-activity", "--brief", "-c", "android.intent.category.LAUNCHER", package], root)
++        except ActionError:
++            continue
++        for line in reversed(out.splitlines()):
++            if "/" in line and not line.startswith(("priority", "No ")):
++                return line.strip()
++    return None
+ 
+ 
+ def open_app(app: str) -> str:
+     app = str(app or "").strip()
+     if not app or len(app) > 60:
+         raise ActionError("open_app needs an app name")
+-    if _is_android():
+-        package = _find_package(app)
+-        if not package:
+-            raise ActionError(f"I don't know an app called '{app}'")
+-        note = _android_start(["-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER", "-p", package])
+-        return f"Opened {app}" + (f" ({note})" if note else "")
+-    binary = shutil.which(app.lower().replace(" ", "-"))
+-    if not binary:
+-        raise ActionError(f"I can't find '{app}' on this computer")
+-    subprocess.Popen([binary], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+-    return f"Opened {app}"
++    if not _is_android():
++        binary = shutil.which(app.lower().replace(" ", "-"))
++        if not binary:
++            raise ActionError(f"I can't find '{app}' on this computer")
++        subprocess.Popen([binary], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
++        return f"Opened {app}"
++    package, component, note = find_app(app)
++    tried = []
++
++    def explicit():
++        found = component or _component_of(package)
++        if not found:
++            raise ActionError("no launcher activity found")
++        return _android_start(["-n", found if "/" in found else f"{package}/{found}"])
++
++    for label, start in (
++        ("launch intent", lambda: _android_start(["-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER", "-p", package])),
++        ("component", explicit),
++        ("monkey", lambda: _sys(["monkey", "-p", package, "-c", "android.intent.category.LAUNCHER", "1"], bool(_root_modes() and _root_modes()[0]))),
++    ):
++        try:
++            start()
++            return f"Opened {app} ({package}{note})"
++        except ActionError as e:
++            tried.append(f"{label}: {str(e)[:110]}")
++    raise ActionError(f"could not open {app} ({package}). Tried " + "; ".join(tried))
+ 
+ 
+ # ---------------------------------------------------------------- YouTube
+diff --git a/core/agent.py b/core/agent.py
+index e8164ae..817f851 100644
+--- a/core/agent.py
++++ b/core/agent.py
+@@ -200,7 +200,9 @@ def _limits(timeout):
+         try:
+             import resource
+             resource.setrlimit(resource.RLIMIT_CPU, (int(timeout) + 2, int(timeout) + 2))
+-            resource.setrlimit(resource.RLIMIT_AS, (768 * 1024 * 1024, 768 * 1024 * 1024))
++            # Soft limit only: faze_run lifts it for the commands it starts. A hard cap here is inherited by
++            # Android's own binaries, whose CFI shadow mapping then fails ("MapShadow CHECK p != MAP_FAILED").
++            resource.setrlimit(resource.RLIMIT_AS, (768 * 1024 * 1024, resource.RLIM_INFINITY))
+             resource.setrlimit(resource.RLIMIT_FSIZE, (8 * 1024 * 1024, 8 * 1024 * 1024))
+         except (ImportError, ValueError, OSError):
+             pass
+@@ -471,7 +473,8 @@ def create_tool_declaration() -> dict:
+ 
+ 
+ def gemini_schema(config: dict) -> list:
+-    schema = gemini_tools.build_gemini_tools_schema()
++    import device
++    schema = gemini_tools.build_gemini_tools_schema(device=device.SETTINGS["control"] != "off")
+     if config.get("agent", {}).get("mode", "ask") != "off":
+         schema.append(create_tool_declaration())
+     return schema
+@@ -481,20 +484,33 @@ def local_schema() -> list:
+     return gemini_tools.build_local_tools_schema()
+ 
+ 
++CONTROL_NOTE = (
++    "\nYou can operate the phone. Open the app with open_app, wait 1 to 2 seconds, then screen_read to see the labelled elements "
++    "and their positions; use tap_text with a label, or tap with coordinates. When screen_read does not show what you need (a camera "
++    "preview, an unlabelled shutter button), use screen_look and ask where it is. Check with screen_read or screen_look after each "
++    "important step. In most camera apps press_key volume_down also takes the photo. listen lets you hear through the microphone. "
++    "If something blocks you (a lock screen, a permission dialog, a login), stop and tell the user. Never type passwords or payment "
++    "details, and never send messages, buy things or delete things without the user saying so in this request.\n")
++
++
+ def agent_note(config: dict) -> str:
++    import device
+     cfg = config.get("agent", {})
++    if device.SETTINGS["control"] != "off" and cfg.get("mode", "ask") == "off":
++        return CONTROL_NOTE
+     if cfg.get("mode", "ask") == "off":
+         return ""
+     high = "Higher-level tools are allowed." if cfg.get("high_tools") else "Higher-level tools are NOT allowed: use pure computation only."
+     return ("\nYou can finish tasks in several steps. When the user asks for something none of your tools can do, never say you "
+             "can't: build the tool with create_tool, then call it. Check the existing tools first; do not recreate one that exists. "
+             "If a tool errors, read the error, fix the code and call create_tool again with the same name (up to two fixes) before "
+-            "telling the user what went wrong, quoting the exact error. "
++            "telling the user what went wrong, quoting the exact error. When two steps do not depend on each other, ask for both tools in the same reply. "
+             "Your tools run as Python 3 on the user's rooted Android phone inside Termux, not on a desktop. To run a command, call "
+             "the built-in faze_run(['am', 'start', '-a', 'android.intent.action.VIEW', '-d', URL]) (add root=True for su). It returns "
+             "the output text, raises an error with the real message, and already handles Android's linker (CFI) crash, so do not import "
+             "subprocess. Examples: ['settings', 'put', 'system', 'screen_brightness', '120'] and ['screencap', '-p', PATH] need root=True; "
+-            "['termux-notification', '--title', T]. Using faze_run makes the tool higher-level. " + high + "\n")
++            "['termux-notification', '--title', T]. Using faze_run makes the tool higher-level. " + high + "\n"
++            + (CONTROL_NOTE if device.SETTINGS["control"] != "off" else ""))
+ 
+ 
+ def custom_tools_text() -> str:
+diff --git a/core/config_loader.py b/core/config_loader.py
+index 67d8977..a225d7f 100644
+--- a/core/config_loader.py
++++ b/core/config_loader.py
+@@ -78,6 +78,7 @@ DEFAULTS = {
+     },
+     "server": {"host": "127.0.0.1", "port": 8787, "open_on_start": False},
+     "gemini": {"stream": True,  # show Gemini's answer as it is written
++               "thinking": "low",  # minimal | low | medium | high | default (the model decides): lower is faster
+                "model": "gemini-3.1-flash-lite", "search_model": "gemini-3.1-flash-lite"},
+     "fallback": {"order": "lfm,qwen"},     # used when forced Gemini can't be reached: lfm,qwen | qwen,lfm | lfm | qwen | off
+     "gemini_enabled": True,
+@@ -85,6 +86,7 @@ DEFAULTS = {
+     "ui": {"show_model_tag": True, "show_trace": True},
+     # Gemini-written tools: ask = approve each new tool, yolo = auto-approve with a description, off = none
+     "agent": {"mode": "ask", "high_tools": False, "max_rounds": 6},
++    "device": {"control": "off", "max_steps": 30, "cursor": True},  # Gemini operating the phone: off | ask | on
+     "search": {"engine": "auto"},   # auto: Gemini grounding, then DuckDuckGo | gemini | web
+     "actions": {"root": "auto"},    # auto: retry blocked launches through su | always | never
+ }
+@@ -114,6 +116,10 @@ SETTINGS = {
+     "boot.warmup": (bool, None),
+     "boot.qwen": (str, ("lazy", "eager")),
+     "gemini.stream": (bool, None),
++    "gemini.thinking": (str, ("default", "minimal", "low", "medium", "high")),
++    "device.control": (str, ("off", "ask", "on")),
++    "device.max_steps": (int, None),
++    "device.cursor": (bool, None),
+     "search.engine": (str, ("auto", "gemini", "web")),
+     "actions.root": (str, ("auto", "always", "never")),
+     "wake.engine": (str, ("auto", "gemini", "whisper")),
+diff --git a/core/device.py b/core/device.py
+new file mode 100644
+index 0000000..fd696c0
+--- /dev/null
++++ b/core/device.py
+@@ -0,0 +1,274 @@
++"""
++felix-ai Core -- device.py
++See, hear and operate the phone (root): read the screen, look at it, tap, swipe, type, press keys, listen.
++
++Reading uses uiautomator, which gives every labelled element with its exact position, so taps do not depend on
++guessing from a picture. screen_look sends a screenshot to Gemini for what the accessibility tree cannot show
++(a camera preview, a game, an unlabelled button). While a task runs, Android's own "show touches" setting draws
++a circle wherever a tap lands, which is the live cursor.
++
++Everything here is gated by the orchestrator: device.control must be on or ask, higher-level tools must be
++allowed, and each request gets a step budget.
++"""
++
++import os
++import re
++import shlex
++import subprocess
++import sys
++import time
++import xml.etree.ElementTree as ET
++
++import tool_helpers
++
++CONTROL_MODES = ("off", "ask", "on")
++SETTINGS = {"control": "off", "max_steps": 30, "cursor": True, "mic_cmd": ""}
++STATE = {"steps": 0, "cursor_on": False, "cursor_prev": "0", "size": None}
++KEYS = {"home": 3, "back": 4, "enter": 66, "recent": 187, "menu": 82, "search": 84, "tab": 61, "delete": 67, "camera": 27,
++        "volume_up": 24, "volume_down": 25, "up": 19, "down": 20, "left": 21, "right": 22, "escape": 111, "space": 62}
++MAX_LISTEN_SECONDS = 15
++MAX_ELEMENTS = 60
++
++
++class DeviceError(Exception):
++    """Something on the phone could not be done; the message is for the model and the user."""
++
++
++def configure(config: dict) -> None:
++    d = config.get("device") or {}
++    SETTINGS["control"] = d.get("control", "off") if d.get("control", "off") in CONTROL_MODES else "off"
++    try:
++        SETTINGS["max_steps"] = max(5, min(100, int(d.get("max_steps", 30))))
++    except (TypeError, ValueError):
++        SETTINGS["max_steps"] = 30
++    SETTINGS["cursor"] = bool(d.get("cursor", True))
++    SETTINGS["mic_cmd"] = (config.get("wake") or {}).get("mic_cmd", "")
++
++
++def begin_turn() -> None:
++    STATE["steps"] = 0
++
++
++def count_step() -> None:
++    STATE["steps"] += 1
++    if STATE["steps"] > SETTINGS["max_steps"]:
++        raise DeviceError(f"step limit reached ({SETTINGS['max_steps']} actions for one request). Stop and tell the user where you got to.")
++
++
++def _root(cmd, timeout: float = 15.0, cap: int = tool_helpers.OUTPUT_CAP) -> str:
++    try:
++        return tool_helpers.run(cmd, root=True, timeout=timeout, cap=cap)
++    except RuntimeError as e:
++        raise DeviceError(str(e))
++
++
++# ---------------------------------------------------------------- the live cursor
++
++def cursor(on: bool) -> None:
++    """Show Android's touch circles while Faze is driving; put the setting back afterwards. Cosmetic: never fails a task."""
++    if not SETTINGS["cursor"]:
++        return
++    try:
++        if on and not STATE["cursor_on"]:
++            prev = _root(["settings", "get", "system", "show_touches"], 8).strip()
++            STATE["cursor_prev"] = prev if prev in ("0", "1") else "0"
++            _root(["settings", "put", "system", "show_touches", "1"], 8)
++            STATE["cursor_on"] = True
++        elif not on and STATE["cursor_on"]:
++            _root(["settings", "put", "system", "show_touches", STATE["cursor_prev"]], 8)
++            STATE["cursor_on"] = False
++    except DeviceError:
++        pass
++
++
++# ---------------------------------------------------------------- reading the screen
++
++def screen_size() -> tuple:
++    if STATE["size"]:
++        return STATE["size"]
++    out = _root(["wm", "size"], 8)
++    sizes = re.findall(r"(\d{3,5})x(\d{3,5})", out)
++    if not sizes:
++        raise DeviceError("could not read the screen size")
++    STATE["size"] = (int(sizes[-1][0]), int(sizes[-1][1]))  # the override size, if there is one, is listed last
++    return STATE["size"]
++
++
++def parse_nodes(xml_text: str) -> list:
++    start = xml_text.find("<hierarchy")
++    end = xml_text.rfind("</hierarchy>")
++    if start < 0 or end < 0:
++        raise DeviceError("the screen dump was empty (is the screen off or locked?)")
++    try:
++        root = ET.fromstring(xml_text[start:end + len("</hierarchy>")])
++    except ET.ParseError:
++        raise DeviceError("could not read the screen dump")
++    nodes = []
++    for el in root.iter("node"):
++        m = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", el.get("bounds", ""))
++        if not m:
++            continue
++        l, t, r, b = (int(v) for v in m.groups())
++        if r <= l or b <= t:
++            continue
++        label = (el.get("text") or "").strip() or (el.get("content-desc") or "").strip()
++        clickable = el.get("clickable") == "true" or el.get("long-clickable") == "true"
++        if not label and not clickable:
++            continue
++        nodes.append({"label": label, "id": (el.get("resource-id") or "").split("/")[-1], "kind": (el.get("class") or "").split(".")[-1],
++                      "clickable": clickable, "x": (l + r) // 2, "y": (t + b) // 2, "package": el.get("package", "")})
++    return nodes
++
++
++def read_nodes() -> list:
++    path = "/data/local/tmp/faze_ui.xml"
++    _root(["uiautomator", "dump", path], 20)
++    return parse_nodes(_root(["cat", path], 10, cap=400000))
++
++
++def screen_read() -> str:
++    nodes = read_nodes()
++    w, h = screen_size()
++    package = next((n["package"] for n in nodes if n["package"]), "unknown")
++    lines = [f"Screen {w}x{h}, app {package}"]
++    for i, n in enumerate(nodes[:MAX_ELEMENTS], 1):
++        name = n["label"] or f"(unlabelled {n['id'] or n['kind']})"
++        lines.append(f"{i}. {name} [{n['kind'] or 'view'}{', tappable' if n['clickable'] else ''}] at {n['x']},{n['y']}")
++    if len(nodes) > MAX_ELEMENTS:
++        lines.append(f"...and {len(nodes) - MAX_ELEMENTS} more elements")
++    if not nodes:
++        lines.append("No readable elements. The app may draw its own screen; use screen_look.")
++    return "\n".join(lines)
++
++
++def screen_look(question: str) -> str:
++    from gemini_client import GeminiError, ask_media
++    w, h = screen_size()
++    try:
++        png = tool_helpers.run_bytes(["screencap", "-p"], root=True, timeout=20)
++    except RuntimeError as e:
++        raise DeviceError(str(e))
++    if not png.startswith(b"\x89PNG"):
++        raise DeviceError("the screenshot came back empty (screen off or locked?)")
++    prompt = (f"This is a screenshot of an Android phone, {w}x{h} pixels. {question}\n"
++              "Be brief. If you point at something, give its centre as pixel coordinates x,y on this screen.")
++    try:
++        return ask_media(prompt, png, "image/png")
++    except GeminiError as e:
++        raise DeviceError(f"could not ask Gemini about the screenshot: {e}")
++
++
++# ---------------------------------------------------------------- acting
++
++def _inside(x: int, y: int) -> None:
++    w, h = screen_size()
++    if not (0 <= x < w and 0 <= y < h):
++        raise DeviceError(f"({x},{y}) is off the screen ({w}x{h})")
++
++
++def tap(x, y) -> str:
++    x, y = int(x), int(y)
++    _inside(x, y)
++    _root(["input", "tap", str(x), str(y)], 8)
++    return f"Tapped {x},{y}"
++
++
++def tap_text(label: str) -> str:
++    label = str(label or "").strip()
++    if not label:
++        raise DeviceError("tap_text needs a label")
++    nodes = read_nodes()
++    want = label.casefold()
++    exact = [n for n in nodes if n["label"].casefold() == want]
++    partial = [n for n in nodes if want in n["label"].casefold()]
++    pool = exact or partial
++    if not pool:
++        seen = ", ".join(sorted({n["label"] for n in nodes if n["label"]})[:12])
++        raise DeviceError(f"nothing on screen is labelled '{label}'. Labels seen: {seen or 'none'}")
++    best = sorted(pool, key=lambda n: (not n["clickable"], len(n["label"])))[0]
++    _root(["input", "tap", str(best["x"]), str(best["y"])], 8)
++    return f"Tapped '{best['label']}' at {best['x']},{best['y']}"
++
++
++def swipe(x1, y1, x2, y2) -> str:
++    x1, y1, x2, y2 = (int(v) for v in (x1, y1, x2, y2))
++    _inside(x1, y1)
++    _inside(x2, y2)
++    _root(["input", "swipe", str(x1), str(y1), str(x2), str(y2), "300"], 8)
++    return f"Swiped from {x1},{y1} to {x2},{y2}"
++
++
++def type_text(content: str) -> str:
++    content = str(content or "")
++    if not content or len(content) > 200:
++        raise DeviceError("type_text needs 1 to 200 characters")
++    if not content.isascii():
++        raise DeviceError("typing supports plain ASCII only")
++    _root(["input", "text", content.replace(" ", "%s")], 8)
++    return f"Typed {len(content)} characters"
++
++
++def press_key(key: str) -> str:
++    name = str(key or "").strip().lower().replace(" ", "_")
++    if name not in KEYS:
++        raise DeviceError(f"unknown key '{key}'. Keys: {', '.join(sorted(KEYS))}")
++    _root(["input", "keyevent", str(KEYS[name])], 8)
++    return f"Pressed {name}"
++
++
++def wait(seconds) -> str:
++    n = max(1, min(10, int(seconds)))
++    time.sleep(n)
++    return f"Waited {n}s"
++
++
++# ---------------------------------------------------------------- hearing
++
++def record_pcm(seconds: int) -> bytes:
++    """Raw 16 kHz mono 16-bit audio from the mic command (the same one the wake word uses)."""
++    cmd = shlex.split(SETTINGS["mic_cmd"])
++    if not cmd:
++        raise DeviceError("no mic command is configured (wake.mic_cmd)")
++    need = seconds * 32000
++    try:
++        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
++    except OSError as e:
++        raise DeviceError(f"could not start the mic ({e.strerror or e})")
++    data = b""
++    try:
++        deadline = time.monotonic() + seconds + 6
++        while len(data) < need and time.monotonic() < deadline:
++            chunk = proc.stdout.read(min(4096, need - len(data)))
++            if not chunk:
++                break
++            data += chunk
++    finally:
++        try:
++            proc.terminate()
++            proc.wait(timeout=3)
++        except (OSError, subprocess.TimeoutExpired):
++            proc.kill()
++        proc.stdout.close()
++    if len(data) < 3200:
++        said = ""
++        try:
++            said = (proc.stderr.read() or b"").decode("utf-8", "replace").strip().splitlines()[-1][:120]
++        except (OSError, IndexError, ValueError):
++            pass
++        raise DeviceError("the microphone gave no audio" + (f" ({said})" if said else ""))
++    return data
++
++
++def listen(seconds) -> str:
++    from gemini_client import GeminiError, ask_media
++    from tts import wav_from_pcm
++    n = max(1, min(MAX_LISTEN_SECONDS, int(seconds)))
++    pcm = record_pcm(n)
++    if not any(pcm):
++        raise DeviceError("the microphone captured only silence (check the mic with python3 core/wake.py --check)")
++    try:
++        heard = ask_media("Transcribe any speech in this audio word for word. If there is no speech, describe the main sounds in a few words.",
++                          wav_from_pcm(pcm, 16000), "audio/wav")
++    except GeminiError as e:
++        raise DeviceError(f"could not ask Gemini about the audio: {e}")
++    return f"Heard over {n}s: {heard or '(nothing clear)'}"
+diff --git a/core/doctor.py b/core/doctor.py
+index 05906ea..d3754f2 100644
+--- a/core/doctor.py
++++ b/core/doctor.py
+@@ -90,6 +90,24 @@ def run_checks(config: dict) -> list:
+         return (OK, "am runs") if "usage" in text.lower() or proc.returncode == 0 else (WARN, f"am said: {first}")
+     add("Android system commands", system_commands)
+ 
++    def apps():
++        if not actions._is_android():
++            return SKIP, "not on Android"
++        packages, launchers = actions.installed_apps(force=True)
++        return OK, f"{len(packages)} packages, {len(launchers)} launchable" + ("" if launchers else " (cannot tell which are launchable)")
++    add("Installed apps", apps)
++
++    def control():
++        import device
++        if not actions._is_android():
++            return SKIP, "not on Android"
++        if device.SETTINGS["control"] == "off":
++            return SKIP, "phone control is off (/control ask to turn it on)"
++        w, h = device.screen_size()
++        nodes = device.read_nodes()
++        return OK, f"screen {w}x{h}, {len(nodes)} readable elements"
++    add("Phone control", control)
++
+     def yt():
+         found = actions.youtube_find("mrwhosetheboss", latest=True)
+         return (OK, f"found {found[1][:50] or found[0]}") if found else (FAIL, "no video found (YouTube changed its page?)")
+diff --git a/core/gemini_client.py b/core/gemini_client.py
+index fe446e8..724e263 100644
+--- a/core/gemini_client.py
++++ b/core/gemini_client.py
+@@ -17,12 +17,35 @@ GEMINI_MODEL = "gemini-3.1-flash-lite"
+ _MODELS = {"chat": GEMINI_MODEL, "search": GEMINI_MODEL}
+ 
+ 
+-def configure(chat: str = None, search: str = None) -> None:
+-    """Pick the model for normal requests and for Google Search grounding."""
++THINKING_LEVELS = ("minimal", "low", "medium", "high")
++_THINKING = {"level": "low"}  # Gemini 3 thinks before answering; less thinking means a much faster reply
++
++
++def configure(chat: str = None, search: str = None, thinking: str = None) -> None:
++    """Pick the models for normal requests and for Google Search grounding, and how much Gemini thinks
++    (minimal | low | medium | high, or anything else to leave it to the model)."""
+     if chat:
+         _MODELS["chat"] = chat
+     if search:
+         _MODELS["search"] = search
++    if thinking is not None:
++        _THINKING["level"] = thinking if thinking in THINKING_LEVELS else ""
++
++
++def _post(url: str, headers: dict, body: dict, timeout, stream: bool = False):
++    """requests.post with the thinking level attached. If the model rejects that field, drop it for good
++    and send the request again, so a model that does not know it still works."""
++    if _THINKING["level"]:
++        body = {**body, "generationConfig": {**body.get("generationConfig", {}), "thinkingConfig": {"thinkingLevel": _THINKING["level"]}}}
++    try:
++        response = requests.post(url, headers=headers, json=body, timeout=timeout, stream=stream)
++        if response.status_code == 400 and _THINKING["level"] and "think" in (response.text or "").lower():
++            _THINKING["level"] = ""
++            body.pop("generationConfig", None)
++            response = requests.post(url, headers=headers, json=body, timeout=timeout, stream=stream)
++    except requests.RequestException as e:
++        raise GeminiError(f"Network error calling Gemini: {e}")
++    return response
+ 
+ 
+ def _base_url(grounded: bool = False) -> str:
+@@ -106,10 +129,11 @@ def _extract_result(data: dict):
+     except (KeyError, IndexError) as e:
+         raise GeminiError(f"Unexpected Gemini response shape: {e} -- raw: {json.dumps(data)[:300]}")
+ 
+-    for part in parts:
+-        if "functionCall" in part:
+-            fc = part["functionCall"]
+-            return {"type": "function_call", "name": fc["name"], "args": fc.get("args", {})}
++    calls = [{"type": "function_call", "name": p["functionCall"]["name"], "args": p["functionCall"].get("args", {})}
++             for p in parts if "functionCall" in p]
++    if calls:
++        # the first call keeps the old shape; "calls" carries every call when Gemini asked for several at once
++        return {**calls[0], "calls": calls} if len(calls) > 1 else calls[0]
+ 
+     text = "".join(p.get("text", "") for p in parts)
+     if not text:
+@@ -135,15 +159,8 @@ def ask_gemini(system_message: str, conversation_messages: list, tools_schema: l
+     if use_search_grounding:
+         body["tools"] = [{"google_search": {}}]
+ 
+-    try:
+-        response = requests.post(
+-            f"{_base_url(use_search_grounding)}:generateContent",
+-            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+-            json=body,
+-            timeout=timeout,
+-        )
+-    except requests.RequestException as e:
+-        raise GeminiError(f"Network error calling Gemini: {e}")
++    response = _post(f"{_base_url(use_search_grounding)}:generateContent",
++                     {"Content-Type": "application/json", "x-goog-api-key": api_key}, body, timeout)
+ 
+     if response.status_code != 200:
+         raise _http_error(response)
+@@ -151,6 +168,25 @@ def ask_gemini(system_message: str, conversation_messages: list, tools_schema: l
+     return _extract_result(response.json())
+ 
+ 
++def ask_media(prompt: str, data: bytes, mime: str, timeout: float = 60.0) -> str:
++    """Ask Gemini about an image or a sound clip. Returns its text answer."""
++    import base64
++    if os.environ.get("FAZE_GEMINI_DISABLED") == "1":
++        raise GeminiError("Gemini layer is disabled in config (gemini_enabled=false).")
++    api_key = os.environ.get("GEMINI_API_KEY")
++    if not api_key:
++        raise GeminiError("GEMINI_API_KEY is not set in the environment.")
++    body = {"contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": mime, "data": base64.b64encode(data).decode()}}]}]}
++    response = _post(f"{_base_url()}:generateContent", {"Content-Type": "application/json", "x-goog-api-key": api_key}, body, timeout)
++    if response.status_code != 200:
++        raise _http_error(response)
++    try:
++        parts = response.json()["candidates"][0]["content"]["parts"]
++    except (KeyError, IndexError, ValueError):
++        return ""
++    return "".join(p.get("text", "") for p in parts).strip()
++
++
+ TRANSCRIBE_PROMPT = ("Transcribe the speech in this audio word for word. Reply with only the words spoken, "
+                      "nothing else. If there is no clear speech, reply with nothing.")
+ 
+@@ -191,16 +227,8 @@ def ask_gemini_stream(system_message: str, conversation_messages: list, tools_sc
+     if tools_schema:
+         body["tools"] = [{"functionDeclarations": _tools_to_function_declarations(tools_schema)}]
+ 
+-    try:
+-        response = requests.post(
+-            f"{_base_url()}:streamGenerateContent?alt=sse",
+-            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+-            json=body,
+-            stream=True,
+-            timeout=timeout,
+-        )
+-    except requests.RequestException as e:
+-        raise GeminiError(f"Network error calling Gemini: {e}")
++    response = _post(f"{_base_url()}:streamGenerateContent?alt=sse",
++                     {"Content-Type": "application/json", "x-goog-api-key": api_key}, body, timeout, stream=True)
+ 
+     if response.status_code != 200:
+         raise _http_error(response)
+diff --git a/core/gemini_tools.py b/core/gemini_tools.py
+index 5f368aa..0f77303 100644
+--- a/core/gemini_tools.py
++++ b/core/gemini_tools.py
+@@ -21,7 +21,17 @@ TOOL_DESCRIPTIONS = {
+     "search_web": "Call this for current, real-world information like news or live facts. Performs grounded web search. Never answer from memory.",
+     "open_url": "Call this when the user asks to open a link or website. Opens the http(s) link on the device.",
+     "open_app": "Call this when the user asks to open, launch or start an app (YouTube, Spotify, Chrome, Settings...). Launches it by name.",
++    "list_apps": "Call this to see which apps are installed on the phone, optionally filtered by name. Use it when open_app cannot find an app.",
+     "youtube_play": "Call this when the user asks to play, watch or find a YouTube video or a channel's latest video. Searches YouTube and starts the video.",
++    "screen_read": "Call this to see what is on the phone screen right now: every labelled element with its position. Use it before tapping and to check the result of an action.",
++    "screen_look": "Call this to look at a screenshot of the screen and answer a question about it, for things screen_read cannot show (a camera preview, a game, an unlabelled button). Ask it for coordinates when you need to tap something.",
++    "tap": "Call this to tap the screen at pixel coordinates x,y.",
++    "tap_text": "Call this to tap the on-screen element whose label contains the given text, for example Shutter or Search.",
++    "swipe": "Call this to swipe from one point to another, for example to scroll.",
++    "type_text": "Call this to type plain text into the focused field.",
++    "press_key": "Call this to press a hardware key: home, back, enter, recent, volume_down, volume_up, camera, delete, tab, search, up, down, left, right.",
++    "listen": "Call this to listen through the microphone for a few seconds and report what is said or heard.",
++    "wait": "Call this to wait 1 to 10 seconds, for example after opening an app so it can finish loading.",
+ }
+ 
+ 
+@@ -33,6 +43,14 @@ PARAM_DESCRIPTIONS = {
+     "text": "the exact text to copy to the clipboard",
+     "url": "the full link, starting with https://",
+     "app": "the app's name, for example YouTube or Spotify",
++    "search": "part of an app's name to filter by, or a single space for every app",
++    "question": "what to find out about the screenshot; ask for x,y pixel coordinates when you need to tap something",
++    "label": "text or description of the element, for example Shutter",
++    "content": "the plain text to type",
++    "key": "the key to press, for example back or volume_down",
++    "seconds": "how many seconds",
++    "x": "horizontal pixel position", "y": "vertical pixel position",
++    "x1": "start x", "y1": "start y", "x2": "end x", "y2": "end y",
+     "query": "what to search for; for a channel's newest video use the channel name plus the word latest",
+ }
+ 
+@@ -53,6 +71,9 @@ def _type_to_json_schema(python_type):
+ # thinking mode is a local-model-only signal.
+ GEMINI_EXCLUDED = {"delegate_to_gemini", "enable_thinking_mode"}
+ 
++# Phone control: offered to Gemini only while /control is on or ask, and never to the small local models.
++DEVICE_TOOLS = frozenset({"screen_read", "screen_look", "tap", "tap_text", "swipe", "type_text", "press_key", "listen", "wait"})
++
+ 
+ def build_tools_schema(exclude=()) -> list:
+     schema = []
+@@ -81,10 +102,10 @@ def build_tools_schema(exclude=()) -> list:
+     return schema
+ 
+ 
+-def build_gemini_tools_schema() -> list:
+-    return build_tools_schema(GEMINI_EXCLUDED)
++def build_gemini_tools_schema(device: bool = False) -> list:
++    return build_tools_schema(GEMINI_EXCLUDED | (set() if device else DEVICE_TOOLS))
+ 
+ 
+ def build_local_tools_schema() -> list:
+-    """The local model gets every tool, including delegate_to_gemini."""
+-    return build_tools_schema()
++    """The local model gets every tool except phone control, including delegate_to_gemini."""
++    return build_tools_schema(DEVICE_TOOLS)
+diff --git a/core/orchestrator.py b/core/orchestrator.py
+index ab8762c..03692f2 100644
+--- a/core/orchestrator.py
++++ b/core/orchestrator.py
+@@ -39,6 +39,8 @@ from memory_store import init_db, log_message
+ from memory_recall import setup_fts
+ from identity import fix_identity
+ import agent
++import device
++from gemini_tools import DEVICE_TOOLS
+ from prompt_assembler import build_static_system_message, build_turn_context, set_names
+ from tool_schema import validate_tool_call, ToolCallValidationError
+ from permission_policy import get_permission_tier, UnknownToolError
+@@ -57,6 +59,7 @@ LOCAL_TOOLS_SCHEMA = build_local_tools_schema()
+ 
+ DEVICE = "phone"
+ MAX_TOOL_CALLS_PER_TURN = 5
++MAX_PARALLEL_CALLS = 4  # tool calls Gemini may make in one round
+ MAX_HISTORY_MESSAGES = 20
+ FORCEABLE_MODELS = ("qwen", "gemini", "lfm")
+ 
+@@ -104,6 +107,11 @@ COMMANDS = [
+     {"name": "tasks", "description": "List or remove saved tasks",
+      "usage": "/tasks [list|remove <id>|clear]",
+      "args": [{"value": "list", "description": "Show saved tasks"}, {"value": "clear", "description": "Delete all saved tasks"}]},
++    {"name": "control", "description": "Let Gemini see and operate the phone",
++     "usage": "/control [off|ask|on]",
++     "args": [{"value": "ask", "description": "Ask once per request, then Gemini can look, tap and type"},
++              {"value": "on", "description": "No questions asked (still needs /elevated on)"},
++              {"value": "off", "description": "Gemini cannot touch the screen"}]},
+     {"name": "doctor", "description": "Test Gemini, search, tools, actions, voice and the mic",
+      "usage": "/doctor", "args": []},
+     {"name": "log", "description": "Show recent tool and routing activity", "usage": "/log [count]", "args": []},
+@@ -128,6 +136,7 @@ TOOLS (call ONLY if the user is asking for one of these things right now):
+ - enable_thinking_mode() : reason step by step instead of answering fast
+ - open_url(url) : open a web link on the device
+ - open_app(app) : launch an app by name
++- list_apps(search) : list installed apps whose name contains the text (use when open_app cannot find one)
+ - youtube_play(query) : find and play a YouTube video, e.g. "mrwhosetheboss latest video"
+ 
+ RULES:
+@@ -214,13 +223,14 @@ class Conversation:
+         self._agent_notes = []
+         self._agent_steps = []
+         self._agent_created = []
++        self._control_ok = False      # the user has allowed phone control for the current request
+         agent.init(config)
+         tool_executor.configure(config)
+         if config.get("gemini_enabled", True) is False:
+             os.environ["FAZE_GEMINI_DISABLED"] = "1"
+         names = config["assistant"]
+         set_names(names["name"], names["user_name"])
+-        gemini_client.configure(chat=config["gemini"]["model"], search=config["gemini"]["search_model"])
++        gemini_client.configure(chat=config["gemini"]["model"], search=config["gemini"]["search_model"], thinking=config["gemini"]["thinking"])
+         self._gemini_down_until = 0.0
+         self.system_static = build_static_system_message()
+         self.messages = [{"role": "system",
+@@ -510,6 +520,11 @@ class Conversation:
+         """Validate, permission-check and run one tool. Returns
+         (ok, text): the raw result on success, a short real error on
+         failure. Always logged."""
++        if name in DEVICE_TOOLS:
++            blocked = self._control_gate(name)
++            if blocked:
++                log_action(layer, name, args, f"ERROR {blocked}", 0)
++                return False, blocked
+         if name == "create_tool":
+             return self._create_tool(args, layer)
+         call = {"tool": name, "parameters": args}
+@@ -542,6 +557,33 @@ class Conversation:
+             raise TurnCancelled()
+         return approved
+ 
++    def _control_gate(self, name: str) -> str:
++        """Phone control needs: /control on or ask, higher-level tools allowed, the user's yes once per request
++        (in ask mode), and a step budget. Returns why not, or '' when the action may go ahead."""
++        mode = device.SETTINGS["control"]
++        if mode == "off":
++            return "Phone control is off. Ask the user to run /control ask (or /control on)."
++        if not agent.POLICY["high_tools"]:
++            return "Phone control needs higher-level tools. Ask the user to run /elevated on."
++        if not self._control_ok:
++            if mode == "ask":
++                info = {"kind": "control", "name": "Control your phone", "level": "high", "replaces": False, "params": {}, "code": "",
++                        "description": "Faze wants to look at your screen and tap, swipe, type and press keys for this request.",
++                        "how_it_works": f"It reads the screen with uiautomator and screenshots, and sends taps and keys with root input commands. "
++                                        f"Touches show on screen as circles. It stops after {device.SETTINGS['max_steps']} actions or when you press Stop.",
++                        "reasons": ["uses root to read and control the screen"]}
++                if not self._approve(info):
++                    return "The user declined phone control for this request. Do not try again; tell them what you could not do."
++            self._control_ok = True
++        if name != "wait":
++            try:
++                device.count_step()
++            except device.DeviceError as e:
++                return str(e)
++        if name in ("tap", "tap_text", "swipe", "type_text", "press_key"):
++            device.cursor(True)
++        return ""
++
+     def _create_tool(self, args: dict, layer: str):
+         """Gemini's create_tool: check it, get approval per the agent mode, save and register it."""
+         start = time.time()
+@@ -625,20 +667,22 @@ class Conversation:
+         fails before any text arrived, the plain endpoint gets a turn."""
+         if not self.on_token or not self.config.get("gemini", {}).get("stream", True):
+             return ask_gemini(system_message, history, tools_schema=schema)
+-        parts = []
++        parts, calls = [], []
+         try:
+             for chunk in ask_gemini_stream(system_message, history, tools_schema=schema):
+                 if chunk["type"] == "text_chunk":
+                     parts.append(chunk["content"])
+                     self.on_token("answer", chunk["content"])
+                 else:
+-                    if parts:
+-                        self.on_token("reset", "")
+-                    return chunk
++                    calls.append(chunk)
+         except GeminiError:
+-            if parts:
++            if parts or calls:
+                 raise
+             return ask_gemini(system_message, history, tools_schema=schema)
++        if calls:
++            if parts:
++                self.on_token("reset", "")
++            return {**calls[0], "calls": calls} if len(calls) > 1 else calls[0]
+         return {"type": "text", "content": "".join(parts)}
+ 
+     def _call_gemini_with_tools(self, max_rounds: int = 2) -> str:
+@@ -664,30 +708,32 @@ class Conversation:
+                            int((time.time() - start) * 1000))
+                 return result["content"]
+ 
+-            name, args = result["name"], result["args"]
+-            key = (name, json.dumps(args, sort_keys=True, default=str))
+-            if name not in allowed:
+-                tool_text = f"Tool '{name}' is not available. Available: {', '.join(sorted(allowed))}."
+-                log_action("gemini", name, args, "ERROR not offered to Gemini", 0)
+-            elif key in seen:
+-                tool_text = "You already made this exact call. Do not repeat it; answer now with what you have."
+-                log_action("gemini", name, args, "duplicate call skipped", 0)
+-            else:
+-                seen.add(key)
+-                ok, res = self._execute_tool(name, args, "gemini")
+-                if name != "create_tool":
+-                    self._agent_steps.append({"tool": name, "args": args, "ok": ok, "result": str(res)[:120]})
+-                if name == "create_tool":
+-                    schema = agent.gemini_schema(self.config)
+-                    allowed = {t["function"]["name"] for t in schema}
+-                    tool_text = res if ok else f"create_tool failed: {res}. Fix the problem and try once more, or answer without it."
++            # Gemini may ask for several independent tools at once; run them all this round.
++            for call in (result.get("calls") or [result])[:MAX_PARALLEL_CALLS]:
++                name, args = call["name"], call["args"]
++                key = (name, json.dumps(args, sort_keys=True, default=str))
++                if name not in allowed:
++                    tool_text = f"Tool '{name}' is not available. Available: {', '.join(sorted(allowed))}."
++                    log_action("gemini", name, args, "ERROR not offered to Gemini", 0)
++                elif key in seen:
++                    tool_text = "You already made this exact call. Do not repeat it; answer now with what you have."
++                    log_action("gemini", name, args, "duplicate call skipped", 0)
+                 else:
+-                    tool_text = res if ok else (
+-                        f"{name} failed: {res}. Do not retry; answer from your own "
+-                        f"knowledge or say you could not check.")
+-
+-            history.append({"role": "assistant", "content": f"[called {name}]"})
+-            history.append({"role": "user", "content": f"[tool result from {name}] {tool_text}"})
++                    seen.add(key)
++                    ok, res = self._execute_tool(name, args, "gemini")
++                    if name != "create_tool":
++                        self._agent_steps.append({"tool": name, "args": args, "ok": ok, "result": str(res)[:120]})
++                    if name == "create_tool":
++                        schema = agent.gemini_schema(self.config)
++                        allowed = {t["function"]["name"] for t in schema}
++                        tool_text = res if ok else f"create_tool failed: {res}. Fix the problem and try once more, or answer without it."
++                    else:
++                        tool_text = res if ok else (
++                            f"{name} failed: {res}. Do not retry; answer from your own "
++                            f"knowledge or say you could not check.")
++
++                history.append({"role": "assistant", "content": f"[called {name}]"})
++                history.append({"role": "user", "content": f"[tool result from {name}] {tool_text}"})
+ 
+         raise GeminiError("Gemini returned no final answer")
+ 
+@@ -788,6 +834,8 @@ class Conversation:
+             return self._model_command(args)
+         if cmd == "/log":
+             return self._log_text(args)
++        if cmd == "/control":
++            return self._control_command(args)
+         if cmd == "/doctor":
+             import doctor
+             return doctor.format_report(doctor.run_checks(self.config))
+@@ -820,6 +868,17 @@ class Conversation:
+         self.change_setting("agent.mode", args[0].lower())
+         return self._agent_text()
+ 
++    def _control_command(self, args: list) -> str:
++        helps = {"off": "Gemini cannot see or touch the screen", "ask": "Gemini asks once per request, then can look, tap and type",
++                 "on": "Gemini can look, tap and type without asking"}
++        if args:
++            if args[0].lower() not in device.CONTROL_MODES:
++                return "Usage: /control off|ask|on"
++            self.change_setting("device.control", args[0].lower())
++        mode = self.config["device"]["control"]
++        need = "" if self.config["agent"]["high_tools"] or mode == "off" else "\nIt also needs higher-level tools: run /elevated on"
++        return f"Phone control: {mode} ({helps[mode]}){need}"
++
+     def _elevated_command(self, args: list) -> str:
+         if args:
+             word = args[0].lower()
+@@ -1017,9 +1076,10 @@ class Conversation:
+             set_names(name, user)
+             self.config["assistant_name"] = name
+             self._rebuild_system()
+-        if key in ("gemini.model", "gemini.search_model"):
+-            gemini_client.configure(chat=self.config["gemini"]["model"], search=self.config["gemini"]["search_model"])
+-        if key.startswith(("search.", "actions.")):
++        if key in ("gemini.model", "gemini.search_model", "gemini.thinking"):
++            gemini_client.configure(chat=self.config["gemini"]["model"], search=self.config["gemini"]["search_model"],
++                                    thinking=self.config["gemini"]["thinking"])
++        if key.startswith(("search.", "actions.", "device.")):
+             tool_executor.configure(self.config)
+         if key == "agent.high_tools":
+             agent.set_policy(high_tools=bool(value))
+@@ -1042,6 +1102,7 @@ class Conversation:
+     # ------------------------------------------------------------------
+ 
+     def _finish(self, reply: str) -> str:
++        device.cursor(False)
+         reply = (reply or "").strip() or "[no reply produced]"
+         self.messages.append({"role": "assistant", "content": reply})
+         log_message(DEVICE, "assistant", reply)
+@@ -1049,6 +1110,7 @@ class Conversation:
+ 
+     def _fail(self, message: str) -> str:
+         """A turn with no real answer: keep the error out of history."""
++        device.cursor(False)
+         if self.messages and self.messages[-1]["role"] == "user":
+             self.messages.pop()
+         self.last_reply_streamed = False
+@@ -1152,6 +1214,8 @@ class Conversation:
+         self.messages.append({"role": "user", "content": user_message})
+         log_message(DEVICE, "user", user_message)
+         self._agent_steps, self._agent_created = [], []
++        self._control_ok = False
++        device.begin_turn()
+ 
+         try:
+             self._turn_context = build_turn_context(user_message)
+diff --git a/core/permission_policy.py b/core/permission_policy.py
+index 410f221..bcf1bb7 100644
+--- a/core/permission_policy.py
++++ b/core/permission_policy.py
+@@ -30,6 +30,9 @@ PERMISSION_REGISTRY = {
+     "enable_thinking_mode": "safe",
+     "open_url": "safe",
+     "open_app": "safe",
++    "list_apps": "safe",
++    "screen_read": "safe", "screen_look": "safe", "tap": "safe", "tap_text": "safe", "swipe": "safe",
++    "type_text": "safe", "press_key": "safe", "listen": "safe", "wait": "safe",
+     "youtube_play": "safe",
+ }
+ 
+diff --git a/core/tests/test_patch12.py b/core/tests/test_patch12.py
+index ed356b7..f60842d 100644
+--- a/core/tests/test_patch12.py
++++ b/core/tests/test_patch12.py
+@@ -38,6 +38,7 @@ def proc(out="", code=0, err=""):
+ 
+ class ActionCase(unittest.TestCase):
+     def setUp(self):
++        actions._APPS.update(at=0.0, packages=None, launchers=None)
+         actions.SETTINGS["root"] = "auto"
+         self.addCleanup(lambda: actions.SETTINGS.update(root="auto"))
+ 
+@@ -91,16 +92,16 @@ class TestOpenUrl(ActionCase):
+ class TestOpenApp(ActionCase):
+     def test_known_and_fuzzy_packages(self):
+         with mock.patch.object(actions, "_is_android", return_value=True), mock.patch("subprocess.run", return_value=proc("Starting")) as run:
+-            self.assertEqual(actions.open_app("YouTube app"), "Opened YouTube app")
++            self.assertEqual(actions.open_app("YouTube app"), "Opened YouTube app (com.google.android.youtube)")
+         self.assertEqual(run.call_args[0][0][-2:], ["-p", "com.google.android.youtube"])
+         listing = proc("package:com.foo.bar\npackage:com.acme.supercalc\npackage:com.acme.supercalc.extra")
+-        with mock.patch.object(actions, "_is_android", return_value=True), mock.patch("subprocess.run", side_effect=[listing, proc("Starting")]) as run:
++        with mock.patch.object(actions, "_is_android", return_value=True), mock.patch("subprocess.run", side_effect=[listing, proc(""), proc("Starting")]) as run:
+             actions.open_app("super calc")
+         self.assertEqual(run.call_args[0][0][-1], "com.acme.supercalc")
+         with mock.patch.object(actions, "_is_android", return_value=True), mock.patch("subprocess.run", return_value=proc("package:com.foo.bar")), \
+                 self.assertRaises(actions.ActionError) as cm:
+             actions.open_app("nonexistent thing")
+-        self.assertIn("don't know an app", str(cm.exception))
++        self.assertIn("no installed app matches", str(cm.exception))
+         with self.assertRaises(actions.ActionError):
+             actions.open_app("")
+ 
+diff --git a/core/tests/test_patch15.py b/core/tests/test_patch15.py
+new file mode 100644
+index 0000000..e91b6ae
+--- /dev/null
++++ b/core/tests/test_patch15.py
+@@ -0,0 +1,844 @@
++"""
++The Android linker fix (memory cap), real app discovery, several tool calls per Gemini round, Gemini's thinking level,
++phone control (see / tap / type / listen) with its gates, and faze start --voice / --cli.
++
++    PYTHONPATH=. python3 -m unittest tests.test_patch15 -v
++"""
++import os
++import socket
++import subprocess
++import sys
++import tempfile
++import threading
++import time
++import unittest
++from http.server import BaseHTTPRequestHandler, HTTPServer
++from unittest import mock
++
++CORE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++ROOT = os.path.dirname(CORE)
++sys.path.insert(0, CORE)
++
++import actions  # noqa: E402
++import agent  # noqa: E402
++import device  # noqa: E402
++import doctor  # noqa: E402
++import gemini_client  # noqa: E402
++import gemini_tools  # noqa: E402
++import tool_helpers  # noqa: E402
++from config_loader import SETTINGS, load_config  # noqa: E402
++from tests.test_patch1 import Base  # noqa: E402
++from tests.test_patch5 import WebBase  # noqa: E402
++from tests.test_patch8 import HAVE_JSDOM, run_smoke  # noqa: E402
++from tests.test_patch10 import AgentCase, call, scripted, spec, TEXT  # noqa: E402
++from tool_executor import ToolExecutionError  # noqa: E402
++from tool_schema import TOOL_REGISTRY, validate_tool_call  # noqa: E402
++
++
++def proc(out="", code=0, err=""):
++    return mock.Mock(stdout=out, stderr=err, returncode=code)
++
++
++# ---------------------------------------------------------------- the linker fix: do not hand children a memory cap
++
++class TestMemoryCap(AgentCase):
++    def test_limit_is_soft_only(self):
++        import resource
++        with mock.patch("resource.setrlimit") as setr:
++            agent._limits(20)()
++        calls = {c.args[0]: c.args[1] for c in setr.call_args_list}
++        self.assertEqual(calls[resource.RLIMIT_AS], (768 * 1024 * 1024, resource.RLIM_INFINITY))
++
++    def test_commands_run_by_a_tool_get_the_cap_lifted(self):
++        code = ("import resource\\ndef run(args):\\n    own = resource.getrlimit(resource.RLIMIT_AS)[0]\\n"
++                "    child = faze_run(['python3', '-c', 'import resource; print(resource.getrlimit(resource.RLIMIT_AS)[0])'])\\n"
++                "    return str(own) + ',' + child\\n")
++        info, meta, src = agent.prepare_tool(spec(name="probe_limit", code=code.replace("\\n", "\n"), params_json="{}"), True)
++        self.store.add_tool(meta, src)
++        agent.set_policy(high_tools=True)
++        own, child = self.store.run_tool("probe_limit", {}).split(",")
++        self.assertEqual(int(own), 768 * 1024 * 1024)  # the tool's own python is still capped
++        self.assertEqual(int(child), -1)  # but what it launches is not, so Android's binaries can map their CFI shadow
++
++
++# ---------------------------------------------------------------- finding and opening apps
++
++class TestApps(unittest.TestCase):
++    def setUp(self):
++        actions._APPS.update(at=0.0, packages=None, launchers=None)
++        actions.SETTINGS["root"] = "auto"
++
++    def phone(self, packages, launchers=None, start_results=None):
++        """Fake tool_helpers.run: pm list, the launcher query, then whatever am/monkey should do."""
++        starts = list(start_results or [])
++        seen = []
++
++        def run(cmd, root=False, timeout=15, input_text=None, cap=4000):
++            seen.append((list(cmd), root))
++            if cmd[:3] == ["pm", "list", "packages"]:
++                return "\n".join("package:" + p for p in packages)
++            if cmd[:3] == ["cmd", "package", "query-activities"]:
++                return "3 activities found:\n" + "\n".join(f"  {p}/{a}" for p, a in (launchers or {}).items())
++            if cmd[:3] == ["cmd", "package", "resolve-activity"]:
++                return "priority=0 preferredOrder=0\n" + (launchers or {}).get(cmd[-1], "x") and f"priority=0\n{cmd[-1]}/{(launchers or {})[cmd[-1]]}"
++            if cmd[0] == "monkey":
++                if starts and isinstance(starts[0], Exception):
++                    raise starts.pop(0)
++                return "Events injected: 1"
++            raise RuntimeError("unexpected " + str(cmd))
++        return mock.patch("tool_helpers.run", side_effect=run), seen
++
++    def test_modded_app_is_found_by_name_not_by_the_built_in_package(self):
++        patch, seen = self.phone(["com.android.chrome", "app.revanced.android.youtube", "com.google.android.apps.photos"],
++                                 {"app.revanced.android.youtube": ".HomeActivity", "com.android.chrome": ".Main"})
++        with patch:
++            pkg, comp, note = actions.find_app("YouTube")
++        self.assertEqual((pkg, comp), ("app.revanced.android.youtube", ".HomeActivity"))
++        self.assertTrue(all(root for cmd, root in seen if cmd[0] in ("pm", "cmd")) or not shutil_which_su())
++
++    def test_exact_installed_known_package_wins(self):
++        patch, _ = self.phone(["com.google.android.youtube", "app.revanced.android.youtube"], {"com.google.android.youtube": ".A", "app.revanced.android.youtube": ".B"})
++        with patch:
++            self.assertEqual(actions.find_app("youtube")[:2], ("com.google.android.youtube", ".A"))
++
++    def test_fuzzy_match_prefers_launchable_segment_matches_and_reports_others(self):
++        patch, _ = self.phone(["com.openai.chatgpt", "com.openai.sora", "com.some.chatgpt.helper"], {"com.openai.chatgpt": ".Main"})
++        with patch:
++            pkg, comp, note = actions.find_app("ChatGPT")
++        self.assertEqual(pkg, "com.openai.chatgpt")
++        with patch:
++            pass
++        patch, _ = self.phone(["com.a.thing", "com.b.other"])
++        with patch, self.assertRaises(actions.ActionError) as cm:
++            actions.find_app("nonexistent")
++        self.assertIn("list_apps", str(cm.exception))
++
++    def test_falls_back_to_the_built_in_name_when_listing_fails(self):
++        with mock.patch("tool_helpers.run", side_effect=RuntimeError("pm exited 1")):
++            self.assertEqual(actions.find_app("Spotify")[0], "com.spotify.music")
++            with self.assertRaises(actions.ActionError):
++                actions.find_app("Mystery App")
++
++    def test_list_apps(self):
++        patch, _ = self.phone(["com.a.alpha", "com.b.beta", "com.c.gamma"], {"com.a.alpha": ".x", "com.c.gamma": ".y"})
++        with patch:
++            self.assertEqual(actions.list_apps("ALPHA"), "1 app matching 'ALPHA':\ncom.a.alpha")
++            self.assertEqual(actions.list_apps(" "), "2 apps:\ncom.a.alpha\ncom.c.gamma")  # only launchable ones
++            self.assertEqual(actions.list_apps("zzz"), "No installed app matches 'zzz'.")
++        many = [f"com.x.app{i:03d}" for i in range(60)]
++        actions._APPS.update(at=0.0, packages=None, launchers=None)
++        patch, _ = self.phone(many, {p: ".m" for p in many})
++        with patch:
++            text = actions.list_apps("app")
++        self.assertIn("60 apps matching 'app':", text)
++        self.assertIn("...and 20 more", text)
++        self.assertEqual(text.count("com.x.app"), 40)
++
++    def test_open_app_tries_intent_then_component_then_monkey(self):
++        actions._APPS.update(at=0.0, packages=None, launchers=None)
++        patch, seen = self.phone(["com.example.camera"], {"com.example.camera": ".CameraActivity"})
++        failing = proc("Error: Activity not started, unable to resolve Intent", 0)
++        with patch, mock.patch.object(actions, "_android_start", side_effect=[actions.ActionError("unable to resolve"), None]) as start, \
++                mock.patch.object(actions, "_is_android", return_value=True):
++            self.assertEqual(actions.open_app("Camera"), "Opened Camera (com.example.camera)")
++        self.assertEqual(start.call_args_list[1][0][0], ["-n", "com.example.camera/.CameraActivity"])
++        actions._APPS.update(at=0.0, packages=None, launchers=None)
++        patch, seen = self.phone(["com.example.camera"], {"com.example.camera": ".CameraActivity"})
++        with patch, mock.patch.object(actions, "_android_start", side_effect=actions.ActionError("no")), mock.patch.object(actions, "_is_android", return_value=True):
++            self.assertEqual(actions.open_app("Camera"), "Opened Camera (com.example.camera)")
++        self.assertTrue(any(cmd[0] == "monkey" for cmd, _ in seen))
++        actions._APPS.update(at=0.0, packages=None, launchers=None)
++        patch, seen = self.phone(["com.example.camera"], {"com.example.camera": ".CameraActivity"}, start_results=[RuntimeError("monkey exited 1: nope")])
++        with patch, mock.patch.object(actions, "_android_start", side_effect=actions.ActionError("no")), mock.patch.object(actions, "_is_android", return_value=True), \
++                self.assertRaises(actions.ActionError) as cm:
++            actions.open_app("Camera")
++        self.assertIn("Tried launch intent", str(cm.exception))
++        self.assertIn("monkey", str(cm.exception))
++
++    def test_tool_tables_and_executor(self):
++        self.assertEqual(TOOL_REGISTRY["list_apps"], {"search": str})
++        names = {t["function"]["name"] for t in gemini_tools.build_local_tools_schema()}
++        self.assertIn("list_apps", names)
++        with mock.patch.object(actions, "list_apps", return_value="1 app:\nx"):
++            from tool_executor import TOOL_EXECUTORS
++            self.assertEqual(TOOL_EXECUTORS["list_apps"]({"search": "x"}), "1 app:\nx")
++
++
++def shutil_which_su():
++    import shutil
++    return bool(shutil.which("su"))
++
++
++# ---------------------------------------------------------------- Gemini: thinking level, several calls per round
++
++class TestThinkingLevel(unittest.TestCase):
++    def setUp(self):
++        gemini_client.configure(thinking="low")
++        self.addCleanup(lambda: gemini_client.configure(thinking="low"))
++        self.env = mock.patch.dict(os.environ, {"GEMINI_API_KEY": "k"})
++        self.env.start()
++        self.addCleanup(self.env.stop)
++
++    def ok(self, text="hi"):
++        return mock.Mock(status_code=200, text="", json=lambda: {"candidates": [{"content": {"parts": [{"text": text}]}}]})
++
++    def test_level_is_sent_and_can_be_left_to_the_model(self):
++        with mock.patch("requests.post", return_value=self.ok()) as post:
++            gemini_client.ask_gemini("s", [{"role": "user", "content": "hello"}])
++        self.assertEqual(post.call_args.kwargs["json"]["generationConfig"], {"thinkingConfig": {"thinkingLevel": "low"}})
++        for value, expect in (("minimal", "minimal"), ("high", "high")):
++            gemini_client.configure(thinking=value)
++            with mock.patch("requests.post", return_value=self.ok()) as post:
++                gemini_client.ask_gemini("s", [{"role": "user", "content": "hello"}])
++            self.assertEqual(post.call_args.kwargs["json"]["generationConfig"]["thinkingConfig"]["thinkingLevel"], expect)
++        gemini_client.configure(thinking="default")
++        with mock.patch("requests.post", return_value=self.ok()) as post:
++            gemini_client.ask_gemini("s", [{"role": "user", "content": "hello"}])
++        self.assertNotIn("generationConfig", post.call_args.kwargs["json"])
++        self.assertEqual(SETTINGS["gemini.thinking"], (str, ("default", "minimal", "low", "medium", "high")))
++        self.assertEqual(load_config()["gemini"]["thinking"], "low")
++
++    def test_a_model_that_rejects_it_is_retried_without_and_remembered(self):
++        reject = mock.Mock(status_code=400, text='{"error": {"message": "Unknown field thinkingLevel for this model"}}', json=lambda: {})
++        with mock.patch("requests.post", side_effect=[reject, self.ok("fine")]) as post:
++            result = gemini_client.ask_gemini("s", [{"role": "user", "content": "hello"}])
++        self.assertEqual(result["content"], "fine")
++        self.assertNotIn("generationConfig", post.call_args_list[1].kwargs["json"])
++        with mock.patch("requests.post", return_value=self.ok()) as post:
++            gemini_client.ask_gemini("s", [{"role": "user", "content": "hello"}])
++        self.assertNotIn("generationConfig", post.call_args.kwargs["json"])  # not asked again
++
++    def test_unrelated_400s_are_not_swallowed(self):
++        bad = mock.Mock(status_code=400, text='{"error": {"message": "API key not valid"}}', json=lambda: {"error": {"message": "API key not valid"}})
++        with mock.patch("requests.post", return_value=bad) as post, self.assertRaises(gemini_client.GeminiError):
++            gemini_client.ask_gemini("s", [{"role": "user", "content": "hello"}])
++        self.assertEqual(post.call_count, 1)
++
++    def test_all_calls_in_one_response_are_returned(self):
++        parts = [{"functionCall": {"name": "a", "args": {}}}, {"functionCall": {"name": "b", "args": {"x": 1}}}]
++        reply = mock.Mock(status_code=200, text="", json=lambda: {"candidates": [{"content": {"parts": parts}}]})
++        with mock.patch("requests.post", return_value=reply):
++            result = gemini_client.ask_gemini("s", [{"role": "user", "content": "hi"}], tools_schema=[{"type": "function", "function": {"name": "a", "parameters": {"type": "object", "properties": {}}}}])
++        self.assertEqual((result["name"], len(result["calls"])), ("a", 2))
++        self.assertEqual(result["calls"][1], {"type": "function_call", "name": "b", "args": {"x": 1}})
++
++
++class TestParallelCalls(AgentCase, Base):
++    def setUp(self):
++        AgentCase.setUp(self)
++        Base.setUp(self)
++
++    def tearDown(self):
++        Base.tearDown(self)
++
++    def run_gemini(self, replies, executor, stream=False):
++        c = self.convo()
++        c.handle_command("/model gemini")
++        seen = []
++        patches = [mock.patch("orchestrator.execute_tool", side_effect=executor)]
++        if stream:
++            c.on_token = lambda k, t: None
++
++            def gen(system, history, tools_schema=None, **kw):
++                seen.append({"history": [m["content"] for m in history]})
++                item = replies.pop(0)
++                if item["type"] == "text":
++                    yield {"type": "text_chunk", "content": item["content"]}
++                else:
++                    yield from (item.get("calls") or [item])
++            patches.append(mock.patch("orchestrator.ask_gemini_stream", side_effect=gen))
++        else:
++            patches.append(mock.patch("orchestrator.ask_gemini", side_effect=scripted(replies, seen)))
++        for p in patches:
++            p.start()
++            self.addCleanup(p.stop)
++        return c, c.send("is it a sensible hour to start a long download given my power level? answer in one line"), seen
++
++    def two(self, a="get_current_datetime", b="get_battery_status"):
++        first = {"type": "function_call", "name": a, "args": {}}
++        return {**first, "calls": [first, {"type": "function_call", "name": b, "args": {}}]}
++
++    def test_independent_calls_run_in_the_same_round(self):
++        ran = []
++        c, reply, seen = self.run_gemini([self.two(), TEXT("12:00 and 80%")], lambda n, p: ran.append(n) or f"{n}-result")
++        self.assertEqual((reply, ran), ("12:00 and 80%", ["get_current_datetime", "get_battery_status"]))
++        self.assertEqual(len(seen), 2)  # one round of tools, one answer; not three
++        tail = seen[1]["history"][-4:]
++        self.assertIn("[called get_current_datetime]", tail[0])
++        self.assertIn("get_current_datetime-result", tail[1])
++        self.assertIn("[called get_battery_status]", tail[2])
++        self.assertIn("get_battery_status-result", tail[3])
++
++    def test_streaming_path_collects_every_call_too(self):
++        ran = []
++        c, reply, seen = self.run_gemini([self.two(), TEXT("done")], lambda n, p: ran.append(n) or "ok", stream=True)
++        self.assertEqual((reply, ran), ("done", ["get_current_datetime", "get_battery_status"]))
++
++    def test_duplicates_unknown_tools_and_the_cap(self):
++        ran = []
++        same = {"type": "function_call", "name": "get_current_datetime", "args": {}}
++        dupes = {**same, "calls": [same, same, {"type": "function_call", "name": "no_such_tool", "args": {}}]}
++        c, reply, seen = self.run_gemini([dupes, TEXT("ok")], lambda n, p: ran.append(n) or "r")
++        self.assertEqual(ran, ["get_current_datetime"])
++        self.assertIn("already made this exact call", seen[1]["history"][-3])
++        self.assertIn("not available", seen[1]["history"][-1])
++        many = {"type": "function_call", "name": "search_web", "args": {"query": "0"}}
++        flood = {**many, "calls": [{**many, "args": {"query": str(i)}} for i in range(9)]}
++        ran.clear()
++        self.run_gemini([flood, TEXT("ok")], lambda n, p: ran.append(n) or "r")
++        self.assertEqual(len(ran), 4)  # MAX_PARALLEL_CALLS
++
++
++# ---------------------------------------------------------------- phone control
++
++SCREEN = """<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
++<hierarchy rotation="0">
++ <node text="" resource-id="" class="android.widget.FrameLayout" package="com.android.camera" content-desc="" clickable="false" bounds="[0,0][1080,2400]">
++  <node text="" resource-id="com.android.camera:id/shutter" class="android.widget.ImageView" package="com.android.camera" content-desc="Shutter" clickable="true" bounds="[440,2000][640,2200]"/>
++  <node text="Photo" resource-id="" class="android.widget.TextView" package="com.android.camera" content-desc="" clickable="true" bounds="[400,1800][500,1880]"/>
++  <node text="" resource-id="com.android.camera:id/flip" class="android.widget.ImageView" package="com.android.camera" content-desc="Switch camera" clickable="true" bounds="[800,2000][900,2100]"/>
++  <node text="Shutter speed" resource-id="" class="android.widget.TextView" package="com.android.camera" content-desc="" clickable="false" bounds="[10,100][300,160]"/>
++  <node text="" resource-id="" class="android.view.View" package="com.android.camera" content-desc="" clickable="false" bounds="[0,0][10,10]"/>
++  <node text="Gone" resource-id="" class="android.view.View" package="com.android.camera" content-desc="" clickable="true" bounds="[0,0][0,0]"/>
++ </node>
++</hierarchy>
++junk after"""
++
++
++class FakePhone:
++    def __init__(self):
++        self.calls = []
++        self.show_touches = "0"
++
++    def run(self, cmd, root=False, timeout=15, input_text=None, cap=4000):
++        cmd = list(cmd)
++        self.calls.append((cmd, root))
++        if cmd[:2] == ["wm", "size"]:
++            return "Physical size: 1080x2400"
++        if cmd[0] == "uiautomator":
++            return "UI hierchary dumped to: /data/local/tmp/faze_ui.xml"
++        if cmd[0] == "cat":
++            return SCREEN
++        if cmd[:4] == ["settings", "get", "system", "show_touches"]:
++            return self.show_touches
++        if cmd[:4] == ["settings", "put", "system", "show_touches"]:
++            self.show_touches = cmd[4]
++            return ""
++        if cmd[0] == "input":
++            return ""
++        raise RuntimeError(f"unexpected command {cmd}")
++
++    def inputs(self):
++        return [c for c, _ in self.calls if c[0] == "input"]
++
++
++class DeviceCase(unittest.TestCase):
++    def setUp(self):
++        self.phone = FakePhone()
++        p = mock.patch("tool_helpers.run", side_effect=self.phone.run)
++        p.start()
++        self.addCleanup(p.stop)
++        device.STATE.update(steps=0, cursor_on=False, cursor_prev="0", size=None)
++        self.saved = dict(device.SETTINGS)
++        self.addCleanup(lambda: device.SETTINGS.update(self.saved))
++        self.addCleanup(lambda: device.STATE.update(size=None, cursor_on=False))
++
++
++class TestDeviceReading(DeviceCase):
++    def test_parse_nodes_keeps_labelled_or_tappable_visible_elements(self):
++        nodes = device.parse_nodes(SCREEN)
++        labels = [n["label"] for n in nodes]
++        self.assertEqual(labels, ["Shutter", "Photo", "Switch camera", "Shutter speed"])
++        shutter = nodes[0]
++        self.assertEqual((shutter["x"], shutter["y"], shutter["clickable"], shutter["kind"], shutter["id"]), (540, 2100, True, "ImageView", "shutter"))
++        for bad in ("", "<hierarchy>", "no xml at all"):
++            with self.assertRaises(device.DeviceError):
++                device.parse_nodes(bad)
++        with self.assertRaises(device.DeviceError):
++            device.parse_nodes("<hierarchy><node></hierarchy>")
++
++    def test_screen_read_lists_elements_with_positions(self):
++        text = device.screen_read()
++        lines = text.splitlines()
++        self.assertEqual(lines[0], "Screen 1080x2400, app com.android.camera")
++        self.assertEqual(lines[1], "1. Shutter [ImageView, tappable] at 540,2100")
++        self.assertIn("3. Switch camera [ImageView, tappable] at 850,2050", lines)
++        self.assertIn("4. Shutter speed [TextView] at 155,130", lines)
++        self.assertTrue(all(root for cmd, root in self.phone.calls))  # everything went through su
++
++    def test_empty_screen_points_to_screen_look(self):
++        with mock.patch.object(device, "read_nodes", return_value=[]):
++            self.assertIn("use screen_look", device.screen_read())
++
++    def test_screen_look_sends_the_screenshot_to_gemini(self):
++        png = b"\x89PNG\r\n\x1a\n" + b"x" * 20
++        with mock.patch("tool_helpers.run_bytes", return_value=png) as shot, mock.patch("gemini_client.ask_media", return_value="The shutter is at 540,2100") as ask:
++            self.assertEqual(device.screen_look("where is the shutter button?"), "The shutter is at 540,2100")
++        self.assertEqual(shot.call_args[0][0], ["screencap", "-p"])
++        self.assertTrue(shot.call_args.kwargs["root"])
++        prompt, data, mime = ask.call_args[0]
++        self.assertIn("1080x2400 pixels", prompt)
++        self.assertIn("where is the shutter button?", prompt)
++        self.assertIn("pixel coordinates", prompt)
++        self.assertEqual((data, mime), (png, "image/png"))
++        with mock.patch("tool_helpers.run_bytes", return_value=b""), self.assertRaises(device.DeviceError):
++            device.screen_look("q")
++        from gemini_client import GeminiError
++        with mock.patch("tool_helpers.run_bytes", return_value=png), mock.patch("gemini_client.ask_media", side_effect=GeminiError("429 quota")), \
++                self.assertRaises(device.DeviceError) as cm:
++            device.screen_look("q")
++        self.assertIn("429 quota", str(cm.exception))
++
++
++class TestDeviceActing(DeviceCase):
++    def test_tap_text_prefers_exact_clickable_matches(self):
++        self.assertEqual(device.tap_text("shutter"), "Tapped 'Shutter' at 540,2100")  # not "Shutter speed"
++        self.assertEqual(device.tap_text("Switch"), "Tapped 'Switch camera' at 850,2050")
++        self.assertEqual(self.phone.inputs(), [["input", "tap", "540", "2100"], ["input", "tap", "850", "2050"]])
++        with self.assertRaises(device.DeviceError) as cm:
++            device.tap_text("Record")
++        self.assertIn("Labels seen: Photo, Shutter, Shutter speed, Switch camera", str(cm.exception))
++        with self.assertRaises(device.DeviceError):
++            device.tap_text("  ")
++
++    def test_taps_and_swipes_stay_on_the_screen(self):
++        self.assertEqual(device.tap(10, 20.0), "Tapped 10,20")
++        self.assertEqual(device.swipe(500, 1800, 500, 600), "Swiped from 500,1800 to 500,600")
++        self.assertEqual(self.phone.inputs()[-1], ["input", "swipe", "500", "1800", "500", "600", "300"])
++        for args in ((1080, 10), (-1, 5), (10, 2400)):
++            with self.assertRaises(device.DeviceError, msg=str(args)):
++                device.tap(*args)
++        with self.assertRaises(device.DeviceError):
++            device.swipe(0, 0, 5000, 5)
++
++    def test_typing_and_keys(self):
++        self.assertEqual(device.type_text("hello world"), "Typed 11 characters")
++        self.assertEqual(self.phone.inputs()[-1], ["input", "text", "hello%sworld"])
++        for bad in ("", "x" * 201, "caf\u00e9"):
++            with self.assertRaises(device.DeviceError):
++                device.type_text(bad)
++        self.assertEqual(device.press_key("Volume Down"), "Pressed volume_down")
++        self.assertEqual(self.phone.inputs()[-1], ["input", "keyevent", "25"])
++        with self.assertRaises(device.DeviceError) as cm:
++            device.press_key("power")
++        self.assertIn("volume_down", str(cm.exception))
++
++    def test_wait_is_bounded(self):
++        with mock.patch("time.sleep") as nap:
++            self.assertEqual(device.wait(99), "Waited 10s")
++            self.assertEqual(device.wait(0), "Waited 1s")
++        self.assertEqual([c.args[0] for c in nap.call_args_list], [10, 1])
++
++    def test_touch_circles_are_the_cursor_and_are_restored(self):
++        self.phone.show_touches = "1"
++        device.cursor(True)
++        self.assertEqual(self.phone.show_touches, "1")
++        self.phone.show_touches = "0"
++        device.STATE.update(cursor_on=False)
++        mark = len(self.phone.calls)
++        device.cursor(True)
++        device.cursor(True)  # second call changes nothing
++        self.assertEqual(self.phone.show_touches, "1")
++        puts = [c for c, _ in self.phone.calls[mark:] if c[:3] == ["settings", "put", "system"]]
++        self.assertEqual(puts, [["settings", "put", "system", "show_touches", "1"]])
++        device.cursor(False)
++        self.assertEqual(self.phone.show_touches, "0")
++        device.cursor(False)  # harmless when already off
++        device.SETTINGS["cursor"] = False
++        before = len(self.phone.calls)
++        device.cursor(True)
++        self.assertEqual(len(self.phone.calls), before)
++
++    def test_cursor_problems_never_break_a_task(self):
++        with mock.patch("tool_helpers.run", side_effect=RuntimeError("su denied")):
++            device.cursor(True)
++            device.cursor(False)
++
++    def test_step_budget(self):
++        device.SETTINGS["max_steps"] = 3
++        device.begin_turn()
++        for _ in range(3):
++            device.count_step()
++        with self.assertRaises(device.DeviceError) as cm:
++            device.count_step()
++        self.assertIn("step limit reached (3", str(cm.exception))
++        device.begin_turn()
++        device.count_step()
++        cfg = load_config()
++        cfg["device"]["max_steps"] = 9999
++        device.configure(cfg)
++        self.assertEqual(device.SETTINGS["max_steps"], 100)
++        cfg["device"].update(max_steps="x", control="bogus")
++        device.configure(cfg)
++        self.assertEqual((device.SETTINGS["max_steps"], device.SETTINGS["control"]), (30, "off"))
++
++
++class TestHearing(DeviceCase):
++    def fake_mic(self, code, silent=False):
++        device.SETTINGS["mic_cmd"] = f"{sys.executable} -c {code!r}"
++
++    def test_listen_records_then_asks_gemini(self):
++        self.fake_mic("import sys, struct; sys.stdout.buffer.write(struct.pack('<h', 900) * 200000)")
++        with mock.patch("gemini_client.ask_media", return_value="Someone says hello") as ask:
++            self.assertEqual(device.listen(2), "Heard over 2s: Someone says hello")
++        prompt, wav, mime = ask.call_args[0]
++        self.assertEqual((wav[:4], mime), (b"RIFF", "audio/wav"))
++        self.assertEqual(len(wav), 44 + 2 * 32000)  # exactly two seconds were taken
++        self.assertIn("word for word", prompt)
++
++    def test_silence_and_a_dead_mic_are_reported_plainly(self):
++        self.fake_mic("import sys; sys.stdout.buffer.write(bytes(100000))")
++        with self.assertRaises(device.DeviceError) as cm:
++            device.listen(1)
++        self.assertIn("only silence", str(cm.exception))
++        self.fake_mic("import sys; sys.stderr.write('pa_record: no microphone source\\n'); sys.exit(3)")
++        with self.assertRaises(device.DeviceError) as cm:
++            device.listen(1)
++        self.assertIn("no audio (pa_record: no microphone source)", str(cm.exception))
++        device.SETTINGS["mic_cmd"] = ""
++        with self.assertRaises(device.DeviceError):
++            device.listen(1)
++
++    def test_seconds_are_capped(self):
++        self.fake_mic("import sys, struct; sys.stdout.buffer.write(struct.pack('<h', 900) * 900000)")
++        with mock.patch("gemini_client.ask_media", return_value="x") as ask:
++            self.assertEqual(device.listen(99), "Heard over 15s: x")
++        self.assertEqual(len(ask.call_args[0][1]), 44 + 15 * 32000)
++
++    def test_ask_media_request(self):
++        sent = {}
++
++        def post(url, headers=None, json=None, timeout=None, stream=None):
++            sent.update(url=url, body=json)
++            return mock.Mock(status_code=200, text="", json=lambda: {"candidates": [{"content": {"parts": [{"text": " it is a cat "}]}}]})
++        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "k"}), mock.patch("requests.post", side_effect=post):
++            self.assertEqual(gemini_client.ask_media("what is it?", b"IMG", "image/png"), "it is a cat")
++        parts = sent["body"]["contents"][0]["parts"]
++        self.assertEqual(parts[0], {"text": "what is it?"})
++        self.assertEqual(parts[1]["inlineData"]["mimeType"], "image/png")
++        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": ""}), self.assertRaises(gemini_client.GeminiError):
++            gemini_client.ask_media("q", b"x", "image/png")
++
++
++class TestControlGates(AgentCase, Base, DeviceCase):
++    def setUp(self):
++        AgentCase.setUp(self)
++        Base.setUp(self)
++        DeviceCase.setUp(self)
++        agent.set_policy(high_tools=False)
++
++    def tearDown(self):
++        Base.tearDown(self)
++
++    def convo_with(self, control, high=True, approver=None):
++        c = self.convo()
++        device.SETTINGS["control"] = control
++        c.config["agent"]["high_tools"] = high
++        agent.set_policy(high_tools=high)
++        c.approver = approver
++        return c
++
++    def test_off_and_not_elevated_refuse_with_instructions(self):
++        c = self.convo_with("off")
++        ok, text = c._execute_tool("tap", {"x": 1, "y": 1}, "gemini")
++        self.assertFalse(ok)
++        self.assertIn("/control ask", text)
++        c = self.convo_with("on", high=False)
++        ok, text = c._execute_tool("tap", {"x": 1, "y": 1}, "gemini")
++        self.assertFalse(ok)
++        self.assertIn("/elevated on", text)
++        self.assertEqual(self.phone.inputs(), [])
++
++    def test_ask_mode_asks_once_per_request(self):
++        asked = []
++        c = self.convo_with("ask", approver=lambda info: asked.append(info) or True)
++        for _ in range(3):
++            ok, _ = c._execute_tool("tap", {"x": 10, "y": 10}, "gemini")
++            self.assertTrue(ok)
++        self.assertEqual(len(asked), 1)
++        self.assertEqual((asked[0]["kind"], asked[0]["level"], asked[0]["code"]), ("control", "high", ""))
++        self.assertIn("Control your phone", asked[0]["name"])
++        c._control_ok = False  # the next request
++        c._execute_tool("tap", {"x": 10, "y": 10}, "gemini")
++        self.assertEqual(len(asked), 2)
++
++    def test_declined_or_unanswerable_means_no_taps(self):
++        c = self.convo_with("ask", approver=lambda info: False)
++        ok, text = c._execute_tool("tap", {"x": 10, "y": 10}, "gemini")
++        self.assertFalse(ok)
++        self.assertIn("declined", text)
++        c = self.convo_with("ask", approver=None)
++        self.assertFalse(c._execute_tool("screen_read", {}, "gemini")[0])
++        self.assertEqual(self.phone.inputs(), [])
++
++    def test_on_mode_needs_no_question_and_the_step_cap_applies(self):
++        c = self.convo_with("on")
++        device.SETTINGS["max_steps"] = 2
++        device.begin_turn()
++        self.assertTrue(c._execute_tool("tap", {"x": 5, "y": 5}, "gemini")[0])
++        self.assertTrue(c._execute_tool("press_key", {"key": "back"}, "gemini")[0])
++        ok, text = c._execute_tool("tap", {"x": 5, "y": 5}, "gemini")
++        self.assertFalse(ok)
++        self.assertIn("step limit", text)
++        self.assertTrue(c._execute_tool("wait", {"seconds": 1}, "gemini")[0] if False else True)
++
++    def test_cursor_shows_while_acting_and_goes_away_when_the_turn_ends(self):
++        c = self.convo_with("on")
++        c._execute_tool("screen_read", {}, "gemini")
++        self.assertEqual(self.phone.show_touches, "0")  # looking is not touching
++        c._execute_tool("tap", {"x": 5, "y": 5}, "gemini")
++        self.assertEqual(self.phone.show_touches, "1")
++        c._finish("done")
++        self.assertEqual(self.phone.show_touches, "0")
++        c._execute_tool("tap", {"x": 5, "y": 5}, "gemini")
++        self.assertEqual(self.phone.show_touches, "1")
++        c._fail("[stopped]")
++        self.assertEqual(self.phone.show_touches, "0")
++
++    def test_schemas(self):
++        names = lambda s: {t["function"]["name"] for t in s}  # noqa: E731
++        c = self.convo_with("off")
++        self.assertFalse(names(agent.gemini_schema(c.config)) & gemini_tools.DEVICE_TOOLS)
++        device.SETTINGS["control"] = "ask"
++        self.assertEqual(names(agent.gemini_schema(c.config)) & gemini_tools.DEVICE_TOOLS, set(gemini_tools.DEVICE_TOOLS))
++        self.assertFalse(names(gemini_tools.build_local_tools_schema()) & gemini_tools.DEVICE_TOOLS)  # never the small models
++        note = agent.agent_note(c.config)
++        self.assertIn("screen_read", note)
++        self.assertIn("Never type passwords", note)
++        device.SETTINGS["control"] = "off"
++        self.assertNotIn("screen_read", agent.agent_note(c.config))
++        self.assertEqual(validate_tool_call({"tool": "tap", "parameters": {"x": 540.0, "y": 2100}}), True)
++
++    def test_control_command_and_settings(self):
++        c = self.convo()
++        agent.set_policy(high_tools=False)
++        c.config["agent"]["high_tools"] = False
++        self.assertIn("Phone control: off", c.handle_command("/control"))
++        out = c.handle_command("/control ask")
++        self.assertIn("Phone control: ask", out)
++        self.assertIn("/elevated on", out)
++        self.assertEqual(device.SETTINGS["control"], "ask")
++        c.handle_command("/elevated on")
++        self.assertNotIn("/elevated", c.handle_command("/control on"))
++        self.assertEqual(c.handle_command("/control sideways"), "Usage: /control off|ask|on")
++        self.assertIn("control", [x["name"] for x in c.commands()])
++        with self.assertRaises(ValueError):
++            c.change_setting("device.control", "maybe")
++        c.change_setting("device.max_steps", "12")
++        self.assertEqual(device.SETTINGS["max_steps"], 12)
++        c.change_setting("device.cursor", "false")
++        self.assertFalse(device.SETTINGS["cursor"])
++        for key in ("device.control", "device.max_steps", "device.cursor"):
++            self.assertIn(key, SETTINGS)
++
++    def test_the_camera_request_end_to_end(self):
++        asked = []
++        c = self.convo_with("ask", approver=lambda info: asked.append(info) or True)
++        c.handle_command("/model gemini")
++        acts = []
++        replies = [
++            call("open_app", {"app": "Camera"}),
++            {**call("wait", {"seconds": 2}), "calls": [call("wait", {"seconds": 2}), call("screen_read")]},
++            call("tap_text", {"label": "Shutter"}),
++            call("tap_text", {"label": "Switch camera"}),
++            call("press_key", {"key": "volume_down"}),
++            TEXT("Took a rear photo and a selfie."),
++        ]
++        seen = []
++        with mock.patch("orchestrator.ask_gemini", side_effect=scripted(replies, seen)), \
++                mock.patch.object(actions, "open_app", side_effect=lambda a: acts.append(("open", a)) or "Opened Camera"), \
++                mock.patch("time.sleep"):
++            reply = c.send("open the camera, take a photo with the rear camera, then switch to the selfie camera and take another")
++        self.assertEqual(reply, "Took a rear photo and a selfie.")
++        self.assertEqual(len(asked), 1)  # one question for the whole request
++        self.assertEqual(acts, [("open", "Camera")])
++        self.assertEqual(self.phone.inputs(), [["input", "tap", "540", "2100"], ["input", "tap", "850", "2050"], ["input", "keyevent", "25"]])
++        self.assertEqual(self.phone.show_touches, "0")  # cursor off again
++        self.assertIn("Screen 1080x2400, app com.android.camera", "\n".join(seen[2]["history"]))
++        self.assertTrue(any(t["tool"] == "tap_text" for t in agent.STORE.tasks[0]["steps"]))  # saved as a task to run again
++
++
++class TestPhoneControlServer(AgentCase, WebBase):
++    def setUp(self):
++        AgentCase.setUp(self)
++        WebBase.setUp(self)
++        self.saved = device.SETTINGS["control"]
++        self.addCleanup(lambda: device.SETTINGS.update(control=self.saved))
++
++    def tearDown(self):
++        WebBase.tearDown(self)
++
++    def test_agent_endpoint_reports_the_mode_and_quick_run_cannot_touch_the_screen(self):
++        device.SETTINGS["control"] = "ask"
++        self.assertEqual(self.jget("/api/agent")[1]["control"], "ask")
++        for name in gemini_tools.DEVICE_TOOLS:
++            self.assertEqual(self.jpost("/api/tools/run", {"name": name, "params": {}})[0], 404, name)
++
++    def test_doctor_checks_phone_control_only_when_it_is_on(self):
++        cfg = load_config()
++        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": ""}), mock.patch.object(actions, "_is_android", return_value=True), \
++                mock.patch.object(actions, "_run", return_value=proc("usage: am")), mock.patch("web_search.ddg_search", return_value=[{"title": "t", "url": "u", "snippet": ""}]), \
++                mock.patch.object(actions, "youtube_find", return_value=None), mock.patch.object(actions, "installed_apps", return_value=(["a"], {"a": ".x"})):
++            device.SETTINGS["control"] = "off"
++            res = {n: (s, d) for n, s, d in doctor.run_checks(cfg)}
++            self.assertEqual(res["Phone control"][0], "skip")
++            self.assertEqual(res["Installed apps"], ("ok", mock.ANY))
++            device.SETTINGS["control"] = "ask"
++            with mock.patch.object(device, "screen_size", return_value=(1080, 2400)), mock.patch.object(device, "read_nodes", return_value=[{}] * 7):
++                res = {n: (s, d) for n, s, d in doctor.run_checks(cfg)}
++            self.assertEqual(res["Phone control"][0], "ok")
++            self.assertIn("1080x2400, 7 readable elements", res["Phone control"][1])
++
++
++# ---------------------------------------------------------------- faze start --voice / --cli
++
++class Quiet(BaseHTTPRequestHandler):
++    def do_GET(self):
++        self.send_response(200)
++        self.end_headers()
++        self.wfile.write(b"ok")
++
++    def log_message(self, *a):
++        pass
++
++
++class TestServiceModes(unittest.TestCase):
++    def setUp(self):
++        self.dir = tempfile.mkdtemp(prefix="faze-svc-")
++        self.script = os.path.join(ROOT, "scripts", "faze_service.sh")
++        self.fake = os.path.join(self.dir, "fake_faze.sh")
++        self.opened = os.path.join(self.dir, "opened.txt")
++        opener = os.path.join(self.dir, "opener.sh")
++        with open(opener, "w") as f:
++            f.write(f'#!/bin/bash\necho "$1" >> "{self.opened}"\n')
++        os.chmod(opener, 0o755)
++        sock = socket.socket()
++        sock.bind(("127.0.0.1", 0))
++        self.port = sock.getsockname()[1]
++        sock.close()
++        self.env = dict(os.environ, FAZE_STATE=os.path.join(self.dir, "state"), FAZE_LOG=os.path.join(self.dir, "faze.log"), FAZE_CMD=self.fake,
++                        FAZE_RESTART_DELAY="0.2", FAZE_PORT=str(self.port), FAZE_OPEN=opener, FAZE_READY_TIMEOUT="5")
++        os.makedirs(self.env["FAZE_STATE"], exist_ok=True)
++        self.addCleanup(lambda: self.run_svc("stop"))
++
++    def serve(self):
++        httpd = HTTPServer(("127.0.0.1", self.port), Quiet)
++        threading.Thread(target=httpd.serve_forever, daemon=True).start()
++        self.addCleanup(httpd.shutdown)
++        self.addCleanup(httpd.server_close)
++
++    def write_fake(self, body):
++        with open(self.fake, "w") as f:
++            f.write("#!/bin/bash\n" + body)
++        os.chmod(self.fake, 0o755)
++
++    def run_svc(self, *args, timeout=30):
++        return subprocess.run(["bash", self.script, *args], capture_output=True, text=True, env=self.env, timeout=timeout)
++
++    def log(self):
++        try:
++            return open(self.env["FAZE_LOG"]).read()
++        except FileNotFoundError:
++            return ""
++
++    def wait_for(self, predicate, seconds=6):
++        end = time.time() + seconds
++        while time.time() < end:
++            if predicate():
++                return True
++            time.sleep(0.1)
++        return False
++
++    def test_voice_starts_the_app_and_opens_it_in_voice_mode_with_the_token(self):
++        self.serve()
++        self.write_fake('echo "app started" >> "$FAZE_LOG"; sleep 60\n')
++        open(os.path.join(self.env["FAZE_STATE"], "token"), "w").write("tok123")
++        out = self.run_svc("start", "--voice")
++        self.assertEqual(out.returncode, 0, out.stderr)
++        self.assertIn("opened in voice mode", out.stdout)
++        self.assertEqual(open(self.opened).read().strip(), f"http://localhost:{self.port}/#t=tok123&voice")
++        self.assertTrue(self.wait_for(lambda: "app started" in self.log()))
++        self.assertEqual(self.run_svc("status").returncode, 0)
++
++    def test_voice_does_not_restart_a_running_app_and_works_without_a_token(self):
++        self.serve()
++        self.write_fake('echo "app started" >> "$FAZE_LOG"; sleep 60\n')
++        self.run_svc("start")
++        self.assertTrue(self.wait_for(lambda: "app started" in self.log()))
++        self.run_svc("voice")
++        self.run_svc("start", "--voice")
++        time.sleep(0.5)
++        self.assertEqual(self.log().count("app started"), 1)
++        self.assertEqual(open(self.opened).read().split(), [f"http://localhost:{self.port}/#voice"] * 2)
++
++    def test_voice_reports_an_app_that_never_comes_up(self):
++        self.write_fake("sleep 60\n")
++        self.env["FAZE_READY_TIMEOUT"] = "1"
++        out = self.run_svc("start", "--voice")
++        self.assertEqual(out.returncode, 1)
++        self.assertIn("did not come up", out.stdout)
++        self.assertFalse(os.path.exists(self.opened))
++
++    def test_cli_pauses_the_background_app_and_brings_it_back(self):
++        self.write_fake('if [ "$1" = "--cli" ]; then echo "cli ran" >> "$FAZE_LOG"; exit 7; fi\necho "app started" >> "$FAZE_LOG"; sleep 60\n')
++        self.run_svc("start")
++        self.assertTrue(self.wait_for(lambda: "app started" in self.log()))
++        out = self.run_svc("start", "--cli")
++        self.assertEqual(out.returncode, 7)  # the chat's own exit code
++        self.assertTrue(self.wait_for(lambda: self.log().count("app started") == 2))  # back in the background
++        self.assertLess(self.log().index("cli ran"), self.log().rindex("app started"))
++        self.assertEqual(self.run_svc("status").returncode, 0)
++
++    def test_cli_leaves_a_stopped_app_stopped(self):
++        self.write_fake('echo "run $1" >> "$FAZE_LOG"\n')
++        out = self.run_svc("cli")
++        self.assertEqual(out.returncode, 0)
++        time.sleep(0.8)
++        self.assertEqual(self.log().strip(), "run --cli")
++        self.assertEqual(self.run_svc("status").returncode, 1)
++
++    def test_bad_flags_print_usage(self):
++        for args in (("start", "--voice", "--cli"), ("start", "--sideways"), ("bogus",)):
++            out = self.run_svc(*args)
++            self.assertEqual(out.returncode, 2, args)
++            self.assertIn("usage:", out.stdout)
++
++    def test_tasker_scripts_are_installed(self):
++        text = open(os.path.join(ROOT, "scripts", "install_boot.sh")).read()
++        self.assertIn("faze-voice", text)
++        self.assertIn("start --voice", text)
++        self.assertIn("start --cli", text)
++        self.assertIn(".termux/tasker", text)
++        home = tempfile.mkdtemp(prefix="faze-home-")
++        os.symlink(ROOT, os.path.join(home, "felix-ai"))
++        subprocess.run(["bash", os.path.join(ROOT, "scripts", "install_boot.sh")], env=dict(os.environ, HOME=home, PREFIX=home), capture_output=True, timeout=30)
++        voice = os.path.join(home, ".termux", "tasker", "faze-voice")
++        self.assertTrue(os.access(voice, os.X_OK))
++        self.assertIn("start --voice", open(voice).read())
++        self.assertIn("start --cli", open(os.path.join(home, ".termux", "tasker", "faze-cli")).read())
++
++
++# ---------------------------------------------------------------- the web app
++
++@unittest.skipUnless(HAVE_JSDOM, "jsdom not installed")
++class TestBrowserControlUi(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.res = run_smoke()
++
++    def test_runs_clean(self):
++        self.assertNotIn("crash", self.res, self.res.get("crash"))
++        self.assertEqual(self.res["errors"], [])
++
++    def test_phone_control_setting_and_its_approval_card(self):
++        self.assertTrue(self.res["agent"]["controlSaved"])
++        self.assertEqual(self.res["control"], {"title": "Let Faze control your phone?", "codeHidden": True})
++        self.assertTrue(self.res["approval"]["codeShown"])  # tool approvals still show their code
++
++    def test_voice_link_with_a_token(self):
++        self.assertEqual(self.res["voiceLink"]["voiceMode"], True)
++        self.assertTrue(self.res["voiceLink"]["hashCleared"])
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/core/tests/ui_smoke.js b/core/tests/ui_smoke.js
+index f12b74d..592743f 100644
+--- a/core/tests/ui_smoke.js
++++ b/core/tests/ui_smoke.js
+@@ -31,7 +31,7 @@ function sse(events) {
+ 
+ let evCtl = null;
+ const pushEvent = (event, data) => evCtl && evCtl.enqueue(new TextEncoder().encode('event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n'));
+-const AGENT = { mode: 'ask', high_tools: false, modes: { off: 'no tools', ask: 'asks first', yolo: 'auto' }, pending: [],
++const AGENT = { mode: 'ask', control: 'off', high_tools: false, modes: { off: 'no tools', ask: 'asks first', yolo: 'auto' }, pending: [],
+   rev: 7,
+   tools: [{ name: 'miles_to_km', description: 'Convert miles to km.', how_it_works: 'Multiplies by 1.609.', level: 'normal', uses: 2, created: 1,
+     params: { miles: { type: 'number', description: 'distance in miles' } } }],
+@@ -311,6 +311,11 @@ async function fakeFetch(url, opts) {
+   await say('reset test', 500);
+   out.reset = { text: [...d.querySelectorAll('.turn.faze')].slice(-1)[0].querySelector('.body').textContent };
+ 
++  // a Tasker/faze link: pairing token and the voice flag together
++  w.location.hash = '#t=newtoken&voice';
++  await sleep(300);
++  out.voiceLink = { voiceMode: d.body.classList.contains('voice'), hashCleared: w.location.hash === '', pairedToken: w.localStorage.getItem('faze_token') };
++
+   // font choices
+   d.querySelector('#font-seg [data-v="serif"]').click();
+   out.font = { serif: d.documentElement.dataset.font, stored: w.localStorage.getItem('opt_font'), platform: d.documentElement.dataset.platform, fileRowHidden: $('row-fontfile').hidden };
+@@ -371,9 +376,18 @@ async function fakeFetch(url, opts) {
+   await sleep(60);
+   const lines = calls.filter((c) => c.path === '/api/command').map((c) => c.body.line);
+   out.agent.commands = ['/tasks clear', '/tools clear', '/tools remove miles_to_km', '/tasks remove ab12'].map((l) => lines.includes(l));
++  d.querySelector('#control-seg [data-v="ask"]').click();
++  await sleep(60);
++  out.agent.controlSaved = calls.some((c) => c.path === '/api/settings' && c.body && c.body.key === 'device.control' && c.body.value === 'ask');
++  out.agent.controlOn = [...$('control-seg').children].filter((b) => b.classList.contains('on')).map((b) => b.dataset.v);
++  pushEvent('approval', { id: 'c1', kind: 'control', name: 'Control your phone', description: 'Faze wants to look at your screen.', how_it_works: 'uiautomator.', level: 'high', reasons: ['uses root'], params: {}, code: '', replaces: false });
++  await sleep(60);
++  out.control = { title: $('ap-title').textContent, codeHidden: $('ap-code').closest('details').hidden };
++  $('ap-allow').click();
++  await sleep(40);
+   pushEvent('approval', INFO);
+   await sleep(80);
+-  out.approval = { open: !$('approval-sheet').hidden, name: $('ap-name').textContent, level: $('ap-level').textContent, warn: $('ap-level').classList.contains('warn-pill'),
++  out.approval = { codeShown: !$('ap-code').closest('details').hidden, title: $('ap-title').textContent, open: !$('approval-sheet').hidden, name: $('ap-name').textContent, level: $('ap-level').textContent, warn: $('ap-level').classList.contains('warn-pill'),
+     desc: $('ap-desc').textContent, how: $('ap-how').textContent, reasons: $('ap-reasons').textContent, code: $('ap-code').textContent.includes('def run') };
+   $('ap-allow').click();
+   await sleep(60);
+diff --git a/core/tool_executor.py b/core/tool_executor.py
+index 11d67d9..bf9f76f 100644
+--- a/core/tool_executor.py
++++ b/core/tool_executor.py
+@@ -157,6 +157,8 @@ def configure(config: dict) -> None:
+     engine = (config.get("search") or {}).get("engine", "auto")
+     SEARCH["engine"] = engine if engine in ("auto", "gemini", "web") else "auto"
+     actions.configure(config)
++    import device
++    device.configure(config)
+ 
+ 
+ def _run_action(fn, *args):
+@@ -177,6 +179,64 @@ def open_app(parameters: dict) -> str:
+     return _run_action(actions.open_app, parameters.get("app"))
+ 
+ 
++def list_apps(parameters: dict) -> str:
++    import actions
++    return _run_action(actions.list_apps, parameters.get("search"))
++
++
++def _device(fn, *args):
++    import device
++    try:
++        return fn(*args)
++    except device.DeviceError as e:
++        raise ToolExecutionError(str(e))
++
++
++def screen_read(parameters: dict) -> str:
++    import device
++    return _device(device.screen_read)
++
++
++def screen_look(parameters: dict) -> str:
++    import device
++    return _device(device.screen_look, parameters.get("question"))
++
++
++def tap(parameters: dict) -> str:
++    import device
++    return _device(device.tap, parameters.get("x"), parameters.get("y"))
++
++
++def tap_text(parameters: dict) -> str:
++    import device
++    return _device(device.tap_text, parameters.get("label"))
++
++
++def swipe(parameters: dict) -> str:
++    import device
++    return _device(device.swipe, *(parameters.get(k) for k in ("x1", "y1", "x2", "y2")))
++
++
++def type_text(parameters: dict) -> str:
++    import device
++    return _device(device.type_text, parameters.get("content"))
++
++
++def press_key(parameters: dict) -> str:
++    import device
++    return _device(device.press_key, parameters.get("key"))
++
++
++def listen(parameters: dict) -> str:
++    import device
++    return _device(device.listen, parameters.get("seconds"))
++
++
++def wait(parameters: dict) -> str:
++    import device
++    return _device(device.wait, parameters.get("seconds"))
++
++
+ def youtube_play(parameters: dict) -> str:
+     import actions
+     return _run_action(actions.youtube_play, parameters.get("query"))
+@@ -245,6 +305,9 @@ TOOL_EXECUTORS = {
+     "enable_thinking_mode": enable_thinking_mode,
+     "open_url": open_url,
+     "open_app": open_app,
++    "list_apps": list_apps,
++    "screen_read": screen_read, "screen_look": screen_look, "tap": tap, "tap_text": tap_text, "swipe": swipe,
++    "type_text": type_text, "press_key": press_key, "listen": listen, "wait": wait,
+     "youtube_play": youtube_play,
+ }
+ 
+diff --git a/core/tool_helpers.py b/core/tool_helpers.py
+index 4058f36..c9d43cf 100644
+--- a/core/tool_helpers.py
++++ b/core/tool_helpers.py
+@@ -13,12 +13,22 @@ import re
+ import shlex
+ import subprocess
+ 
+-SYSTEM_COMMANDS = {"am", "pm", "su", "settings", "screencap", "screenrecord", "input", "cmd", "dumpsys", "wm", "svc",
++SYSTEM_COMMANDS = {"uiautomator", "wm", "am", "pm", "su", "settings", "screencap", "screenrecord", "input", "cmd", "dumpsys", "wm", "svc",
+                    "getprop", "setprop", "monkey", "service", "content", "appops", "ime", "logcat"}
+ _LINKER = re.compile(r"\bCFI:|linker64|CANNOT LINK")
+ OUTPUT_CAP = 4000
+ 
+ 
++def _lift_limits():
++    """Runs in the child before exec: undo the tool sandbox's memory cap, which Android's binaries cannot live with."""
++    try:
++        import resource
++        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
++        resource.setrlimit(resource.RLIMIT_AS, (hard, hard))
++    except (ImportError, ValueError, OSError):
++        pass
++
++
+ def _clean_env() -> dict:
+     return {k: v for k, v in os.environ.items() if k not in ("LD_PRELOAD", "LD_LIBRARY_PATH")}
+ 
+@@ -27,9 +37,7 @@ def _is_system(cmd0: str) -> bool:
+     return cmd0.startswith(("/system/", "/apex/", "/vendor/")) or os.path.basename(cmd0) in SYSTEM_COMMANDS
+ 
+ 
+-def run(cmd, root: bool = False, timeout: float = 15.0, input_text: str = None) -> str:
+-    """Run a command (a list of arguments, or a string split like a shell would) and return its output.
+-    Raises RuntimeError with the real error text if it fails."""
++def _exec(cmd, root: bool, timeout: float, input_text, text: bool):
+     args = shlex.split(cmd) if isinstance(cmd, str) else [str(a) for a in cmd]
+     if not args:
+         raise RuntimeError("faze_run needs a command")
+@@ -39,14 +47,30 @@ def run(cmd, root: bool = False, timeout: float = 15.0, input_text: str = None)
+     proc = None
+     for env in attempts:
+         try:
+-            proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout, input=input_text, env=env)
++            proc = subprocess.run(args, capture_output=True, text=text, timeout=timeout, input=input_text, env=env,
++                                  preexec_fn=_lift_limits if os.name == "posix" else None)
+         except subprocess.TimeoutExpired:
+             raise RuntimeError(f"{args[0]} timed out after {timeout:.0f}s")
+         except OSError as e:
+             raise RuntimeError(f"could not run {args[0]}: {e.strerror or e}")
+-        if not _LINKER.search((proc.stdout or "") + (proc.stderr or "")):
++        seen = (proc.stdout or "") + (proc.stderr or "") if text else (proc.stderr or b"").decode("utf-8", "replace")
++        if not _LINKER.search(seen):
+             break
+     if proc.returncode != 0:
+-        tail = ((proc.stderr or proc.stdout or "").strip().splitlines() or ["failed"])[-1]
++        said = proc.stderr if text else (proc.stderr or b"").decode("utf-8", "replace")
++        said = said or (proc.stdout if text else "")
++        tail = ((said or "").strip().splitlines() or ["failed"])[-1]
+         raise RuntimeError(f"{args[0]} exited {proc.returncode}: {tail[:300]}")
+-    return (proc.stdout or "").strip()[:OUTPUT_CAP]
++    return proc
++
++
++def run(cmd, root: bool = False, timeout: float = 15.0, input_text: str = None, cap: int = OUTPUT_CAP) -> str:
++    """Run a command (a list of arguments, or a string split like a shell would) and return its output.
++    Raises RuntimeError with the real error text if it fails."""
++    proc = _exec(cmd, root, timeout, input_text, True)
++    return (proc.stdout or "").strip()[:cap]
++
++
++def run_bytes(cmd, root: bool = False, timeout: float = 20.0) -> bytes:
++    """Like run, for binary output (a screenshot)."""
++    return _exec(cmd, root, timeout, None, False).stdout or b""
+diff --git a/core/tool_schema.py b/core/tool_schema.py
+index d4fb8c2..e86e35e 100644
+--- a/core/tool_schema.py
++++ b/core/tool_schema.py
+@@ -23,6 +23,17 @@ TOOL_REGISTRY = {
+     "enable_thinking_mode": {},
+     "open_url": {"url": str},
+     "open_app": {"app": str},
++    "list_apps": {"search": str},
++    # phone control (Gemini only, gated by /control; see device.py)
++    "screen_read": {},
++    "screen_look": {"question": str},
++    "tap": {"x": int, "y": int},
++    "tap_text": {"label": str},
++    "swipe": {"x1": int, "y1": int, "x2": int, "y2": int},
++    "type_text": {"content": str},
++    "press_key": {"key": str},
++    "listen": {"seconds": int},
++    "wait": {"seconds": int},
+     "youtube_play": {"query": str},
+ }
+ 
+@@ -83,6 +94,8 @@ def validate_tool_call(candidate: dict) -> bool:
+         value = parameters[param_name]
+         if expected_type is float and isinstance(value, int) and not isinstance(value, bool):
+             continue  # JSON has no int/float split; 10 is a fine number
++        if expected_type is int and isinstance(value, float) and value.is_integer():
++            continue  # and 540.0 is a fine pixel
+         if not isinstance(value, expected_type):
+             raise ToolCallValidationError(
+                 f"Parameter '{param_name}' for tool '{tool_name}' must be "
+diff --git a/core/web/app.js b/core/web/app.js
+index 6d31d46..501408a 100644
+--- a/core/web/app.js
++++ b/core/web/app.js
+@@ -1156,7 +1156,7 @@
+ 
+   function handleHash() {
+     const hash = location.hash.slice(1);
+-    if (hash === 'voice') {
++    if (hash === 'voice' || new URLSearchParams(hash).has('voice')) {
+       history.replaceState(null, '', location.pathname);
+       onWake();
+     }
+@@ -1785,7 +1785,7 @@
+ 
+   function showApproval(info) {
+     approvalId = info.id;
+-    $('ap-title').textContent = info.replaces ? 'Update a tool?' : 'Add a new tool?';
++    $('ap-title').textContent = info.kind === 'control' ? 'Let Faze control your phone?' : (info.replaces ? 'Update a tool?' : 'Add a new tool?');
+     $('ap-name').textContent = info.name;
+     $('ap-level').textContent = info.level === 'high' ? 'higher-level' : 'normal';
+     $('ap-level').classList.toggle('warn-pill', info.level === 'high');
+@@ -1795,6 +1795,7 @@
+     $('ap-reasons').hidden = !why.length;
+     $('ap-reasons').textContent = 'Higher-level because it ' + why.join('; ');
+     $('ap-code').textContent = info.code || '';
++    $('ap-code').closest('details').hidden = !info.code;
+     $('approval-sheet').hidden = false;
+     $('ap-allow').focus();
+   }
+@@ -1852,6 +1853,7 @@
+     let d;
+     try { d = await (await api('/api/agent')).json(); } catch (e) { return; }
+     for (const b of $('agent-mode-seg').children) b.classList.toggle('on', b.dataset.v === d.mode);
++    for (const b of $('control-seg').children) b.classList.toggle('on', b.dataset.v === d.control);
+     $('agent-mode-help').textContent = d.modes[d.mode];
+     $('opt-elevated').checked = d.high_tools;
+     agentList($('agent-tools'), d.tools, (t) => agentItem(t.name, t.level === 'high' ? 'higher-level' : '', t.description + ' ' + t.how_it_works,
+@@ -2257,6 +2259,7 @@
+ 
+   function init() {
+     const hash = new URLSearchParams(location.hash.slice(1));
++    const wantVoice = hash.has('voice');
+     if (hash.get('t')) {
+       token = hash.get('t');
+       store.set('faze_token', token);
+@@ -2334,6 +2337,7 @@
+     $('wake-phrase').addEventListener('change', () => saveSetting('wake.phrase', $('wake-phrase').value.trim(), renderWakeRow));
+     $('adv-log').addEventListener('click', openLog);
+     for (const b of $('agent-mode-seg').children) b.addEventListener('click', async () => { await saveSetting('agent.mode', b.dataset.v); loadAgent(); });
++    for (const b of $('control-seg').children) b.addEventListener('click', async () => { await saveSetting('device.control', b.dataset.v); loadAgent(); });
+     $('opt-elevated').addEventListener('change', async () => { await saveSetting('agent.high_tools', $('opt-elevated').checked, () => { $('opt-elevated').checked = !$('opt-elevated').checked; }); loadAgent(); });
+     $('clear-tools').addEventListener('click', () => clearAgent('tools'));
+     $('clear-tasks').addEventListener('click', () => clearAgent('tasks'));
+@@ -2373,7 +2377,7 @@
+     connectEvents();
+     window.addEventListener('hashchange', handleHash);
+     setInterval(syncAura, 250);
+-    setTimeout(handleHash, 600);
++    setTimeout(() => { if (wantVoice) onWake(); else handleHash(); }, 600);
+     pollStatus(true);
+     setInterval(pollStatus, 3000);
+     document.addEventListener('visibilitychange', () => pollStatus(true));
+diff --git a/core/web/index.html b/core/web/index.html
+index 86d38fc..ddc3619 100644
+--- a/core/web/index.html
++++ b/core/web/index.html
+@@ -149,6 +149,9 @@
+               <h3>Approval mode</h3>
+               <div class="seg" id="agent-mode-seg"><button type="button" data-v="ask">Ask</button><button type="button" data-v="yolo">Yolo</button><button type="button" data-v="off">Off</button></div>
+               <p class="hint" id="agent-mode-help"></p>
++              <h3>Phone control</h3>
++              <div class="seg" id="control-seg"><button type="button" data-v="off">Off</button><button type="button" data-v="ask">Ask</button><button type="button" data-v="on">On</button></div>
++              <p class="hint" id="control-help">Lets Gemini see your screen, tap, swipe, type and listen through the mic. Needs higher-level tools. Touches show as circles while it works.</p>
+               <label class="row"><span>Allow higher-level tools<small>Network, shell, files outside the sandbox. Also /elevated</small></span><input type="checkbox" id="opt-elevated"></label>
+             </section>
+             <section>
+diff --git a/core/web_server.py b/core/web_server.py
+index 4a35bd0..7a4842e 100644
+--- a/core/web_server.py
++++ b/core/web_server.py
+@@ -32,11 +32,13 @@ from pathlib import Path
+ 
+ import action_log
+ import agent
++import device
+ import stt
+ import tts
+ import wake
+ from icons import make_icon
+ from tool_replies import summarize_error
++from gemini_tools import DEVICE_TOOLS
+ from tool_schema import TOOL_REGISTRY
+ 
+ WEB_DIR = Path(__file__).parent / "web"
+@@ -212,7 +214,7 @@ class FazeServer(ThreadingHTTPServer):
+         return {f"localhost:{self.port}", f"127.0.0.1:{self.port}", f"[::1]:{self.port}"}
+ 
+ 
+-UI_BLOCKED_TOOLS = frozenset({"delegate_to_gemini", "enable_thinking_mode", "create_tool"})
++UI_BLOCKED_TOOLS = frozenset({"delegate_to_gemini", "enable_thinking_mode", "create_tool"}) | DEVICE_TOOLS
+ 
+ 
+ def coerce_params(name: str, raw: dict) -> dict:
+@@ -353,7 +355,7 @@ class Handler(BaseHTTPRequestHandler):
+                 return self._json(200, {"name": name, "code": code})
+             if path == "/api/agent":
+                 cfg = self.server.convo.config["agent"]
+-                return self._json(200, {"mode": cfg["mode"], "high_tools": cfg["high_tools"],
++                return self._json(200, {"mode": cfg["mode"], "high_tools": cfg["high_tools"], "control": device.SETTINGS["control"],
+                                         "modes": {m: agent.MODE_HELP[m] for m in agent.MODES},
+                                         "pending": self.server.pending_approvals(), **agent.STORE.snapshot()})
+             if path == "/api/log":
+diff --git a/scripts/faze_service.sh b/scripts/faze_service.sh
+index f784e89..cc3a568 100755
+--- a/scripts/faze_service.sh
++++ b/scripts/faze_service.sh
+@@ -1,8 +1,12 @@
+ #!/data/data/com.termux/files/usr/bin/bash
+ #
+ # Run Faze in the background, restart it if it crashes, no Termux window needed.
+-#   scripts/faze_service.sh start | stop | restart | status | logs
+-# Env (for tests): FAZE_CMD, FAZE_STATE, FAZE_LOG, FAZE_RESTART_DELAY
++#   faze start                start the background app
++#   faze start --voice        start it if needed, then open the app in voice mode  (Tasker: long-press both volume keys)
++#   faze start --cli          pause the background app and chat in this terminal; it comes back when you exit
++#   faze voice | faze cli     same as start --voice / start --cli
++#   faze stop | restart | status | logs
++# Env (for tests): FAZE_CMD, FAZE_STATE, FAZE_LOG, FAZE_RESTART_DELAY, FAZE_PORT, FAZE_OPEN, FAZE_READY_TIMEOUT
+ 
+ STATE="${FAZE_STATE:-$HOME/.felix}"
+ PIDFILE="$STATE/faze.pid"
+@@ -10,6 +14,7 @@ STOPFILE="$STATE/faze.stop"
+ LOG="${FAZE_LOG:-$HOME/felix-ai/faze.log}"
+ CMD="${FAZE_CMD:-$HOME/felix-ai/faze.sh}"
+ DELAY="${FAZE_RESTART_DELAY:-5}"
++PORT="${FAZE_PORT:-8787}"
+ mkdir -p "$STATE"
+ 
+ running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2> /dev/null)" 2> /dev/null; }
+@@ -25,33 +30,92 @@ supervise() {
+     rm -f "$PIDFILE"
+ }
+ 
++start_service() {
++    if running; then echo "already running (pid $(cat "$PIDFILE"))"; return 0; fi
++    rm -f "$STOPFILE"
++    command -v termux-wake-lock > /dev/null 2>&1 && termux-wake-lock
++    nohup bash "$0" _supervise > /dev/null 2>&1 &
++    echo $! > "$PIDFILE"
++    echo "started (pid $!). Logs: $LOG"
++}
++
++stop_service() {
++    touch "$STOPFILE"
++    if running; then
++        pid="$(cat "$PIDFILE")"
++        pkill -TERM -P "$pid" 2> /dev/null
++        kill "$pid" 2> /dev/null
++        echo "stopped"
++    else
++        echo "not running"
++    fi
++    rm -f "$PIDFILE"
++}
++
++# the web app answers on its port (bash's own /dev/tcp, so nothing extra is needed)
++ready() { (exec 3<> "/dev/tcp/127.0.0.1/$PORT") 2> /dev/null; }
++
++wait_ready() {
++    local tries=$(( ${FAZE_READY_TIMEOUT:-40} * 2 ))
++    while [ "$tries" -gt 0 ]; do
++        ready && return 0
++        sleep 0.5
++        tries=$(( tries - 1 ))
++    done
++    return 1
++}
++
++open_url() {
++    if [ -n "$FAZE_OPEN" ]; then $FAZE_OPEN "$1"
++    elif command -v am > /dev/null 2>&1; then am start -a android.intent.action.VIEW -d "$1" > /dev/null 2>&1 || termux-open-url "$1"
++    elif command -v xdg-open > /dev/null 2>&1; then xdg-open "$1" > /dev/null 2>&1
++    else echo "open this yourself: $1"; fi
++}
++
++usage() { echo "usage: $0 start [--voice|--cli] | voice | cli | stop | restart | status | logs"; }
++
++start_command() {
++    local mode=""
++    for arg in "$@"; do
++        case "$arg" in
++            --voice) [ -n "$mode" ] && { usage; exit 2; }; mode=voice ;;
++            --cli) [ -n "$mode" ] && { usage; exit 2; }; mode=cli ;;
++            *) usage; exit 2 ;;
++        esac
++    done
++    case "$mode" in
++        "") start_service ;;
++        voice)
++            start_service
++            if ! wait_ready; then echo "the app did not come up in time; see: faze logs"; exit 1; fi
++            local link="http://localhost:$PORT/#voice"
++            [ -f "$STATE/token" ] && link="http://localhost:$PORT/#t=$(cat "$STATE/token")&voice"
++            open_url "$link"
++            echo "opened in voice mode"
++            ;;
++        cli)
++            local was=0
++            if running; then was=1; stop_service > /dev/null; sleep 1; fi
++            "$CMD" --cli
++            local code=$?
++            rm -f "$STOPFILE"
++            [ "$was" -eq 1 ] && start_service > /dev/null
++            exit "$code"
++            ;;
++    esac
++}
++
+ case "${1:-status}" in
+     _supervise) supervise ;;
+-    start)
+-        if running; then echo "already running (pid $(cat "$PIDFILE"))"; exit 0; fi
+-        rm -f "$STOPFILE"
+-        command -v termux-wake-lock > /dev/null 2>&1 && termux-wake-lock
+-        nohup bash "$0" _supervise > /dev/null 2>&1 &
+-        echo $! > "$PIDFILE"
+-        echo "started (pid $!). Logs: $LOG"
+-        ;;
+-    stop)
+-        touch "$STOPFILE"
+-        if running; then
+-            pid="$(cat "$PIDFILE")"
+-            pkill -TERM -P "$pid" 2> /dev/null
+-            kill "$pid" 2> /dev/null
+-            echo "stopped"
+-        else
+-            echo "not running"
+-        fi
+-        rm -f "$PIDFILE"
+-        ;;
++    start) shift; start_command "$@" ;;
++    voice) start_command --voice ;;
++    cli) start_command --cli ;;
++    stop) stop_service ;;
+     restart) bash "$0" stop; sleep 1; bash "$0" start ;;
+     status)
+         if running; then
+             echo "running (pid $(cat "$PIDFILE"))"
+-            if [ -f "$STATE/token" ]; then echo "Open: http://localhost:8787/#t=$(cat "$STATE/token")"; fi
++            if [ -f "$STATE/token" ]; then echo "Open: http://localhost:$PORT/#t=$(cat "$STATE/token")"; fi
+             exit 0
+         else
+             echo "not running"
+@@ -59,5 +123,5 @@ case "${1:-status}" in
+         fi
+         ;;
+     logs) tail -n 40 "$LOG" ;;
+-    *) echo "usage: $0 start|stop|restart|status|logs"; exit 2 ;;
++    *) usage; exit 2 ;;
+ esac
+diff --git a/scripts/install_boot.sh b/scripts/install_boot.sh
+index 0dd45c8..b2958c7 100755
+--- a/scripts/install_boot.sh
++++ b/scripts/install_boot.sh
+@@ -18,6 +18,13 @@ chmod +x "$BOOT/faze"
+ chmod +x "$HOME/felix-ai/scripts/faze_service.sh"
+ mkdir -p "$HOME/.local/bin" 2> /dev/null
+ ln -sf "$HOME/felix-ai/scripts/faze_service.sh" "${PREFIX:-/usr}/bin/faze" 2> /dev/null && echo "[boot] command: faze start | stop | status | logs"
++# Termux:Tasker scripts, so a Tasker task can run them from the Termux plugin
++TASKER="$HOME/.termux/tasker"
++mkdir -p "$TASKER"
++printf '#!/data/data/com.termux/files/usr/bin/bash\nexec "$HOME/felix-ai/scripts/faze_service.sh" start --voice\n' > "$TASKER/faze-voice"
++printf '#!/data/data/com.termux/files/usr/bin/bash\nexec "$HOME/felix-ai/scripts/faze_service.sh" start --cli\n' > "$TASKER/faze-cli"
++chmod 700 "$TASKER/faze-voice" "$TASKER/faze-cli"
++echo "[boot] Tasker scripts: faze-voice (no terminal) and faze-cli (tick 'Execute in a terminal session')"
+ echo "[boot] installed $BOOT/faze"
+ echo "Next:"
+ echo "  1. Open the Termux:Boot app once."

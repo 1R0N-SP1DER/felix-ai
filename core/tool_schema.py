@@ -23,6 +23,17 @@ TOOL_REGISTRY = {
     "enable_thinking_mode": {},
     "open_url": {"url": str},
     "open_app": {"app": str},
+    "list_apps": {"search": str},
+    # phone control (Gemini only, gated by /control; see device.py)
+    "screen_read": {},
+    "screen_look": {"question": str},
+    "tap": {"x": int, "y": int},
+    "tap_text": {"label": str},
+    "swipe": {"x1": int, "y1": int, "x2": int, "y2": int},
+    "type_text": {"content": str},
+    "press_key": {"key": str},
+    "listen": {"seconds": int},
+    "wait": {"seconds": int},
     "youtube_play": {"query": str},
 }
 
@@ -83,6 +94,8 @@ def validate_tool_call(candidate: dict) -> bool:
         value = parameters[param_name]
         if expected_type is float and isinstance(value, int) and not isinstance(value, bool):
             continue  # JSON has no int/float split; 10 is a fine number
+        if expected_type is int and isinstance(value, float) and value.is_integer():
+            continue  # and 540.0 is a fine pixel
         if not isinstance(value, expected_type):
             raise ToolCallValidationError(
                 f"Parameter '{param_name}' for tool '{tool_name}' must be "

@@ -17,12 +17,35 @@ GEMINI_MODEL = "gemini-3.1-flash-lite"
 _MODELS = {"chat": GEMINI_MODEL, "search": GEMINI_MODEL}
 
 
-def configure(chat: str = None, search: str = None) -> None:
-    """Pick the model for normal requests and for Google Search grounding."""
+THINKING_LEVELS = ("minimal", "low", "medium", "high")
+_THINKING = {"level": "low"}  # Gemini 3 thinks before answering; less thinking means a much faster reply
+
+
+def configure(chat: str = None, search: str = None, thinking: str = None) -> None:
+    """Pick the models for normal requests and for Google Search grounding, and how much Gemini thinks
+    (minimal | low | medium | high, or anything else to leave it to the model)."""
     if chat:
         _MODELS["chat"] = chat
     if search:
         _MODELS["search"] = search
+    if thinking is not None:
+        _THINKING["level"] = thinking if thinking in THINKING_LEVELS else ""
+
+
+def _post(url: str, headers: dict, body: dict, timeout, stream: bool = False):
+    """requests.post with the thinking level attached. If the model rejects that field, drop it for good
+    and send the request again, so a model that does not know it still works."""
+    if _THINKING["level"]:
+        body = {**body, "generationConfig": {**body.get("generationConfig", {}), "thinkingConfig": {"thinkingLevel": _THINKING["level"]}}}
+    try:
+        response = requests.post(url, headers=headers, json=body, timeout=timeout, stream=stream)
+        if response.status_code == 400 and _THINKING["level"] and "think" in (response.text or "").lower():
+            _THINKING["level"] = ""
+            body.pop("generationConfig", None)
+            response = requests.post(url, headers=headers, json=body, timeout=timeout, stream=stream)
+    except requests.RequestException as e:
+        raise GeminiError(f"Network error calling Gemini: {e}")
+    return response
 
 
 def _base_url(grounded: bool = False) -> str:
@@ -106,10 +129,11 @@ def _extract_result(data: dict):
     except (KeyError, IndexError) as e:
         raise GeminiError(f"Unexpected Gemini response shape: {e} -- raw: {json.dumps(data)[:300]}")
 
-    for part in parts:
-        if "functionCall" in part:
-            fc = part["functionCall"]
-            return {"type": "function_call", "name": fc["name"], "args": fc.get("args", {})}
+    calls = [{"type": "function_call", "name": p["functionCall"]["name"], "args": p["functionCall"].get("args", {})}
+             for p in parts if "functionCall" in p]
+    if calls:
+        # the first call keeps the old shape; "calls" carries every call when Gemini asked for several at once
+        return {**calls[0], "calls": calls} if len(calls) > 1 else calls[0]
 
     text = "".join(p.get("text", "") for p in parts)
     if not text:
@@ -135,20 +159,32 @@ def ask_gemini(system_message: str, conversation_messages: list, tools_schema: l
     if use_search_grounding:
         body["tools"] = [{"google_search": {}}]
 
-    try:
-        response = requests.post(
-            f"{_base_url(use_search_grounding)}:generateContent",
-            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
-            json=body,
-            timeout=timeout,
-        )
-    except requests.RequestException as e:
-        raise GeminiError(f"Network error calling Gemini: {e}")
+    response = _post(f"{_base_url(use_search_grounding)}:generateContent",
+                     {"Content-Type": "application/json", "x-goog-api-key": api_key}, body, timeout)
 
     if response.status_code != 200:
         raise _http_error(response)
 
     return _extract_result(response.json())
+
+
+def ask_media(prompt: str, data: bytes, mime: str, timeout: float = 60.0) -> str:
+    """Ask Gemini about an image or a sound clip. Returns its text answer."""
+    import base64
+    if os.environ.get("FAZE_GEMINI_DISABLED") == "1":
+        raise GeminiError("Gemini layer is disabled in config (gemini_enabled=false).")
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise GeminiError("GEMINI_API_KEY is not set in the environment.")
+    body = {"contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": mime, "data": base64.b64encode(data).decode()}}]}]}
+    response = _post(f"{_base_url()}:generateContent", {"Content-Type": "application/json", "x-goog-api-key": api_key}, body, timeout)
+    if response.status_code != 200:
+        raise _http_error(response)
+    try:
+        parts = response.json()["candidates"][0]["content"]["parts"]
+    except (KeyError, IndexError, ValueError):
+        return ""
+    return "".join(p.get("text", "") for p in parts).strip()
 
 
 TRANSCRIBE_PROMPT = ("Transcribe the speech in this audio word for word. Reply with only the words spoken, "
@@ -191,16 +227,8 @@ def ask_gemini_stream(system_message: str, conversation_messages: list, tools_sc
     if tools_schema:
         body["tools"] = [{"functionDeclarations": _tools_to_function_declarations(tools_schema)}]
 
-    try:
-        response = requests.post(
-            f"{_base_url()}:streamGenerateContent?alt=sse",
-            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
-            json=body,
-            stream=True,
-            timeout=timeout,
-        )
-    except requests.RequestException as e:
-        raise GeminiError(f"Network error calling Gemini: {e}")
+    response = _post(f"{_base_url()}:streamGenerateContent?alt=sse",
+                     {"Content-Type": "application/json", "x-goog-api-key": api_key}, body, timeout, stream=True)
 
     if response.status_code != 200:
         raise _http_error(response)

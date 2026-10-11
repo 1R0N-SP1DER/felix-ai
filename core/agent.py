@@ -200,7 +200,9 @@ def _limits(timeout):
         try:
             import resource
             resource.setrlimit(resource.RLIMIT_CPU, (int(timeout) + 2, int(timeout) + 2))
-            resource.setrlimit(resource.RLIMIT_AS, (768 * 1024 * 1024, 768 * 1024 * 1024))
+            # Soft limit only: faze_run lifts it for the commands it starts. A hard cap here is inherited by
+            # Android's own binaries, whose CFI shadow mapping then fails ("MapShadow CHECK p != MAP_FAILED").
+            resource.setrlimit(resource.RLIMIT_AS, (768 * 1024 * 1024, resource.RLIM_INFINITY))
             resource.setrlimit(resource.RLIMIT_FSIZE, (8 * 1024 * 1024, 8 * 1024 * 1024))
         except (ImportError, ValueError, OSError):
             pass
@@ -471,7 +473,8 @@ def create_tool_declaration() -> dict:
 
 
 def gemini_schema(config: dict) -> list:
-    schema = gemini_tools.build_gemini_tools_schema()
+    import device
+    schema = gemini_tools.build_gemini_tools_schema(device=device.SETTINGS["control"] != "off")
     if config.get("agent", {}).get("mode", "ask") != "off":
         schema.append(create_tool_declaration())
     return schema
@@ -481,20 +484,33 @@ def local_schema() -> list:
     return gemini_tools.build_local_tools_schema()
 
 
+CONTROL_NOTE = (
+    "\nYou can operate the phone. Open the app with open_app, wait 1 to 2 seconds, then screen_read to see the labelled elements "
+    "and their positions; use tap_text with a label, or tap with coordinates. When screen_read does not show what you need (a camera "
+    "preview, an unlabelled shutter button), use screen_look and ask where it is. Check with screen_read or screen_look after each "
+    "important step. In most camera apps press_key volume_down also takes the photo. listen lets you hear through the microphone. "
+    "If something blocks you (a lock screen, a permission dialog, a login), stop and tell the user. Never type passwords or payment "
+    "details, and never send messages, buy things or delete things without the user saying so in this request.\n")
+
+
 def agent_note(config: dict) -> str:
+    import device
     cfg = config.get("agent", {})
+    if device.SETTINGS["control"] != "off" and cfg.get("mode", "ask") == "off":
+        return CONTROL_NOTE
     if cfg.get("mode", "ask") == "off":
         return ""
     high = "Higher-level tools are allowed." if cfg.get("high_tools") else "Higher-level tools are NOT allowed: use pure computation only."
     return ("\nYou can finish tasks in several steps. When the user asks for something none of your tools can do, never say you "
             "can't: build the tool with create_tool, then call it. Check the existing tools first; do not recreate one that exists. "
             "If a tool errors, read the error, fix the code and call create_tool again with the same name (up to two fixes) before "
-            "telling the user what went wrong, quoting the exact error. "
+            "telling the user what went wrong, quoting the exact error. When two steps do not depend on each other, ask for both tools in the same reply. "
             "Your tools run as Python 3 on the user's rooted Android phone inside Termux, not on a desktop. To run a command, call "
             "the built-in faze_run(['am', 'start', '-a', 'android.intent.action.VIEW', '-d', URL]) (add root=True for su). It returns "
             "the output text, raises an error with the real message, and already handles Android's linker (CFI) crash, so do not import "
             "subprocess. Examples: ['settings', 'put', 'system', 'screen_brightness', '120'] and ['screencap', '-p', PATH] need root=True; "
-            "['termux-notification', '--title', T]. Using faze_run makes the tool higher-level. " + high + "\n")
+            "['termux-notification', '--title', T]. Using faze_run makes the tool higher-level. " + high + "\n"
+            + (CONTROL_NOTE if device.SETTINGS["control"] != "off" else ""))
 
 
 def custom_tools_text() -> str:

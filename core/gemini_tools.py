@@ -21,7 +21,17 @@ TOOL_DESCRIPTIONS = {
     "search_web": "Call this for current, real-world information like news or live facts. Performs grounded web search. Never answer from memory.",
     "open_url": "Call this when the user asks to open a link or website. Opens the http(s) link on the device.",
     "open_app": "Call this when the user asks to open, launch or start an app (YouTube, Spotify, Chrome, Settings...). Launches it by name.",
+    "list_apps": "Call this to see which apps are installed on the phone, optionally filtered by name. Use it when open_app cannot find an app.",
     "youtube_play": "Call this when the user asks to play, watch or find a YouTube video or a channel's latest video. Searches YouTube and starts the video.",
+    "screen_read": "Call this to see what is on the phone screen right now: every labelled element with its position. Use it before tapping and to check the result of an action.",
+    "screen_look": "Call this to look at a screenshot of the screen and answer a question about it, for things screen_read cannot show (a camera preview, a game, an unlabelled button). Ask it for coordinates when you need to tap something.",
+    "tap": "Call this to tap the screen at pixel coordinates x,y.",
+    "tap_text": "Call this to tap the on-screen element whose label contains the given text, for example Shutter or Search.",
+    "swipe": "Call this to swipe from one point to another, for example to scroll.",
+    "type_text": "Call this to type plain text into the focused field.",
+    "press_key": "Call this to press a hardware key: home, back, enter, recent, volume_down, volume_up, camera, delete, tab, search, up, down, left, right.",
+    "listen": "Call this to listen through the microphone for a few seconds and report what is said or heard.",
+    "wait": "Call this to wait 1 to 10 seconds, for example after opening an app so it can finish loading.",
 }
 
 
@@ -33,6 +43,14 @@ PARAM_DESCRIPTIONS = {
     "text": "the exact text to copy to the clipboard",
     "url": "the full link, starting with https://",
     "app": "the app's name, for example YouTube or Spotify",
+    "search": "part of an app's name to filter by, or a single space for every app",
+    "question": "what to find out about the screenshot; ask for x,y pixel coordinates when you need to tap something",
+    "label": "text or description of the element, for example Shutter",
+    "content": "the plain text to type",
+    "key": "the key to press, for example back or volume_down",
+    "seconds": "how many seconds",
+    "x": "horizontal pixel position", "y": "vertical pixel position",
+    "x1": "start x", "y1": "start y", "x2": "end x", "y2": "end y",
     "query": "what to search for; for a channel's newest video use the channel name plus the word latest",
 }
 
@@ -52,6 +70,9 @@ def _type_to_json_schema(python_type):
 # Tools Gemini must never be offered: it cannot delegate to itself, and
 # thinking mode is a local-model-only signal.
 GEMINI_EXCLUDED = {"delegate_to_gemini", "enable_thinking_mode"}
+
+# Phone control: offered to Gemini only while /control is on or ask, and never to the small local models.
+DEVICE_TOOLS = frozenset({"screen_read", "screen_look", "tap", "tap_text", "swipe", "type_text", "press_key", "listen", "wait"})
 
 
 def build_tools_schema(exclude=()) -> list:
@@ -81,10 +102,10 @@ def build_tools_schema(exclude=()) -> list:
     return schema
 
 
-def build_gemini_tools_schema() -> list:
-    return build_tools_schema(GEMINI_EXCLUDED)
+def build_gemini_tools_schema(device: bool = False) -> list:
+    return build_tools_schema(GEMINI_EXCLUDED | (set() if device else DEVICE_TOOLS))
 
 
 def build_local_tools_schema() -> list:
-    """The local model gets every tool, including delegate_to_gemini."""
-    return build_tools_schema()
+    """The local model gets every tool except phone control, including delegate_to_gemini."""
+    return build_tools_schema(DEVICE_TOOLS)
