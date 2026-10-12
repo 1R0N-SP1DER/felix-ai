@@ -35,6 +35,7 @@ import agent
 import device
 import stt
 import tts
+import net_status
 import wake
 from voice_session import VoiceSession
 from icons import make_icon
@@ -449,6 +450,7 @@ class Handler(BaseHTTPRequestHandler):
             "turns": max(0, len(convo.messages) - 1),
             "think": convo.config["reasoning"]["mode"],
             "think_level": convo.config["reasoning"]["level"],
+            "online": net_status.last(),
             "gemini_thinking": convo.config["gemini"]["thinking"],
             "stt": {"server": stt.available(convo.config), "pref": convo.config["voice"]["stt"],
                     "reason": stt.missing_reason(convo.config)},
@@ -512,7 +514,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.server.stt_lock.acquire(blocking=False):
             return self._error(409, "still transcribing the last clip")
         try:
-            text = stt.transcribe_wav(data, self.server.convo.config)
+            text = stt.transcribe_best(data, self.server.convo.config)
             action_log.log_action("stt", "transcribe", {"bytes": len(data)}, f"{len(text)} chars", 0, echo=False)
             self._json(200, {"text": text})
         except stt.TranscribeError as e:

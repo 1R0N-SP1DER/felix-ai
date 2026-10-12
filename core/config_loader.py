@@ -32,6 +32,7 @@ DEFAULTS = {
     "reasoning": {"mode": "auto", "level": "auto"},  # level: auto|off|low|medium|high|max; mode (auto|on|off) is derived from it
     "voice": {"stt": "auto", "speak": True, "listen_timeout": 8,  # stt: auto | server | browser
               "overlay_task": "Faze Overlay", "overlay_close_task": "Faze Overlay Close"},  # Tasker task names (empty: do not ask Tasker)
+    "net": {"check": True},                # probe connectivity so online services are used only when reachable
     "tts": {"engine": "system", "voice": "kore", "model": "gemini-3.1-flash-tts-preview"},
     "wake": {
         "enabled": False,
@@ -44,6 +45,7 @@ DEFAULTS = {
         "open_app": True,                  # open the app when it wakes and the app isn't open
     },
     "stt": {
+        "engine": "auto",                  # auto: Gemini when online, whisper when offline | gemini | whisper
         "bin": "~/whisper.cpp/build/bin/whisper-cli",
         "model_path": "~/models/ggml-tiny.en.bin",
         "threads": 4,
@@ -112,6 +114,8 @@ SETTINGS = {
     "wake.mic_cmd": (str, None),
     "wake.cooldown": (int, None),
     "wake.open_app": (bool, None),
+    "stt.engine": (str, ("auto", "gemini", "whisper")),
+    "net.check": (bool, None),
     "stt.bin": (str, None),
     "stt.model_path": (str, None),
     "stt.threads": (int, None),

@@ -1,0 +1,1135 @@
+diff --git a/core/config_loader.py b/core/config_loader.py
+index de55f53..7adea2f 100644
+--- a/core/config_loader.py
++++ b/core/config_loader.py
+@@ -32,6 +32,7 @@ DEFAULTS = {
+     "reasoning": {"mode": "auto", "level": "auto"},  # level: auto|off|low|medium|high|max; mode (auto|on|off) is derived from it
+     "voice": {"stt": "auto", "speak": True, "listen_timeout": 8,  # stt: auto | server | browser
+               "overlay_task": "Faze Overlay", "overlay_close_task": "Faze Overlay Close"},  # Tasker task names (empty: do not ask Tasker)
++    "net": {"check": True},                # probe connectivity so online services are used only when reachable
+     "tts": {"engine": "system", "voice": "kore", "model": "gemini-3.1-flash-tts-preview"},
+     "wake": {
+         "enabled": False,
+@@ -44,6 +45,7 @@ DEFAULTS = {
+         "open_app": True,                  # open the app when it wakes and the app isn't open
+     },
+     "stt": {
++        "engine": "auto",                  # auto: Gemini when online, whisper when offline | gemini | whisper
+         "bin": "~/whisper.cpp/build/bin/whisper-cli",
+         "model_path": "~/models/ggml-tiny.en.bin",
+         "threads": 4,
+@@ -112,6 +114,8 @@ SETTINGS = {
+     "wake.mic_cmd": (str, None),
+     "wake.cooldown": (int, None),
+     "wake.open_app": (bool, None),
++    "stt.engine": (str, ("auto", "gemini", "whisper")),
++    "net.check": (bool, None),
+     "stt.bin": (str, None),
+     "stt.model_path": (str, None),
+     "stt.threads": (int, None),
+diff --git a/core/net_status.py b/core/net_status.py
+new file mode 100644
+index 0000000..3101bd7
+--- /dev/null
++++ b/core/net_status.py
+@@ -0,0 +1,90 @@
++"""
++felix-ai Core -- net_status.py
++Is the internet reachable right now? One cheap cached answer, so callers can choose the fast online service or the
++offline fallback without waiting for a request timeout.
++
++  online(config)   probe if the cached answer is stale (online: 20 s, offline: 4 s), else the cached answer
++  last()           the cached answer without probing: True, False, or None (never checked)
++  mark_offline()   a real request just failed with a network error: believe it immediately
++  mark_online()    a real request just worked
++
++The probe connects to IP literals first (no DNS to hang on), then to the Gemini host itself. `net.check = false`
++turns probing off and online() always says True (a network that blocks the probes but reaches Gemini).
++"""
++
++import socket
++import threading
++import time
++
++PROBES = (("1.1.1.1", 443), ("8.8.8.8", 53))
++HOST = ("generativelanguage.googleapis.com", 443)
++ONLINE_TTL = 20.0
++OFFLINE_TTL = 4.0
++PROBE_TIMEOUT = 1.2
++
++_state = {"online": None, "at": 0.0}
++_lock = threading.Lock()
++
++
++def _connect(addr, timeout: float) -> bool:
++    try:
++        socket.create_connection(addr, timeout=timeout).close()
++        return True
++    except OSError:
++        return False
++
++
++def _resolve_and_connect(host: str, port: int, timeout: float) -> bool:
++    """getaddrinfo ignores socket timeouts, so it runs in a thread we are willing to abandon."""
++    found = []
++
++    def work():
++        try:
++            found.append(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)[0][4])
++        except OSError:
++            pass
++    t = threading.Thread(target=work, daemon=True)
++    t.start()
++    t.join(timeout)
++    if not found:
++        return False
++    return _connect(found[0][:2], timeout)
++
++
++def probe(connect=_connect, resolve=_resolve_and_connect) -> bool:
++    for addr in PROBES:
++        if connect(addr, PROBE_TIMEOUT):
++            return True
++    return resolve(HOST[0], HOST[1], PROBE_TIMEOUT * 2)
++
++
++def online(config: dict = None, now=time.monotonic, probe_fn=None) -> bool:
++    if config is not None and not config.get("net", {}).get("check", True):
++        return True
++    with _lock:
++        known, at = _state["online"], _state["at"]
++        if known is not None and now() - at < (ONLINE_TTL if known else OFFLINE_TTL):
++            return known
++    result = (probe_fn or probe)()
++    with _lock:
++        _state["online"], _state["at"] = result, now()
++    return result
++
++
++def last():
++    return _state["online"]
++
++
++def mark_offline(now=time.monotonic) -> None:
++    with _lock:
++        _state["online"], _state["at"] = False, now()
++
++
++def mark_online(now=time.monotonic) -> None:
++    with _lock:
++        _state["online"], _state["at"] = True, now()
++
++
++def reset() -> None:
++    with _lock:
++        _state["online"], _state["at"] = None, 0.0
+diff --git a/core/orchestrator.py b/core/orchestrator.py
+index b3f106b..b67c606 100644
+--- a/core/orchestrator.py
++++ b/core/orchestrator.py
+@@ -34,6 +34,7 @@ import action_log
+ from action_log import log_action
+ from config_loader import (load_config, get_llm_url, describe_settings,
+                            set_user_setting, unset_user_setting, SETTINGS, load_user_overrides)
++import net_status
+ from local_server import ServerManager
+ from memory_store import init_db, log_message
+ from memory_recall import setup_fts
+@@ -1211,6 +1212,8 @@ class Conversation:
+             if not order or not self._gemini_unreachable(e):
+                 raise
+             cause = summarize_error(e)
++            if str(e).startswith("Network error"):
++                net_status.mark_offline()
+             self._gemini_down_until = max(self._gemini_down_until, now + 60)
+             log_action("gemini", "fallback", {}, f"{cause} -> {','.join(order)}", 0)
+             errors = [f"gemini: {cause}"]
+diff --git a/core/stt.py b/core/stt.py
+index a93b77f..87b856c 100644
+--- a/core/stt.py
++++ b/core/stt.py
+@@ -126,16 +126,46 @@ def _online_budget(config: dict, now) -> bool:
+     return True
+ 
+ 
++def transcribe_best(data: bytes, config: dict, now=time.monotonic, online=None) -> str:
++    """Speech to text for something you said on purpose: Gemini when the internet is reachable (fast and accurate),
++    whisper.cpp when it is not. No per-minute cap (that is for the always-on wake word). stt.engine=gemini never
++    falls back; stt.engine=whisper never goes online. `online` replaces the Gemini call (tests)."""
++    import net_status
++    check_wav(data)
++    engine = config.get("stt", {}).get("engine", "auto")
++    keyed = os.environ.get("FAZE_GEMINI_DISABLED") != "1" and bool(os.environ.get("GEMINI_API_KEY"))
++    if engine != "whisper" and keyed and now() >= _ONLINE["blocked_until"] and (online is not None or net_status.online(config)):
++        try:
++            from gemini_client import GeminiError, transcribe_audio
++            text = clean_text((online or transcribe_audio)(data))
++            net_status.mark_online()
++            return text
++        except GeminiError as e:
++            reason = str(e)
++            if reason.startswith("Network error"):
++                net_status.mark_offline()
++            if re.search(r"429|quota|rate", reason, re.IGNORECASE):
++                _ONLINE["blocked_until"] = now() + 300
++            if engine == "gemini":
++                raise TranscribeError(reason[:160])
++    elif engine == "gemini":
++        raise TranscribeError("online recognition is unavailable right now (no key, offline, or quota pause)")
++    return transcribe_wav(data, config)
++
++
+ def transcribe_wake(data: bytes, config: dict, now=time.monotonic, online=None) -> str:
+     """Wake-word recognition: Gemini first (about a second), whisper.cpp when offline, rate limited or
+     out of quota. engine=gemini never falls back; engine=whisper never goes online."""
+     engine = config.get("wake", {}).get("engine", "auto")
+-    if online_usable(config, now) and _online_budget(config, now):
++    import net_status
++    if online_usable(config, now) and (online is not None or net_status.online(config)) and _online_budget(config, now):
+         try:
+             from gemini_client import GeminiError, transcribe_audio
+             return clean_text((online or transcribe_audio)(data))
+         except GeminiError as e:
+             text = str(e)
++            if text.startswith("Network error"):
++                net_status.mark_offline()
+             if re.search(r"429|quota|rate", text, re.IGNORECASE):
+                 _ONLINE["blocked_until"] = now() + 300
+             if engine == "gemini":
+diff --git a/core/tests/overlay_smoke.js b/core/tests/overlay_smoke.js
+index 47dd50a..437aefd 100644
+--- a/core/tests/overlay_smoke.js
++++ b/core/tests/overlay_smoke.js
+@@ -61,6 +61,7 @@ function boot(hash) {
+   push({ reply: 'It is' }); await sleep(30); out.streaming = view();
+   push({ state: 'speaking', reply: 'It is half past four.' }); await sleep(30); out.speaking = view();
+   push({ state: 'done' }); await sleep(30); out.done = view();
++  push({ timings: { listen_ms: 1200, stt_ms: 800, first_token_ms: 1500, first_speech_ms: 1700, total_ms: 4000 } }); await sleep(30); out.doneTimings = view();
+   push({ state: 'error', error: 'no microphone' }); await sleep(30); out.error = view();
+ 
+   $('again').click(); await sleep(60);
+diff --git a/core/tests/test_patch16.py b/core/tests/test_patch16.py
+index 75b1572..3c8df2e 100644
+--- a/core/tests/test_patch16.py
++++ b/core/tests/test_patch16.py
+@@ -231,7 +231,7 @@ class VoiceBase(WebBase):
+         self.httpd.wake = self.listener
+         self.httpd.voice = self.voice = VoiceSession(self.httpd, popen=popen, run=lambda argv: self.launched.append(argv))
+         self.events = self.httpd.subscribe()
+-        p = mock.patch("stt.transcribe_wake", return_value="what is the time")
++        p = mock.patch("stt.transcribe_best", return_value="what is the time")
+         p.start()
+         self.addCleanup(p.stop)
+ 
+@@ -269,7 +269,10 @@ class TestVoiceExchange(VoiceBase):
+             done = self.wait_state("done")
+         send.assert_called_once_with("what is the time")
+         self.assertEqual((done["transcript"], done["reply"]), ("what is the time", "It is **half past** four."))
+-        self.assertEqual(self.states(), ["listening", "transcribing", "thinking", "thinking", "thinking", "speaking", "done"])
++        seen = self.states()
++        self.assertEqual([x for i, x in enumerate(seen) if i == 0 or x != seen[i - 1]],
++                         ["listening", "transcribing", "thinking", "speaking", "done"])
++
+         self.assertEqual(self.procs[0].argv, ["termux-tts-speak", "It is half past four."])
+         self.assertEqual(self.listener.holds, [True, False])  # wake word held off during, released after
+         self.assertEqual(self.listener.args[1], 8.0)
+@@ -305,13 +308,13 @@ class TestVoiceExchange(VoiceBase):
+         self.assertEqual(self.listener.holds, [True, False])
+ 
+     def test_unintelligible_audio(self):
+-        with mock.patch("stt.transcribe_wake", return_value="   "):
++        with mock.patch("stt.transcribe_best", return_value="   "):
+             self.voice.start()
+             self.assertEqual(self.wait_state("idle")["note"], "I did not catch that")
+ 
+     def test_transcription_failure_is_an_error_not_a_crash(self):
+         import stt
+-        with mock.patch("stt.transcribe_wake", side_effect=stt.TranscribeError("no engine")):
++        with mock.patch("stt.transcribe_best", side_effect=stt.TranscribeError("no engine")):
+             self.voice.start()
+             s = self.wait_state("error")
+         self.assertIn("no engine", s["error"])
+@@ -384,6 +387,9 @@ class TestVoiceStop(VoiceBase):
+         with self.say():
+             self.voice.start()
+             self.wait_state("speaking")
++            end = time.time() + 5
++            while time.time() < end and not self.procs:  # "speaking" is set as the first sentence is queued
++                time.sleep(0.02)
+             s = self.voice.stop()
+         self.assertEqual((s["state"], s["note"], s["active"]), ("idle", "Stopped", False))
+         end = time.time() + 3
+diff --git a/core/tests/test_patch18.py b/core/tests/test_patch18.py
+new file mode 100644
+index 0000000..1a946bb
+--- /dev/null
++++ b/core/tests/test_patch18.py
+@@ -0,0 +1,499 @@
++"""
++Patch 18: connectivity-aware speech recognition (Gemini when online, whisper when offline), speech that starts while
++the reply is still being written, and a latency readout for voice exchanges.
++
++    PYTHONPATH=. python3 -m unittest tests.test_patch18 -v
++"""
++
++import json
++import os
++import subprocess
++import sys
++import threading
++import time
++import unittest
++from unittest import mock
++
++CORE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++sys.path.insert(0, CORE)
++
++from tests.test_patch1 import Base  # noqa: E402
++from tests.test_patch6 import wav  # noqa: E402
++from tests.test_patch16 import VoiceBase, HAVE_JSDOM, run_node  # noqa: E402
++
++import config_loader  # noqa: E402
++import net_status  # noqa: E402
++import stt  # noqa: E402
++import wake  # noqa: E402
++from gemini_client import GeminiError  # noqa: E402
++from voice_session import SentenceStream, split_speakable  # noqa: E402
++
++CLIP = wake.wav_from_pcm(b"\x01\x02" * 1600)
++
++
++class Clock:
++    def __init__(self):
++        self.t = 100.0
++
++    def __call__(self):
++        return self.t
++
++
++# ---------------------------------------------------------------- net_status
++
++class TestNetStatus(unittest.TestCase):
++    def setUp(self):
++        net_status.reset()
++        self.addCleanup(net_status.reset)
++
++    def test_unknown_until_checked(self):
++        self.assertIsNone(net_status.last())
++
++    def test_online_answer_is_cached_for_a_while(self):
++        clock, calls = Clock(), []
++
++        def probe():
++            calls.append(1)
++            return True
++        self.assertTrue(net_status.online(now=clock, probe_fn=probe))
++        clock.t += net_status.ONLINE_TTL - 1
++        self.assertTrue(net_status.online(now=clock, probe_fn=probe))
++        self.assertEqual(len(calls), 1)
++        clock.t += 2
++        net_status.online(now=clock, probe_fn=probe)
++        self.assertEqual(len(calls), 2)
++
++    def test_offline_is_rechecked_sooner(self):
++        clock, calls = Clock(), []
++        results = iter([False, True])
++
++        def probe():
++            calls.append(1)
++            return next(results)
++        self.assertFalse(net_status.online(now=clock, probe_fn=probe))
++        clock.t += net_status.OFFLINE_TTL - 0.5
++        self.assertFalse(net_status.online(now=clock, probe_fn=probe))
++        self.assertEqual(len(calls), 1)
++        clock.t += 1
++        self.assertTrue(net_status.online(now=clock, probe_fn=probe))
++        self.assertEqual(net_status.last(), True)
++
++    def test_a_real_failure_is_believed_immediately(self):
++        clock = Clock()
++        net_status.online(now=clock, probe_fn=lambda: True)
++        net_status.mark_offline(now=clock)
++        self.assertFalse(net_status.online(now=clock, probe_fn=lambda: self.fail("should not probe while cached")))
++        net_status.mark_online(now=clock)
++        self.assertTrue(net_status.online(now=clock, probe_fn=lambda: self.fail("should not probe while cached")))
++
++    def test_check_can_be_turned_off(self):
++        self.assertTrue(net_status.online({"net": {"check": False}}, probe_fn=lambda: self.fail("must not probe")))
++
++    def test_probe_tries_ip_literals_before_dns(self):
++        tried = []
++
++        def connect(addr, timeout):
++            tried.append(addr)
++            return addr == net_status.PROBES[1]
++        self.assertTrue(net_status.probe(connect=connect, resolve=lambda *a: self.fail("no DNS needed")))
++        self.assertEqual(tried, list(net_status.PROBES))
++
++    def test_probe_falls_back_to_the_gemini_host_and_can_say_offline(self):
++        seen = []
++        self.assertTrue(net_status.probe(connect=lambda a, t: False, resolve=lambda h, p, t: seen.append(h) or True))
++        self.assertEqual(seen, [net_status.HOST[0]])
++        self.assertFalse(net_status.probe(connect=lambda a, t: False, resolve=lambda h, p, t: False))
++
++    def test_settings_exist(self):
++        self.assertEqual(config_loader.SETTINGS["stt.engine"], (str, ("auto", "gemini", "whisper")))
++        self.assertIn("net.check", config_loader.SETTINGS)
++        cfg = config_loader.load_config()
++        self.assertEqual((cfg["stt"]["engine"], cfg["net"]["check"]), ("auto", True))
++
++
++# ---------------------------------------------------------------- transcribe_best
++
++class TestTranscribeBest(unittest.TestCase):
++    def setUp(self):
++        net_status.reset()
++        stt._ONLINE["blocked_until"] = 0.0
++        self.addCleanup(net_status.reset)
++        self.addCleanup(lambda: stt._ONLINE.update(blocked_until=0.0))
++        env = mock.patch.dict(os.environ, {"GEMINI_API_KEY": "AQ.test"})
++        env.start()
++        self.addCleanup(env.stop)
++        os.environ.pop("FAZE_GEMINI_DISABLED", None)
++        w = mock.patch("stt.transcribe_wav", return_value="from whisper")
++        self.whisper = w.start()
++        self.addCleanup(w.stop)
++        self.cfg = config_loader.load_config()
++
++    def best(self, **kw):
++        return stt.transcribe_best(CLIP, self.cfg, **kw)
++
++    def test_online_uses_gemini_and_skips_whisper(self):
++        net_status.mark_online()
++        online = mock.Mock(return_value=" [BLANK_AUDIO] hello there ")
++        self.assertEqual(self.best(online=online), "hello there")
++        online.assert_called_once_with(CLIP)
++        self.whisper.assert_not_called()
++
++    def test_offline_goes_straight_to_whisper_without_trying_gemini(self):
++        net_status.mark_offline()
++        with mock.patch("gemini_client.transcribe_audio", side_effect=AssertionError("must not call Gemini")):
++            self.assertEqual(self.best(), "from whisper")
++        self.whisper.assert_called_once()
++
++    def test_a_network_error_falls_back_and_remembers_it(self):
++        net_status.mark_online()
++        online = mock.Mock(side_effect=GeminiError("Network error calling Gemini: timed out"))
++        self.assertEqual(self.best(online=online), "from whisper")
++        self.assertIs(net_status.last(), False)
++        with mock.patch("gemini_client.transcribe_audio", side_effect=AssertionError("cooling down")):
++            self.assertEqual(self.best(), "from whisper")  # the next clip does not wait on a dead connection
++
++    def test_quota_pauses_online_for_five_minutes(self):
++        net_status.mark_online()
++        clock = Clock()
++        online = mock.Mock(side_effect=GeminiError("Gemini returned 429: quota"))
++        self.assertEqual(self.best(online=online, now=clock), "from whisper")
++        online.reset_mock()
++        clock.t += 120
++        self.assertEqual(self.best(online=online, now=clock), "from whisper")
++        online.assert_not_called()
++        clock.t += 400
++        online.side_effect = None
++        online.return_value = "back online"
++        self.assertEqual(self.best(online=online, now=clock), "back online")
++
++    def test_engine_whisper_never_goes_online(self):
++        self.cfg["stt"]["engine"] = "whisper"
++        net_status.mark_online()
++        self.assertEqual(self.best(online=mock.Mock(side_effect=AssertionError("no"))), "from whisper")
++
++    def test_engine_gemini_never_falls_back(self):
++        self.cfg["stt"]["engine"] = "gemini"
++        net_status.mark_offline()
++        with self.assertRaises(stt.TranscribeError) as cm:
++            self.best()
++        self.assertIn("unavailable", str(cm.exception))
++        net_status.mark_online()
++        with self.assertRaises(stt.TranscribeError) as cm:
++            self.best(online=mock.Mock(side_effect=GeminiError("Gemini returned 500")))
++        self.assertIn("500", str(cm.exception))
++        self.whisper.assert_not_called()
++
++    def test_no_key_means_whisper(self):
++        os.environ.pop("GEMINI_API_KEY")
++        net_status.mark_online()
++        self.assertEqual(self.best(online=mock.Mock(side_effect=AssertionError("no"))), "from whisper")
++
++    def test_bad_audio_is_rejected_before_anything_runs(self):
++        with self.assertRaises(stt.TranscribeError):
++            stt.transcribe_best(b"not a wav", self.cfg)
++        self.whisper.assert_not_called()
++
++    def test_wake_word_also_skips_gemini_when_offline(self):
++        net_status.mark_offline()
++        with mock.patch("stt.available", return_value=True), \
++                mock.patch("gemini_client.transcribe_audio", side_effect=AssertionError("must not call Gemini")):
++            self.assertEqual(stt.transcribe_wake(CLIP, self.cfg), "from whisper")
++
++    def test_wake_word_network_error_marks_offline(self):
++        net_status.mark_online()
++        with mock.patch("stt.available", return_value=True):
++            stt.transcribe_wake(CLIP, self.cfg, online=mock.Mock(side_effect=GeminiError("Network error calling Gemini: x")))
++        self.assertIs(net_status.last(), False)
++
++
++class TestOrchestratorMarksOffline(Base):
++    def setUp(self):
++        super().setUp()
++        net_status.reset()
++        self.addCleanup(net_status.reset)
++
++    def test_gemini_network_failure_marks_the_connection_down(self):
++        c = self.convo()
++        c.handle_command("/model gemini")
++        net_status.mark_online()
++        with mock.patch("orchestrator.ask_gemini", side_effect=GeminiError("Network error calling Gemini: no route")):
++            c.send("hello")
++        self.assertIs(net_status.last(), False)
++
++    def test_other_gemini_errors_do_not(self):
++        c = self.convo()
++        c.handle_command("/model gemini")
++        net_status.mark_online()
++        with mock.patch("orchestrator.ask_gemini", side_effect=GeminiError("Gemini returned 429: quota")):
++            c.send("hello")
++        self.assertIs(net_status.last(), True)
++
++
++# ---------------------------------------------------------------- the app's mic upload
++
++from tests.test_patch5 import WebBase  # noqa: E402
++
++
++class TestAppTranscribeIsOnlineFirst(WebBase):
++    def setUp(self):
++        super().setUp()
++        net_status.reset()
++        self.addCleanup(net_status.reset)
++        env = mock.patch.dict(os.environ, {"GEMINI_API_KEY": "AQ.test"})
++        env.start()
++        self.addCleanup(env.stop)
++        os.environ.pop("FAZE_GEMINI_DISABLED", None)
++
++    def post(self):
++        return self.request("POST", "/api/transcribe", body=wav(), headers={"Content-Type": "audio/wav"})
++
++    def test_online_the_upload_goes_to_gemini(self):
++        net_status.mark_online()
++        with mock.patch("gemini_client.transcribe_audio", return_value="hello from gemini"), \
++                mock.patch("stt.transcribe_wav", side_effect=AssertionError("whisper not needed")):
++            resp, body = self.post()
++        self.assertEqual((resp.status, json.loads(body)), (200, {"text": "hello from gemini"}))
++
++    def test_offline_the_upload_goes_to_whisper(self):
++        net_status.mark_offline()
++        with mock.patch("gemini_client.transcribe_audio", side_effect=AssertionError("offline")), \
++                mock.patch("stt.transcribe_wav", return_value="from whisper"):
++            resp, body = self.post()
++        self.assertEqual((resp.status, json.loads(body)), (200, {"text": "from whisper"}))
++
++    def test_status_reports_what_is_known_without_probing(self):
++        self.assertIsNone(self.jget("/api/status")[1]["online"])
++        net_status.mark_online()
++        self.assertIs(self.jget("/api/status")[1]["online"], True)
++        net_status.mark_offline()
++        self.assertIs(self.jget("/api/status")[1]["online"], False)
++
++
++# ---------------------------------------------------------------- sentence splitting
++
++class TestSentenceStream(unittest.TestCase):
++    def feed_all(self, pieces):
++        s, out = SentenceStream(), []
++        for p in pieces:
++            out.append(s.feed(p))
++        return s, out
++
++    def test_sentences_come_out_as_they_complete(self):
++        s, out = self.feed_all(["The weather today is", " mild and clear. ", "Tomorrow it will rain", " in the afternoon. ", "Bring"])
++        self.assertEqual(out, [[], ["The weather today is mild and clear."], [], ["Tomorrow it will rain in the afternoon."], []])
++        self.assertEqual(s.finish(), ["Bring"])
++
++    def test_a_sentence_end_needs_a_space_after_it(self):
++        s, out = self.feed_all(["Version 3.5 is out", " and works fine."])
++        self.assertEqual(out, [[], []])  # no break inside 3.5, none until a space follows the final full stop
++        self.assertEqual(s.finish(), ["Version 3.5 is out and works fine."])
++
++    def test_short_fragments_wait_for_the_next_sentence(self):
++        s, out = self.feed_all(["Yes. ", "That is correct and complete. "])
++        self.assertEqual(out[0], [])
++        self.assertEqual(out[1], ["Yes. That is correct and complete."])
++
++    def test_newlines_end_a_line_even_without_punctuation(self):
++        s, out = self.feed_all(["- first item\n", "- second item\n"])
++        self.assertEqual(out, [["- first item"], ["- second item"]])
++
++    def test_code_blocks_are_said_once_and_held_while_open(self):
++        s, out = self.feed_all(["Here is the fix for you. ", "```py\nprint(1)", "\n``` ", "And that is all of it. "])
++        self.assertEqual(out[0], ["Here is the fix for you."])
++        self.assertEqual(out[1], [])
++        self.assertEqual(out[2], [])
++        self.assertTrue(any("Code omitted." in x for x in out[3]))
++        self.assertEqual(split_speakable("open ```code never closed", final=True)[0], ["open"])
++
++    def test_reset_forgets_everything(self):
++        s, _ = self.feed_all(["Something that will be dropped. "])
++        s.reset()
++        self.assertEqual(s.feed("A fresh start with a full sentence. "), ["A fresh start with a full sentence."])
++
++    def test_finish_never_repeats(self):
++        s, _ = self.feed_all(["One whole sentence right here. ", "tail"])
++        self.assertEqual(s.finish(), ["tail"])
++        self.assertEqual(s.finish(), [])
++
++
++# ---------------------------------------------------------------- speech while generating
++
++class GateProc:
++    """A speech process that runs until released."""
++    def __init__(self, argv):
++        self.argv, self.released, self.terminated = argv, threading.Event(), False
++
++    def poll(self):
++        if self.terminated:
++            return -15
++        return 0 if self.released.is_set() else None
++
++    def terminate(self):
++        self.terminated = True
++
++
++class StreamingVoiceBase(VoiceBase):
++    def setUp(self):
++        super().setUp()
++        self.gates = []
++
++        def popen(argv, **kw):
++            self.gates.append(GateProc(argv))
++            return self.gates[-1]
++        self.voice._popen = popen
++
++    def wait_for(self, cond, what, seconds=5):
++        end = time.time() + seconds
++        while time.time() < end:
++            if cond():
++                return
++            time.sleep(0.02)
++        self.fail(f"timed out waiting for {what}; gates={[g.argv for g in self.gates]}")
++
++    def release_all(self):
++        for g in self.gates:
++            g.released.set()
++
++
++class TestSpeechWhileGenerating(StreamingVoiceBase):
++    def test_first_sentence_is_spoken_before_the_reply_has_finished(self):
++        seen = {}
++        proceed = threading.Event()
++
++        def send(text):
++            self.convo.on_token("text", "The answer is forty two, as expected. ")
++            self.wait_for(lambda: self.gates, "first sentence to be spoken")
++            seen["spoken_mid_reply"] = self.gates[0].argv[1]
++            seen["state_mid_reply"] = self.voice.state()["state"]
++            self.gates[0].released.set()
++            self.convo.on_token("text", "Ask me anything else.")
++            proceed.set()
++            return "The answer is forty two, as expected. Ask me anything else."
++        with mock.patch.object(self.convo, "send", side_effect=send):
++            self.voice.start()
++            self.wait_for(proceed.is_set, "reply to continue")
++            self.wait_for(lambda: len(self.gates) == 2, "tail to be spoken")
++            self.gates[1].released.set()
++            done = self.wait_state("done")
++        self.assertEqual(seen["spoken_mid_reply"], "The answer is forty two, as expected.")
++        self.assertEqual(seen["state_mid_reply"], "speaking")  # while the model is still writing
++        self.assertEqual(self.gates[1].argv[1], "Ask me anything else.")
++        self.assertEqual(done["reply"], "The answer is forty two, as expected. Ask me anything else.")
++
++    def test_sentences_that_pile_up_are_said_together(self):
++        proceed = threading.Event()
++
++        def send(text):
++            self.convo.on_token("text", "First sentence is long enough. ")
++            self.wait_for(lambda: self.gates, "first utterance")
++            self.convo.on_token("text", "Second sentence is also long. Third sentence follows it closely. ")
++            time.sleep(0.15)  # the first is still being spoken, so these two wait in the queue
++            self.assertEqual(len(self.gates), 1)
++            self.gates[0].released.set()
++            proceed.set()
++            return "First sentence is long enough. Second sentence is also long. Third sentence follows it closely."
++        with mock.patch.object(self.convo, "send", side_effect=send):
++            self.voice.start()
++            self.wait_for(proceed.is_set, "reply to finish")
++            self.wait_for(lambda: len(self.gates) == 2, "batched utterance")
++            self.gates[1].released.set()
++            self.wait_state("done")
++        self.assertEqual(self.gates[1].argv[1], "Second sentence is also long. Third sentence follows it closely.")
++        self.assertEqual(len(self.gates), 2)
++
++    def test_a_reply_that_never_streamed_is_still_spoken(self):
++        with mock.patch.object(self.convo, "send", return_value="Done. The timer is set for five minutes."):
++            self.voice.start()
++            self.wait_for(lambda: self.gates, "speech")
++            self.release_all()
++            self.wait_state("done")
++        self.assertEqual(self.gates[0].argv[1], "Done. The timer is set for five minutes.")
++
++    def test_text_dropped_by_a_tool_call_is_not_spoken(self):
++        def send(text):
++            self.convo.on_token("text", "Let me check that for you now. ")
++            self.convo.on_token("reset", "")
++            self.convo.on_token("text", "It is sunny and warm outside.")
++            return "It is sunny and warm outside."
++        with mock.patch.object(self.convo, "send", side_effect=send):
++            self.voice.start()
++            self.wait_for(lambda: self.gates, "speech")
++            self.release_all()
++            self.wait_state("done")
++        spoken = " ".join(g.argv[1] for g in self.gates)
++        self.assertIn("sunny", spoken)
++        self.assertNotIn("check that", spoken)
++
++    def test_stop_mid_reply_silences_speech_and_ignores_the_rest(self):
++        gate = threading.Event()
++
++        def send(text):
++            self.convo.on_token("text", "This sentence is being spoken right now. ")
++            self.wait_for(lambda: self.gates, "speech")
++            gate.set()
++            time.sleep(0.4)
++            self.convo.on_token("text", "This one arrives after the stop button. ")
++            return "late"
++        with mock.patch.object(self.convo, "send", side_effect=send), mock.patch.object(self.convo, "cancel"):
++            self.voice.start()
++            self.wait_for(gate.is_set, "speech to start")
++            self.voice.stop()
++            time.sleep(0.6)
++        self.assertTrue(self.gates[0].terminated)
++        self.assertEqual(len(self.gates), 1)  # nothing said after the stop
++        self.assertEqual(self.voice.state()["state"], "idle")
++        self.assertEqual(self.listener.holds, [True, False])
++
++    def test_speaking_off_never_starts_a_speaker(self):
++        self.convo.config["voice"]["speak"] = False
++        with mock.patch.object(self.convo, "send", side_effect=lambda t: (self.convo.on_token("text", "Quiet reply that is plain. "), "Quiet reply that is plain.")[1]):
++            self.voice.start()
++            self.wait_state("done")
++        self.assertEqual(self.gates, [])
++
++    def test_timings_are_recorded_and_logged(self):
++        with mock.patch.object(self.convo, "send", side_effect=lambda t: (self.convo.on_token("text", "Four thirty."), "Four thirty.")[1]):
++            self.voice.start()
++            self.wait_for(lambda: self.gates, "speech")
++            self.release_all()
++            done = self.wait_state("done")
++        t = done["timings"]
++        for key in ("listen_ms", "stt_ms", "first_token_ms", "first_speech_ms", "total_ms"):
++            self.assertIsInstance(t[key], int, key)
++            self.assertGreaterEqual(t[key], 0, key)
++        self.assertGreaterEqual(t["total_ms"], t["first_speech_ms"])
++
++    def test_a_new_exchange_starts_with_empty_timings(self):
++        with mock.patch.object(self.convo, "send", return_value="Quick reply that is plain."):
++            self.voice.start()
++            self.wait_for(lambda: self.gates, "speech")
++            self.release_all()
++            self.wait_state("done")
++        self.listener.pcm = None
++        self.voice.start()
++        self.assertEqual(self.voice.state()["timings"], {})
++
++
++class TestVoiceUsesOnlineFirstStt(StreamingVoiceBase):
++    def test_voice_exchange_transcribes_with_transcribe_best(self):
++        with mock.patch("stt.transcribe_best", return_value="what time is it") as best, \
++                mock.patch.object(self.convo, "send", return_value="Half past four, if you must know.") as send:
++            self.voice.start()
++            self.wait_for(lambda: self.gates, "speech")
++            self.release_all()
++            self.wait_state("done")
++        best.assert_called_once()
++        send.assert_called_once_with("what time is it")
++
++
++@unittest.skipUnless(HAVE_JSDOM, "jsdom not installed")
++class TestOverlayShowsTimings(unittest.TestCase):
++    def test_done_note_lists_the_timings(self):
++        r = run_node("overlay_smoke.js")
++        self.assertNotIn("crash", r, r.get("crash"))
++        self.assertEqual(r["errors"], [])
++        self.assertEqual(r["doneTimings"]["note"], "heard 1.2s | transcribed 0.8s | first word 1.5s | total 4.0s")
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/core/voice_session.py b/core/voice_session.py
+index a15b50f..28bc2eb 100644
+--- a/core/voice_session.py
++++ b/core/voice_session.py
+@@ -4,12 +4,16 @@ One spoken exchange run entirely on the server, so `faze start --voice` never ha
+ 
+     listening -> transcribing -> thinking (reply streams) -> speaking -> done
+ 
++Speech starts while the reply is still being written: finished sentences go to the phone's voice as they appear
++(if several pile up while one is spoken they are said together, so slow generation does not leave gaps).
++
+ State is published to every subscriber as a "voice" SSE event (a full snapshot each time, so a dropped event
+ costs nothing) and readable at GET /api/voice/state. The /overlay page renders it; a Tasker Scene shows that page
+ as a floating overlay. Audio comes from the wake listener's stream (hold() keeps the wake word from reacting to
+ it); if the wake listener is off, a short direct recording is used instead.
+ """
+ 
++import queue
+ import re
+ import shutil
+ import subprocess
+@@ -17,6 +21,7 @@ import threading
+ import time
+ 
+ import action_log
++import net_status
+ import stt
+ import wake
+ 
+@@ -40,6 +45,131 @@ def speakable(text: str) -> str:
+     return re.sub(r"\s+", " ", text).strip()[:SPEAK_CHARS]
+ 
+ 
++_CODE = re.compile(r"```.*?```", re.S)
++_END = re.compile(r"[.!?\u2026][\"')\]]*\s+|\n+")
++
++
++def split_speakable(buffer: str, final: bool = False):
++    """Finished sentences in text that is still arriving: (sentences, rest). Code blocks are said once as
++    "Code omitted", fragments under 20 characters wait for the next sentence, and a sentence end needs a space
++    after it, so "3.5" or "v2." mid-word is not a break."""
++    text = _CODE.sub(" Code omitted. ", buffer)
++    hold = ""
++    i = text.find("```")
++    if i >= 0:
++        hold, text = text[i:], text[:i]
++    sentences, start = [], 0
++    for m in _END.finditer(text):
++        piece = re.sub(r"[ \t]+", " ", text[start:m.end()]).strip()
++        if len(piece) >= 20 or ("\n" in m.group(0) and piece):
++            sentences.append(piece)
++            start = m.end()
++    if final:
++        tail = re.sub(r"[ \t]+", " ", text[start:]).strip()
++        if tail:
++            sentences.append(tail)
++        return sentences, ""
++    return sentences, text[start:] + hold
++
++
++class SentenceStream:
++    """Feed pieces as they stream in; get back the sentences that just became complete."""
++
++    def __init__(self):
++        self.reset()
++
++    def reset(self):
++        self.text, self.done = "", 0
++
++    def feed(self, piece: str) -> list:
++        self.text += piece
++        found, _ = split_speakable(self.text)
++        new, self.done = found[self.done:], len(found)
++        return new
++
++    def finish(self) -> list:
++        found, _ = split_speakable(self.text, final=True)
++        new, self.done = found[self.done:], len(found)
++        return new
++
++
++class _Speaker:
++    """Says sentences one after another on a worker thread, while the reply is still being generated."""
++
++    def __init__(self, session, cancel, on_first):
++        self.session, self.cancel, self.on_first = session, cancel, on_first
++        self.q = queue.Queue()
++        self.thread = None
++        self.spoke = False
++
++    def say(self, sentence: str) -> None:
++        text = speakable(sentence)
++        if not text:
++            return
++        if self.thread is None:
++            self.thread = threading.Thread(target=self._loop, daemon=True)
++            self.thread.start()
++        self.q.put(text)
++
++    def finish(self) -> None:
++        """Wait until everything queued has been said (or the exchange was cancelled)."""
++        self.q.put(None)
++        if self.thread is not None:
++            self.thread.join(SPEAK_TIMEOUT)
++
++    def abort(self) -> None:
++        while True:
++            try:
++                self.q.get_nowait()
++            except queue.Empty:
++                break
++        self.q.put(None)
++
++    def _loop(self) -> None:
++        ended = False
++        while not ended and not self.cancel.is_set():
++            item = self.q.get()
++            if item is None:
++                break
++            batch = [item]
++            while True:  # whatever piled up while the last one was spoken goes out as one utterance
++                try:
++                    nxt = self.q.get_nowait()
++                except queue.Empty:
++                    break
++                if nxt is None:
++                    ended = True
++                    break
++                batch.append(nxt)
++            if self.cancel.is_set():
++                break
++            self._say(" ".join(batch)[:SPEAK_CHARS])
++
++    def _say(self, text: str) -> None:
++        session = self.session
++        try:
++            proc = session._popen(["termux-tts-speak", text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
++        except (OSError, ValueError) as e:
++            action_log.log_action("voice", "speak", {}, f"ERROR {getattr(e, 'strerror', None) or e}", 0, echo=False)
++            return
++        session._tts = proc
++        if not self.spoke:
++            self.spoke = True
++            self.on_first()
++        try:
++            deadline = time.monotonic() + SPEAK_TIMEOUT
++            while proc.poll() is None:
++                if self.cancel.is_set() or time.monotonic() > deadline:
++                    try:
++                        proc.terminate()
++                    except OSError:
++                        pass
++                    break
++                time.sleep(0.05)
++        finally:
++            session._tts = None
++
++
+ class VoiceSession:
+     def __init__(self, server, popen=subprocess.Popen, run=None):
+         self.server = server
+@@ -50,7 +180,7 @@ class VoiceSession:
+         self._gen = 0
+         self._thread = None
+         self._tts = None
+-        self._snap = {"state": IDLE, "transcript": "", "reply": "", "error": "", "note": "", "seq": 0, "active": False}
++        self._snap = {"state": IDLE, "transcript": "", "reply": "", "error": "", "note": "", "timings": {}, "seq": 0, "active": False}
+ 
+     # ---- state -------------------------------------------------------------
+ 
+@@ -81,7 +211,7 @@ class VoiceSession:
+             self._gen += 1
+             gen = self._gen
+             self._cancel = threading.Event()
+-            self._snap.update(state=LISTENING, transcript="", reply="", error="", note="", active=True)
++            self._snap.update(state=LISTENING, transcript="", reply="", error="", note="", timings={}, active=True)
+             self._snap["seq"] += 1
+             snap = dict(self._snap)
+             cancel = self._cancel
+@@ -151,11 +281,22 @@ class VoiceSession:
+         convo = server.convo
+         held = False
+         locked = False
++        speaker = None
++        marks = {"start": time.monotonic()}
++
++        def ms(a, b):
++            return int((marks[b] - marks[a]) * 1000) if a in marks and b in marks else None
++
++        def timings():
++            t = {"listen_ms": ms("start", "heard"), "stt_ms": ms("heard", "text"), "first_token_ms": ms("text", "token"),
++                 "first_speech_ms": ms("text", "speech"), "total_ms": ms("start", "end")}
++            return {k: v for k, v in t.items() if v is not None}
+         try:
+             if listener is not None:
+                 listener.hold(True)
+                 held = True
+             pcm = self._hear(listener)
++            marks["heard"] = time.monotonic()
+             if cancel.is_set():
+                 return
+             if not pcm:
+@@ -163,6 +304,7 @@ class VoiceSession:
+                 return
+             self._set(gen, state=TRANSCRIBING)
+             text = self._transcribe(pcm)
++            marks["text"] = time.monotonic()
+             if cancel.is_set():
+                 return
+             if not text:
+@@ -173,16 +315,32 @@ class VoiceSession:
+                 self._set(gen, state=ERROR, error="Faze is still answering the last message")
+                 return
+             locked = True
+-            streamed = []
++            streamed, sentences = [], SentenceStream()
++
++            def first_speech():
++                marks.setdefault("speech", time.monotonic())
++                if self.state()["state"] == THINKING:
++                    self._set(gen, state=SPEAKING)
++
++            speaker = _Speaker(self, cancel, first_speech) if server.config["voice"].get("speak", True) else None
+ 
+             def on_token(kind, piece):
+                 if cancel.is_set():
+                     return
+-                if kind == "reset":
++                if kind == "reset":  # a tool call followed text: what was shown is dropped; unspoken text too
+                     streamed.clear()
++                    sentences.reset()
++                    if speaker is not None:
++                        speaker.abort()
++                        speaker.q = queue.Queue()
++                        speaker.thread = None
+                 elif kind == "text":
++                    marks.setdefault("token", time.monotonic())
+                     streamed.append(piece)
+                     self._set(gen, reply="".join(streamed))
++                    if speaker is not None:
++                        for sentence in sentences.feed(piece):
++                            speaker.say(sentence)
+ 
+             convo.on_token = on_token
+             try:
+@@ -193,14 +351,32 @@ class VoiceSession:
+                 locked = False
+             if cancel.is_set():
+                 return
+-            self._set(gen, reply=reply, state=SPEAKING)
+-            self._speak(reply, cancel)
++            marks.setdefault("token", time.monotonic())
++            shown = "".join(streamed)
++            if speaker is not None:
++                if not shown:  # commands and direct tools answer without streaming
++                    sentences.reset()
++                    sentences.feed(reply)
++                elif reply.startswith(shown) and len(reply) > len(shown):
++                    sentences.feed(reply[len(shown):])
++                for sentence in sentences.finish():
++                    speaker.say(sentence)
++                if speaker.thread is not None and self.state()["state"] == THINKING:
++                    self._set(gen, reply=reply, state=SPEAKING)
++            self._set(gen, reply=reply)
++            if speaker is not None:
++                speaker.finish()
+             if not cancel.is_set():
+-                self._set(gen, state=DONE)
++                marks["end"] = time.monotonic()
++                t = timings()
++                action_log.log_action("voice", "timings", t, "done", 0, echo=False)
++                self._set(gen, state=DONE, timings=t)
+         except Exception as e:  # nothing here may take the server down
+             from tool_replies import summarize_error
+             self._set(gen, state=ERROR, error=summarize_error(e))
+         finally:
++            if speaker is not None:
++                speaker.abort()
+             if locked:
+                 server.chat_lock.release()
+             if held and listener is not None:
+@@ -228,32 +404,7 @@ class VoiceSession:
+         if not self.server.stt_lock.acquire(timeout=20):
+             raise RuntimeError("still transcribing the last clip")
+         try:
+-            text = stt.transcribe_wake(wake.wav_from_pcm(pcm), cfg)
++            text = stt.transcribe_best(wake.wav_from_pcm(pcm), cfg)
+         finally:
+             self.server.stt_lock.release()
+         return (text or "").strip()
+-
+-    def _speak(self, reply: str, cancel: threading.Event) -> None:
+-        if not self.server.config["voice"].get("speak", True):
+-            return
+-        text = speakable(reply)
+-        if not text:
+-            return
+-        try:
+-            proc = self._popen(["termux-tts-speak", text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+-        except (OSError, ValueError) as e:
+-            action_log.log_action("voice", "speak", {}, f"ERROR {getattr(e, 'strerror', None) or e}", 0, echo=False)
+-            return
+-        self._tts = proc
+-        try:
+-            deadline = time.monotonic() + SPEAK_TIMEOUT
+-            while proc.poll() is None:
+-                if cancel.is_set() or time.monotonic() > deadline:
+-                    try:
+-                        proc.terminate()
+-                    except OSError:
+-                        pass
+-                    break
+-                time.sleep(0.1)
+-        finally:
+-            self._tts = None
+diff --git a/core/web/overlay.js b/core/web/overlay.js
+index bb7ded3..fe670dd 100644
+--- a/core/web/overlay.js
++++ b/core/web/overlay.js
+@@ -24,12 +24,19 @@
+ 
+   function show(el, text) { el.hidden = !text; el.textContent = text || ''; }
+ 
++  const secs = (ms) => (ms / 1000).toFixed(1) + 's';
++  function timingsNote(t) {
++    if (!t) return '';
++    const parts = [['heard', t.listen_ms], ['transcribed', t.stt_ms], ['first word', t.first_token_ms], ['total', t.total_ms]];
++    return parts.filter((p) => typeof p[1] === 'number').map((p) => p[0] + ' ' + secs(p[1])).join(' | ');
++  }
++
+   function render(s) {
+     $('card').dataset.state = s.state;
+     $('state').textContent = LABELS[s.state] || s.state;
+     show($('you'), s.transcript);
+     show($('reply'), s.reply);
+-    show($('note'), s.state === 'error' ? s.error : s.note);
++    show($('note'), s.state === 'error' ? s.error : (s.note || (s.state === 'done' ? timingsNote(s.timings) : '')));
+     $('again').hidden = !!s.active;
+     $('stop').hidden = !s.active;
+     const reply = $('reply');
+diff --git a/core/web_server.py b/core/web_server.py
+index 135b7cf..9c2dc37 100644
+--- a/core/web_server.py
++++ b/core/web_server.py
+@@ -35,6 +35,7 @@ import agent
+ import device
+ import stt
+ import tts
++import net_status
+ import wake
+ from voice_session import VoiceSession
+ from icons import make_icon
+@@ -449,6 +450,7 @@ class Handler(BaseHTTPRequestHandler):
+             "turns": max(0, len(convo.messages) - 1),
+             "think": convo.config["reasoning"]["mode"],
+             "think_level": convo.config["reasoning"]["level"],
++            "online": net_status.last(),
+             "gemini_thinking": convo.config["gemini"]["thinking"],
+             "stt": {"server": stt.available(convo.config), "pref": convo.config["voice"]["stt"],
+                     "reason": stt.missing_reason(convo.config)},
+@@ -512,7 +514,7 @@ class Handler(BaseHTTPRequestHandler):
+         if not self.server.stt_lock.acquire(blocking=False):
+             return self._error(409, "still transcribing the last clip")
+         try:
+-            text = stt.transcribe_wav(data, self.server.convo.config)
++            text = stt.transcribe_best(data, self.server.convo.config)
+             action_log.log_action("stt", "transcribe", {"bytes": len(data)}, f"{len(text)} chars", 0, echo=False)
+             self._json(200, {"text": text})
+         except stt.TranscribeError as e:

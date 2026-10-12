@@ -126,16 +126,46 @@ def _online_budget(config: dict, now) -> bool:
     return True
 
 
+def transcribe_best(data: bytes, config: dict, now=time.monotonic, online=None) -> str:
+    """Speech to text for something you said on purpose: Gemini when the internet is reachable (fast and accurate),
+    whisper.cpp when it is not. No per-minute cap (that is for the always-on wake word). stt.engine=gemini never
+    falls back; stt.engine=whisper never goes online. `online` replaces the Gemini call (tests)."""
+    import net_status
+    check_wav(data)
+    engine = config.get("stt", {}).get("engine", "auto")
+    keyed = os.environ.get("FAZE_GEMINI_DISABLED") != "1" and bool(os.environ.get("GEMINI_API_KEY"))
+    if engine != "whisper" and keyed and now() >= _ONLINE["blocked_until"] and (online is not None or net_status.online(config)):
+        try:
+            from gemini_client import GeminiError, transcribe_audio
+            text = clean_text((online or transcribe_audio)(data))
+            net_status.mark_online()
+            return text
+        except GeminiError as e:
+            reason = str(e)
+            if reason.startswith("Network error"):
+                net_status.mark_offline()
+            if re.search(r"429|quota|rate", reason, re.IGNORECASE):
+                _ONLINE["blocked_until"] = now() + 300
+            if engine == "gemini":
+                raise TranscribeError(reason[:160])
+    elif engine == "gemini":
+        raise TranscribeError("online recognition is unavailable right now (no key, offline, or quota pause)")
+    return transcribe_wav(data, config)
+
+
 def transcribe_wake(data: bytes, config: dict, now=time.monotonic, online=None) -> str:
     """Wake-word recognition: Gemini first (about a second), whisper.cpp when offline, rate limited or
     out of quota. engine=gemini never falls back; engine=whisper never goes online."""
     engine = config.get("wake", {}).get("engine", "auto")
-    if online_usable(config, now) and _online_budget(config, now):
+    import net_status
+    if online_usable(config, now) and (online is not None or net_status.online(config)) and _online_budget(config, now):
         try:
             from gemini_client import GeminiError, transcribe_audio
             return clean_text((online or transcribe_audio)(data))
         except GeminiError as e:
             text = str(e)
+            if text.startswith("Network error"):
+                net_status.mark_offline()
             if re.search(r"429|quota|rate", text, re.IGNORECASE):
                 _ONLINE["blocked_until"] = now() + 300
             if engine == "gemini":

@@ -61,6 +61,7 @@ function boot(hash) {
   push({ reply: 'It is' }); await sleep(30); out.streaming = view();
   push({ state: 'speaking', reply: 'It is half past four.' }); await sleep(30); out.speaking = view();
   push({ state: 'done' }); await sleep(30); out.done = view();
+  push({ timings: { listen_ms: 1200, stt_ms: 800, first_token_ms: 1500, first_speech_ms: 1700, total_ms: 4000 } }); await sleep(30); out.doneTimings = view();
   push({ state: 'error', error: 'no microphone' }); await sleep(30); out.error = view();
 
   $('again').click(); await sleep(60);

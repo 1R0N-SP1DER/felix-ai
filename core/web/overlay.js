@@ -24,12 +24,19 @@
 
   function show(el, text) { el.hidden = !text; el.textContent = text || ''; }
 
+  const secs = (ms) => (ms / 1000).toFixed(1) + 's';
+  function timingsNote(t) {
+    if (!t) return '';
+    const parts = [['heard', t.listen_ms], ['transcribed', t.stt_ms], ['first word', t.first_token_ms], ['total', t.total_ms]];
+    return parts.filter((p) => typeof p[1] === 'number').map((p) => p[0] + ' ' + secs(p[1])).join(' | ');
+  }
+
   function render(s) {
     $('card').dataset.state = s.state;
     $('state').textContent = LABELS[s.state] || s.state;
     show($('you'), s.transcript);
     show($('reply'), s.reply);
-    show($('note'), s.state === 'error' ? s.error : s.note);
+    show($('note'), s.state === 'error' ? s.error : (s.note || (s.state === 'done' ? timingsNote(s.timings) : '')));
     $('again').hidden = !!s.active;
     $('stop').hidden = !s.active;
     const reply = $('reply');

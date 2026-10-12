@@ -231,7 +231,7 @@ class VoiceBase(WebBase):
         self.httpd.wake = self.listener
         self.httpd.voice = self.voice = VoiceSession(self.httpd, popen=popen, run=lambda argv: self.launched.append(argv))
         self.events = self.httpd.subscribe()
-        p = mock.patch("stt.transcribe_wake", return_value="what is the time")
+        p = mock.patch("stt.transcribe_best", return_value="what is the time")
         p.start()
         self.addCleanup(p.stop)
 
@@ -269,7 +269,10 @@ class TestVoiceExchange(VoiceBase):
             done = self.wait_state("done")
         send.assert_called_once_with("what is the time")
         self.assertEqual((done["transcript"], done["reply"]), ("what is the time", "It is **half past** four."))
-        self.assertEqual(self.states(), ["listening", "transcribing", "thinking", "thinking", "thinking", "speaking", "done"])
+        seen = self.states()
+        self.assertEqual([x for i, x in enumerate(seen) if i == 0 or x != seen[i - 1]],
+                         ["listening", "transcribing", "thinking", "speaking", "done"])
+
         self.assertEqual(self.procs[0].argv, ["termux-tts-speak", "It is half past four."])
         self.assertEqual(self.listener.holds, [True, False])  # wake word held off during, released after
         self.assertEqual(self.listener.args[1], 8.0)
@@ -305,13 +308,13 @@ class TestVoiceExchange(VoiceBase):
         self.assertEqual(self.listener.holds, [True, False])
 
     def test_unintelligible_audio(self):
-        with mock.patch("stt.transcribe_wake", return_value="   "):
+        with mock.patch("stt.transcribe_best", return_value="   "):
             self.voice.start()
             self.assertEqual(self.wait_state("idle")["note"], "I did not catch that")
 
     def test_transcription_failure_is_an_error_not_a_crash(self):
         import stt
-        with mock.patch("stt.transcribe_wake", side_effect=stt.TranscribeError("no engine")):
+        with mock.patch("stt.transcribe_best", side_effect=stt.TranscribeError("no engine")):
             self.voice.start()
             s = self.wait_state("error")
         self.assertIn("no engine", s["error"])
@@ -384,6 +387,9 @@ class TestVoiceStop(VoiceBase):
         with self.say():
             self.voice.start()
             self.wait_state("speaking")
+            end = time.time() + 5
+            while time.time() < end and not self.procs:  # "speaking" is set as the first sentence is queued
+                time.sleep(0.02)
             s = self.voice.stop()
         self.assertEqual((s["state"], s["note"], s["active"]), ("idle", "Stopped", False))
         end = time.time() + 3

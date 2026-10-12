@@ -34,6 +34,7 @@ import action_log
 from action_log import log_action
 from config_loader import (load_config, get_llm_url, describe_settings,
                            set_user_setting, unset_user_setting, SETTINGS, load_user_overrides)
+import net_status
 from local_server import ServerManager
 from memory_store import init_db, log_message
 from memory_recall import setup_fts
@@ -1211,6 +1212,8 @@ class Conversation:
             if not order or not self._gemini_unreachable(e):
                 raise
             cause = summarize_error(e)
+            if str(e).startswith("Network error"):
+                net_status.mark_offline()
             self._gemini_down_until = max(self._gemini_down_until, now + 60)
             log_action("gemini", "fallback", {}, f"{cause} -> {','.join(order)}", 0)
             errors = [f"gemini: {cause}"]
