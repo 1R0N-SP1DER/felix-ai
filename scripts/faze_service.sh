@@ -8,6 +8,8 @@
 #   faze start --cli          pause the background app and chat in this terminal; it comes back when you exit
 #   faze voice | faze app | faze cli     same as start --voice / --app / --cli
 #   faze overlay              print the link the Tasker Scene WebView should load
+#   faze voice-stop           stop the current voice exchange (Tasker overlay Stop button)
+#   faze open                 open the web app, no voice mode (Tasker overlay Open Faze button)
 #   faze stop | restart | status | logs
 # Env (for tests): FAZE_CMD, FAZE_STATE, FAZE_LOG, FAZE_RESTART_DELAY, FAZE_PORT, FAZE_OPEN, FAZE_READY_TIMEOUT, FAZE_HTTP
 
@@ -110,7 +112,7 @@ PY
     fi
 }
 
-usage() { echo "usage: $0 start [--voice|--app|--cli] | voice | app | cli | overlay | stop | restart | status | logs"; }
+usage() { echo "usage: $0 start [--voice|--app|--cli] | voice | app | cli | overlay | voice-stop | open | stop | restart | status | logs"; }
 
 start_command() {
     local mode=""
@@ -164,6 +166,15 @@ case "${1:-status}" in
         else echo "no token yet: run faze start first"; exit 1; fi
         ;;
     cli) start_command --cli ;;
+    voice-stop)
+        if api_post /api/voice/stop '{}' > /dev/null; then echo "stopped"; else echo "could not reach the service; see: faze logs"; exit 1; fi
+        ;;
+    open)
+        link="http://localhost:$PORT/"
+        [ -f "$STATE/token" ] && link="http://localhost:$PORT/#t=$(cat "$STATE/token")"
+        open_url "$link"
+        echo "opened"
+        ;;
     stop) stop_service ;;
     restart) bash "$0" stop; sleep 1; bash "$0" start ;;
     status)
