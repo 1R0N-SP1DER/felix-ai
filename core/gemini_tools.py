@@ -30,6 +30,7 @@ TOOL_DESCRIPTIONS = {
     "swipe": "Call this to swipe from one point to another, for example to scroll.",
     "type_text": "Call this to type plain text into the focused field.",
     "press_key": "Call this to press a hardware key: home, back, enter, recent, volume_down, volume_up, camera, delete, tab, search, up, down, left, right.",
+    "get_weather": "Call this for the current weather or today's temperature, rain chance and conditions in a place. Fast and reliable; prefer it over search_web for weather. Pass an empty city for the user's default place.",
     "listen": "Call this to listen through the microphone for a few seconds and report what is said or heard.",
     "wait": "Call this to wait 1 to 10 seconds, for example after opening an app so it can finish loading.",
 }
@@ -42,6 +43,7 @@ PARAM_DESCRIPTIONS = {
     "level": "volume level, an integer from 0 to 15",
     "text": "the exact text to copy to the clipboard",
     "url": "the full link, starting with https://",
+    "city": "the place to get the weather for, for example Lagos; an empty string means the user's default place",
     "app": "the app's name, for example YouTube or Spotify",
     "search": "part of an app's name to filter by, or a single space for every app",
     "question": "what to find out about the screenshot; ask for x,y pixel coordinates when you need to tap something",

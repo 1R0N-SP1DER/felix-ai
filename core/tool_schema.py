@@ -35,6 +35,7 @@ TOOL_REGISTRY = {
     "listen": {"seconds": int},
     "wait": {"seconds": int},
     "youtube_play": {"query": str},
+    "get_weather": {"city": str},
 }
 
 

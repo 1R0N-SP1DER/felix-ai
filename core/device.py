@@ -128,23 +128,45 @@ _DUMP_HINTS = (
 )
 
 
+def _dump_file(path: str) -> str:
+    """The dump file's XML if uiautomator wrote one, whatever it did or did not print."""
+    try:
+        xml = _root(["cat", path], 10, cap=400000)
+    except DeviceError:
+        return ""
+    return xml if "<hierarchy" in xml else ""
+
+
 def read_nodes() -> list:
-    """The screen's elements via uiautomator. It prints a success line and writes a file; when it prints an error
-    instead (it still exits 0), that error is what the model and the user need to see, not 'file not found'."""
+    """The screen's elements via uiautomator. It normally prints a success line and writes a file, but on some phones
+    it exits 0 having printed nothing, so a dump file that exists counts as success, and as a last resort the dump is
+    streamed on stdout. When everything fails, what each try said is in the error."""
     path = "/data/local/tmp/faze_ui.xml"
-    said = ""
+    said = []
     for flags in ([], ["--compressed"]):
         try:
             _root(["rm", "-f", path], 5)
-            said = _root(["uiautomator", "dump", *flags, path], 15)
+            out = _root(["uiautomator", "dump", *flags, path], 15)
         except DeviceError as e:
-            said = str(e)
+            said.append(str(e))
             continue
-        if "dumped to" in said.lower():
-            return parse_nodes(_root(["cat", path], 10, cap=400000))
-    why = next((hint for key, hint in _DUMP_HINTS if key in said.lower()), "")
-    raise DeviceError(f"uiautomator could not read the screen: {said.strip()[:160] or 'no output'}"
-                      + (f" ({why})" if why else "") + ". Use screen_look instead.")
+        xml = _dump_file(path)
+        if xml:
+            return parse_nodes(xml)
+        said.append(out or "no output, no file")
+    streamed = ""
+    try:
+        out = _root(["uiautomator", "dump", "/dev/stdout"], 15, cap=400000)
+        m = re.search(r"<\?xml.*?</hierarchy>", out, re.DOTALL)
+        if m:
+            return parse_nodes(m.group(0))
+        streamed = "stdout fallback: " + (out[:60] or "empty")
+    except DeviceError as e:
+        streamed = "stdout fallback: " + str(e)[:80]
+    first = next((x for x in said if x), "")
+    why = next((hint for key, hint in _DUMP_HINTS if key in " ".join(said).lower()), "")
+    raise DeviceError(f"uiautomator could not read the screen: {first.strip()[:160] or 'no output'}"
+                      + (f" ({why})" if why else "") + f" [{len(said) + 1} tries; {streamed}]. Use screen_look instead.")
 
 
 def screen_read() -> str:

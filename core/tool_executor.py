@@ -148,6 +148,7 @@ def delegate_to_gemini(parameters: dict) -> str:
 
 
 SEARCH = {"engine": "auto", "blocked_until": 0.0}
+WEATHER = {"location": ""}
 BREAKER_SECONDS = 600.0
 
 
@@ -156,6 +157,7 @@ def configure(config: dict) -> None:
     import actions
     engine = (config.get("search") or {}).get("engine", "auto")
     SEARCH["engine"] = engine if engine in ("auto", "gemini", "web") else "auto"
+    WEATHER["location"] = str((config.get("weather") or {}).get("location", "")).strip()
     actions.configure(config)
     import device
     device.configure(config)
@@ -280,6 +282,16 @@ def search_web(parameters: dict) -> str:
         raise ToolExecutionError(f"Web search failed: {why + '; ' if why else ''}{e}")
 
 
+def get_weather(parameters: dict) -> str:
+    """Current weather from Open-Meteo. An empty city means the weather.location setting."""
+    import weather
+    city = str(parameters.get("city") or "").strip() or WEATHER["location"]
+    try:
+        return weather.get_weather(city)
+    except weather.WeatherError as e:
+        raise ToolExecutionError(f"Weather lookup failed: {e}")
+
+
 def enable_thinking_mode(parameters: dict) -> str:
     """
     A signal tool, not a device action. Calling this tells send() to
@@ -293,6 +305,7 @@ def enable_thinking_mode(parameters: dict) -> str:
 
 
 TOOL_EXECUTORS = {
+    "get_weather": get_weather,
     "get_current_datetime": get_current_datetime,
     "get_battery_status": get_battery_status,
     "set_volume": set_volume,

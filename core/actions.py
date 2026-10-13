@@ -290,6 +290,20 @@ def _fetch(url: str) -> str:
     return r.text
 
 
+def _ytdlp_find(query: str, latest: bool):
+    """(video id, title) from yt-dlp's own search, when it is installed (pip install yt-dlp): far steadier than reading YouTube's page."""
+    if not shutil.which("yt-dlp"):
+        return None
+    import tool_helpers
+    try:
+        out = tool_helpers.run(["yt-dlp", "--no-warnings", "--flat-playlist", "--playlist-items", "1", "--print", "%(id)s\t%(title)s",
+                                ("ytsearchdate1:" if latest else "ytsearch1:") + query], timeout=25)
+    except RuntimeError:
+        return None
+    vid, _, title = (out.strip().splitlines() or [""])[0].partition("\t")
+    return (vid, title) if re.fullmatch(r"[A-Za-z0-9_-]{11}", vid) else None
+
+
 def youtube_find(query: str, latest: bool = False):
     """(video id, title) for a search; with latest, a bare channel name tries that channel's newest upload first."""
     query = query.strip()
@@ -301,7 +315,11 @@ def youtube_find(query: str, latest: bool = False):
         except ActionError:
             pass
     sort = "&sp=CAI%253D" if latest else ""
-    return _first_video(_fetch("https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query) + sort))
+    try:
+        found = _first_video(_fetch("https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query) + sort))
+    except ActionError:
+        found = None
+    return found or _ytdlp_find(query, latest)
 
 
 def youtube_play(query: str, latest: bool = False) -> str:

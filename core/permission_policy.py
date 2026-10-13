@@ -34,6 +34,7 @@ PERMISSION_REGISTRY = {
     "screen_read": "safe", "screen_look": "safe", "tap": "safe", "tap_text": "safe", "swipe": "safe",
     "type_text": "safe", "press_key": "safe", "listen": "safe", "wait": "safe",
     "youtube_play": "safe",
+    "get_weather": "safe",
 }
 
 VALID_TIERS = ("safe", "confirm", "block")

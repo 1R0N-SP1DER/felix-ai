@@ -90,6 +90,7 @@ DEFAULTS = {
     # Gemini-written tools: ask = approve each new tool, yolo = auto-approve with a description, off = none
     "agent": {"mode": "ask", "high_tools": False, "max_rounds": 6},
     "device": {"control": "off", "max_steps": 30, "cursor": True},  # Gemini operating the phone: off | ask | on
+    "weather": {"location": ""},    # the place "what's the weather" means when you do not name one
     "search": {"engine": "auto"},   # auto: Gemini grounding, then DuckDuckGo | gemini | web
     "actions": {"root": "auto"},    # auto: retry blocked launches through su | always | never
 }
@@ -131,6 +132,7 @@ SETTINGS = {
     "device.max_steps": (int, None),
     "device.cursor": (bool, None),
     "search.engine": (str, ("auto", "gemini", "web")),
+    "weather.location": (str, None),
     "actions.root": (str, ("auto", "always", "never")),
     "wake.engine": (str, ("auto", "gemini", "whisper")),
     "wake.end_silence_ms": (int, None),

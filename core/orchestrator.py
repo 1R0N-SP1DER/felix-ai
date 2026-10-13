@@ -136,6 +136,7 @@ TOOLS (call ONLY if the user is asking for one of these things right now):
 - vibrate() : no params
 - set_volume(level) : level=0-15
 - delegate_to_gemini(request) : ask a vastly more capable model for help
+- get_weather(city) : current weather and today's high, low and rain chance; city may be empty for the default place
 - search_web(query) : get a real, current answer from the internet
 - enable_thinking_mode() : reason step by step instead of answering fast
 - open_url(url) : open a web link on the device
@@ -1139,7 +1140,7 @@ class Conversation:
         if key in ("gemini.model", "gemini.search_model", "gemini.thinking", "reasoning.level", "reasoning.mode"):
             gemini_client.configure(chat=self.config["gemini"]["model"], search=self.config["gemini"]["search_model"],
                                     thinking=self._gemini_thinking())
-        if key.startswith(("search.", "actions.", "device.")):
+        if key.startswith(("search.", "actions.", "device.", "weather.")):
             tool_executor.configure(self.config)
         if key == "agent.high_tools":
             agent.set_policy(high_tools=bool(value))

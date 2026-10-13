@@ -110,7 +110,7 @@ def run_checks(config: dict) -> list:
 
     def yt():
         found = actions.youtube_find("mrwhosetheboss", latest=True)
-        return (OK, f"found {found[1][:50] or found[0]}") if found else (FAIL, "no video found (YouTube changed its page?)")
+        return (OK, f"found {found[1][:50] or found[0]}") if found else (FAIL, "no video found (YouTube changed its page; pip install yt-dlp makes this reliable)")
     add("YouTube lookup", yt)
 
     def voice():
