@@ -258,6 +258,8 @@ def ask_gemini_stream(system_message: str, conversation_messages: list, tools_sc
 
 
 if __name__ == "__main__":
+    import env_loader
+    env_loader.load_env()
     try:
         result = ask_gemini(
             system_message="You are a helpful assistant.",

@@ -1344,6 +1344,8 @@ def make_prefix_hook(name: str, show_tag: bool):
 
 
 if __name__ == "__main__":
+    import env_loader
+    env_loader.load_env()
     init_db()
     try:
         setup_fts()

@@ -36,7 +36,7 @@ def run_checks(config: dict) -> list:
 
     def key():
         k = os.environ.get("GEMINI_API_KEY", "")
-        return (OK, f"set ({len(k)} characters)") if k else (FAIL, "GEMINI_API_KEY is not set in this process")
+        return (OK, f"set ({len(k)} characters)") if k else (FAIL, "GEMINI_API_KEY is not set in this process; put GEMINI_API_KEY=... in ~/.felix/env (chmod 600)")
     add("Gemini key", key)
 
     def need_key(fn):
