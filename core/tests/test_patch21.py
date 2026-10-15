@@ -408,7 +408,7 @@ class TestLiveConnection(unittest.TestCase):
         conn = LiveConnection("SECRETKEY", "m", connect=refuse)
         with self.assertRaises(LiveError) as cm:
             conn.open("i", [], search=False)
-        self.assertIn("could not connect", str(cm.exception))
+        self.assertIn("could not connect to generativelanguage.googleapis.com", str(cm.exception))
         self.assertNotIn("SECRETKEY", str(cm.exception))
 
     def test_missing_package_is_explained(self):
@@ -468,7 +468,7 @@ class LiveBase(VoiceBase):
     def serve(self, **kw):
         fake = FakeLive(**kw)
         self.fakes.append(fake)
-        p = mock.patch.object(live_client, "_ws_connect", fake.connect)
+        p = mock.patch.object(live_client, "_default_connect", fake.connect)
         p.start()
         self.addCleanup(p.stop)
         return fake

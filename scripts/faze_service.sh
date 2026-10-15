@@ -13,7 +13,8 @@
 #   faze close                stop the exchange AND ask Tasker to close the overlay, even if the service is down
 #   faze open                 open the web app, no voice mode (Tasker overlay Open Faze button)
 #   faze stop | restart | status | logs
-# Env (for tests): FAZE_CMD, FAZE_STATE, FAZE_LOG, FAZE_RESTART_DELAY, FAZE_PORT, FAZE_OPEN, FAZE_READY_TIMEOUT, FAZE_HTTP
+# Env (for tests): FAZE_CMD, FAZE_STATE, FAZE_LOG, FAZE_RESTART_DELAY, FAZE_PORT, FAZE_OPEN, FAZE_READY_TIMEOUT, FAZE_HTTP,
+#   FAZE_SWEEP_PATTERN, FAZE_QUICK_EXIT, FAZE_LOOP_LIMIT, FAZE_LOOP_SLOW
 
 # Tasker's "Run Shell" starts with Android's PATH and, with Use Root, root's HOME: neither is Termux's, which is
 # why `faze` was "not found" (exit 127). Put Termux's paths back, and as root drop to Termux's own user so nothing
@@ -45,17 +46,51 @@ mkdir -p "$STATE"
 
 running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2> /dev/null)" 2> /dev/null; }
 
+# "pid command" of whatever is listening on our port, or nothing.
+port_owner() {
+    python3 - "$PORT" << 'PY' 2> /dev/null
+import os, sys
+port = int(sys.argv[1])
+inodes = set()
+for path in ("/proc/net/tcp", "/proc/net/tcp6"):
+    try:
+        rows = open(path).read().splitlines()[1:]
+    except OSError:
+        continue
+    for row in rows:
+        f = row.split()
+        if len(f) > 9 and f[3] == "0A" and int(f[1].rsplit(":", 1)[1], 16) == port:
+            inodes.add("socket:[" + f[9] + "]")
+for pid in filter(str.isdigit, os.listdir("/proc")):
+    try:
+        for fd in os.listdir("/proc/%s/fd" % pid):
+            if os.readlink("/proc/%s/fd/%s" % (pid, fd)) in inodes:
+                cmd = open("/proc/%s/cmdline" % pid).read().replace("\0", " ").strip()
+                print(pid, cmd[:100])
+                sys.exit(0)
+    except OSError:
+        pass
+PY
+}
+holder_hint() { local owner; owner="$(port_owner)"; [ -n "$owner" ] && echo " (port $PORT is held by pid $owner)"; return 0; }
+
 supervise() {
+    local quick=0 delay="$DELAY" began limit="${FAZE_LOOP_LIMIT:-5}"
     while [ ! -f "$STOPFILE" ]; do
+        began="$(date +%s)"
         "$CMD" >> "$LOG" 2>&1
         code=$?
         [ -f "$STOPFILE" ] && break
-        echo "[service] faze exited (code $code); restarting in ${DELAY}s" >> "$LOG"
-        sleep "$DELAY"
+        if [ $(( $(date +%s) - began )) -lt "${FAZE_QUICK_EXIT:-10}" ]; then quick=$(( quick + 1 )); else quick=0; delay="$DELAY"; fi
+        if [ "$quick" -ge "$limit" ]; then
+            delay="${FAZE_LOOP_SLOW:-60}"
+            [ "$quick" -eq "$limit" ] && echo "[service] faze keeps exiting right after it starts$(holder_hint); retrying every ${delay}s. Run: faze stop (it also clears stray copies)" >> "$LOG"
+        fi
+        echo "[service] faze exited (code $code); restarting in ${delay}s" >> "$LOG"
+        sleep "$delay"
     done
     rm -f "$PIDFILE"
 }
-
 start_service() {
     if running; then echo "already running (pid $(cat "$PIDFILE"))"; return 0; fi
     rm -f "$STOPFILE"
@@ -67,15 +102,22 @@ start_service() {
 
 stop_service() {
     touch "$STOPFILE"
+    local was=0
     if running; then
         pid="$(cat "$PIDFILE")"
         pkill -TERM -P "$pid" 2> /dev/null
         kill "$pid" 2> /dev/null
-        echo "stopped"
-    else
-        echo "not running"
+        was=1
     fi
     rm -f "$PIDFILE"
+    # a copy started some other way (an old terminal session, a boot script) would hold the port and make every restart fail
+    local sweep="${FAZE_SWEEP_PATTERN:-}"
+    [ -z "$sweep" ] && [ -z "${FAZE_CMD:-}" ] && sweep='python.*orchestrator\.py'   # a test run (FAZE_CMD set) must never touch the real app
+    if [ -n "$sweep" ] && pkill -f "$sweep" 2> /dev/null; then
+        sleep 0.5
+        echo "stopped (and cleared a stray copy)"
+    elif [ "$was" = 1 ]; then echo "stopped"
+    else echo "not running"; fi
 }
 
 # the web app answers on its port (bash's own /dev/tcp, so nothing extra is needed)
@@ -202,7 +244,8 @@ case "${1:-status}" in
             if [ -f "$STATE/token" ]; then echo "Open: http://localhost:$PORT/#t=$(cat "$STATE/token")"; fi
             exit 0
         else
-            echo "not running"
+            if ready; then echo "not running as a service, but something is answering on port $PORT$(holder_hint). Run: faze stop"
+            else echo "not running"; fi
             exit 1
         fi
         ;;

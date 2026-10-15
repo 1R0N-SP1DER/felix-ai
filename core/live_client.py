@@ -20,9 +20,11 @@ import base64
 import json
 import re
 import shutil
+import socket
 import subprocess
 import threading
 import time
+import urllib.parse
 import warnings
 
 try:
@@ -40,6 +42,41 @@ _RETRYABLE = re.compile(r"unknown name|invalid json|invalid argument|cannot find
 
 class LiveError(Exception):
     pass
+
+
+def _open_socket(host: str, port: int, timeout: float):
+    """A connected TCP socket to host:port. Resolved here, the way `requests` does it (which works in Termux), with an
+    IPv4-only retry: the resolver the websockets package uses itself failed on some phones with
+    "[Errno 7] No address associated with hostname" while every other request to the same host worked."""
+    try:
+        return socket.create_connection((host, port), timeout=timeout)
+    except socket.gaierror:
+        last = None
+        for family, kind, proto, _, addr in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM):
+            try:
+                sock = socket.socket(family, kind, proto)
+                sock.settimeout(timeout)
+                sock.connect(addr)
+                return sock
+            except OSError as e:
+                last = e
+        raise last or socket.gaierror(7, "no IPv4 address found for " + host)
+
+
+def _default_connect(url: str, open_timeout: float = SETUP_TIMEOUT, **kw):
+    """websockets' connect(), handed a socket of our own so it never resolves names or looks for a proxy itself."""
+    parts = urllib.parse.urlparse(url)
+    sock = _open_socket(parts.hostname, parts.port or (443 if parts.scheme == "wss" else 80), open_timeout)
+    try:
+        for extra in ({"proxy": None}, {}):  # `proxy` exists only in newer websockets releases
+            try:
+                return _ws_connect(url, sock=sock, open_timeout=open_timeout, **kw, **extra)
+            except TypeError:
+                continue
+        raise LiveError("this websockets version cannot connect through a socket (pip install -U websockets)")
+    except BaseException:
+        sock.close()
+        raise
 
 
 def available() -> bool:
@@ -103,7 +140,7 @@ def parse_message(msg: dict) -> list:
 class LiveConnection:
     def __init__(self, key: str, model: str, connect=None, clock=time.monotonic):
         self.key, self.model = key, model
-        self._connect = connect or _ws_connect
+        self._connect = connect or _default_connect
         self._clock = clock
         self.ws = None
         self.shape = ""
@@ -115,7 +152,7 @@ class LiveConnection:
     # ---- setup -------------------------------------------------------------
 
     def open(self, instruction: str, declarations: list, search: bool = True, voice: str = "Kore") -> None:
-        if self._connect is None:
+        if self._connect is _default_connect and _ws_connect is None:
             raise LiveError("the websockets package is not installed (pip install websockets)")
         attempts = [("generation", search), ("flat", search)] + ([("generation", False), ("flat", False)] if search else [])
         for shape, with_search in attempts:
@@ -124,7 +161,7 @@ class LiveConnection:
                     warnings.simplefilter("ignore", DeprecationWarning)
                     ws = self._connect(URL.format(key=self.key), open_timeout=SETUP_TIMEOUT, max_size=None)
             except Exception as e:
-                raise LiveError("could not connect: " + scrub(e)[:160])
+                raise LiveError(f"could not connect to {urllib.parse.urlparse(URL).hostname}: " + scrub(e)[:160])
             try:
                 ws.send(json.dumps(build_setup(self.model, instruction, declarations, with_search, voice, shape)))
                 first = self._load(ws.recv(timeout=SETUP_TIMEOUT))
