@@ -26,3 +26,4 @@ body { display: flex; align-items: flex-end; justify-content: center; padding: 1
 @keyframes ring { from { transform: scale(.8); opacity: .7; } to { transform: scale(1.35); opacity: 0; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { #orb i { animation: none !important; } }
+#engine { grid-column: 2; justify-self: start; font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent); }

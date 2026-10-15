@@ -635,7 +635,7 @@ class TestServiceVoice(unittest.TestCase):
         for args in (("start", "--voice", "--app"), ("start", "--app", "--cli"), ("start", "--voice", "--cli")):
             out = self.run_svc(*args)
             self.assertEqual(out.returncode, 2, args)
-            self.assertIn("--voice|--app|--cli", out.stdout)
+            self.assertIn("--voice|--live|--app|--cli", out.stdout)
 
     def test_the_real_http_path_posts_json_with_the_token(self):
         seen = {}

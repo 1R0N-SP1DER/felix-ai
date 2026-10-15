@@ -4,11 +4,13 @@
 #   faze start                start the background app
 #   faze start --voice        start it if needed, then listen: one spoken exchange, handled by the background service
 #                             (no app opens; the /overlay page shows it, see Tasker setup)  (Tasker: long-press both volume keys)
+#   faze start --live         the dedicated live voice mode: a spoken conversation with Gemini Live (needs: pip install websockets)
 #   faze start --app          start it if needed, then open the web app in voice mode
 #   faze start --cli          pause the background app and chat in this terminal; it comes back when you exit
-#   faze voice | faze app | faze cli     same as start --voice / --app / --cli
-#   faze overlay              print the link the Tasker Scene WebView should load
+#   faze voice | faze live | faze app | faze cli     same as start --voice / --live / --app / --cli
+#   faze overlay [--live]     print the link the Tasker Scene WebView should load (--live: the link starts a live conversation)
 #   faze voice-stop           stop the current voice exchange (Tasker overlay Stop button)
+#   faze close                stop the exchange AND ask Tasker to close the overlay, even if the service is down
 #   faze open                 open the web app, no voice mode (Tasker overlay Open Faze button)
 #   faze stop | restart | status | logs
 # Env (for tests): FAZE_CMD, FAZE_STATE, FAZE_LOG, FAZE_RESTART_DELAY, FAZE_PORT, FAZE_OPEN, FAZE_READY_TIMEOUT, FAZE_HTTP
@@ -112,7 +114,7 @@ PY
     fi
 }
 
-usage() { echo "usage: $0 start [--voice|--app|--cli] | voice | app | cli | overlay | voice-stop | open | stop | restart | status | logs"; }
+usage() { echo "usage: $0 start [--voice|--live|--app|--cli] | voice | live | app | cli | overlay [--live] | voice-stop | close | open | stop | restart | status | logs"; }
 
 start_command() {
     local mode=""
@@ -120,6 +122,7 @@ start_command() {
         case "$arg" in
             --voice) [ -n "$mode" ] && { usage; exit 2; }; mode=voice ;;
             --app) [ -n "$mode" ] && { usage; exit 2; }; mode=app ;;
+            --live) [ -n "$mode" ] && { usage; exit 2; }; mode=live ;;
             --cli) [ -n "$mode" ] && { usage; exit 2; }; mode=cli ;;
             *) usage; exit 2 ;;
         esac
@@ -133,6 +136,16 @@ start_command() {
             if ! reply="$(api_post /api/voice/start '{"overlay": true}')"; then echo "could not start listening; see: faze logs"; exit 1; fi
             case "$reply" in
                 *'"started": true'*) echo "listening" ;;
+                *) echo "already listening" ;;
+            esac
+            ;;
+        live)
+            start_service
+            if ! wait_ready; then echo "the service did not come up in time; see: faze logs"; exit 1; fi
+            local reply
+            if ! reply="$(api_post /api/voice/start '{"overlay": true, "live": true}')"; then echo "could not start the live conversation; see: faze logs"; exit 1; fi
+            case "$reply" in
+                *'"started": true'*) echo "live: listening" ;;
                 *) echo "already listening" ;;
             esac
             ;;
@@ -161,11 +174,17 @@ case "${1:-status}" in
     start) shift; start_command "$@" ;;
     voice) start_command --voice ;;
     app) start_command --app ;;
+    live) start_command --live ;;
     overlay)
-        if [ -f "$STATE/token" ]; then echo "http://localhost:$PORT/overlay#t=$(cat "$STATE/token")&auto"
+        if [ -f "$STATE/token" ]; then echo "http://localhost:$PORT/overlay#t=$(cat "$STATE/token")&auto$([ "$2" = "--live" ] && echo "&live")"
         else echo "no token yet: run faze start first"; exit 1; fi
         ;;
     cli) start_command --cli ;;
+    close)
+        api_post /api/voice/stop '{"close": true}' > /dev/null 2>&1 || true
+        if am broadcast -a net.dinglisch.android.tasker.ACTION_TASK --es task_name "${FAZE_CLOSE_TASK:-Faze Overlay Close}" > /dev/null 2>&1; then echo "closed"
+        else echo "could not reach Tasker (is Allow External Access on?)"; exit 1; fi
+        ;;
     voice-stop)
         if api_post /api/voice/stop '{}' > /dev/null; then echo "stopped"; else echo "could not reach the service; see: faze logs"; exit 1; fi
         ;;

@@ -32,6 +32,8 @@ DEFAULTS = {
     "reasoning": {"mode": "auto", "level": "auto"},  # level: auto|off|low|medium|high|max; mode (auto|on|off) is derived from it
     "voice": {"stt": "auto", "speak": True, "listen_timeout": 8,  # stt: auto | server | browser
               "overlay_task": "Faze Overlay", "overlay_close_task": "Faze Overlay Close"},  # Tasker task names (empty: do not ask Tasker)
+    "live": {"model": "gemini-3.8-live", "barge_in": False, "search": True, "idle_seconds": 15,
+             "max_seconds": 600, "player": ""},   # the dedicated live voice mode (faze start --live); Gemini Live over a WebSocket
     "net": {"check": True},                # probe connectivity so online services are used only when reachable
     "tts": {"engine": "system", "voice": "kore", "model": "gemini-3.1-flash-tts-preview"},
     "wake": {
@@ -117,6 +119,12 @@ SETTINGS = {
     "wake.open_app": (bool, None),
     "stt.engine": (str, ("auto", "gemini", "whisper")),
     "net.check": (bool, None),
+    "live.model": (str, None),
+    "live.barge_in": (bool, None),
+    "live.search": (bool, None),
+    "live.idle_seconds": (int, None),
+    "live.max_seconds": (int, None),
+    "live.player": (str, None),
     "stt.bin": (str, None),
     "stt.model_path": (str, None),
     "stt.threads": (int, None),

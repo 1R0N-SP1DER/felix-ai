@@ -72,6 +72,11 @@ function boot(hash) {
   out.open = calls.filter((c) => c.path === '/api/open').map((c) => c.body);
   $('close').click(); await sleep(40);
   out.close = calls.filter((c) => c.path === '/api/voice/stop').map((c) => c.body);
+  out.classicBadgeHidden = $('engine').hidden;
+  push({ state: 'idle', engine: 'live' }); await sleep(30);
+  out.liveBadgeHidden = $('engine').hidden;
+  $('again').click(); await sleep(60);
+  out.liveAgainBody = calls.filter((c) => c.path === '/api/voice/start').slice(-1)[0].body;
   dom.window.close();
 
   // an exchange already running is shown, not restarted; no token is reported, not crashed on
@@ -81,6 +86,12 @@ function boot(hash) {
   await sleep(150);
   out.running = { view: { state: d.getElementById('card').dataset.state, you: d.getElementById('you').textContent },
     newStarts: calls.filter((c) => c.path === '/api/voice/start').length - before };
+  dom.window.close();
+  snap = { state: 'idle', transcript: '', reply: '', error: '', note: '', seq: 20, active: false };
+  const beforeLive = calls.filter((c) => c.path === '/api/voice/start').length;
+  dom = boot('#t=tok&auto&live'); d = dom.window.document;
+  await sleep(150);
+  out.liveAuto = { bodies: calls.filter((c) => c.path === '/api/voice/start').slice(beforeLive).map((c) => c.body), badgeHidden: d.getElementById('engine').hidden, hash: dom.window.location.hash };
   dom.window.close();
   dom = boot(''); d = dom.window.document;
   await sleep(80);

@@ -396,7 +396,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/speak":
             return self._speak(data)
         if path == "/api/voice/start":
-            return self._json(200, {"ok": True, **self.server.voice.start(overlay=bool(data.get("overlay")))})
+            return self._json(200, {"ok": True, **self.server.voice.start(overlay=bool(data.get("overlay")), live=bool(data.get("live")))})
         if path == "/api/voice/stop":
             return self._json(200, {"ok": True, **self.server.voice.stop(close_overlay=bool(data.get("close")))})
         if path == "/api/open":

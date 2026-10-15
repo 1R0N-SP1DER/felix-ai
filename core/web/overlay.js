@@ -9,8 +9,10 @@
   try {
     if (token) localStorage.setItem('faze_overlay_token', token); else token = localStorage.getItem('faze_overlay_token') || '';
   } catch (e) { /* storage can be off in a WebView */ }
-  if (token) history.replaceState(null, '', location.pathname + (params.has('auto') ? '#auto' : ''));
-  const auto = params.has('auto') || location.hash === '#auto';
+  if (token) history.replaceState(null, '', location.pathname + (params.has('auto') || params.has('live') ? '#' + ['auto', params.has('live') ? 'live' : ''].filter(Boolean).join('&') : ''));
+  const auto = params.has('auto') || location.hash.indexOf('auto') >= 0;
+  const wantLive = params.has('live') || location.hash.indexOf('live') >= 0;
+  let engine = wantLive ? 'live' : 'classic';
 
   async function api(path, body) {
     const res = await fetch(path, {
@@ -27,12 +29,15 @@
   const secs = (ms) => (ms / 1000).toFixed(1) + 's';
   function timingsNote(t) {
     if (!t) return '';
-    const parts = [['heard', t.listen_ms], ['transcribed', t.stt_ms], ['first word', t.first_token_ms], ['total', t.total_ms]];
+    const parts = [['connected', t.connect_ms], ['heard', t.listen_ms], ['transcribed', t.stt_ms], ['first word', t.first_token_ms], ['first audio', t.first_audio_ms], ['total', t.total_ms]];
     return parts.filter((p) => typeof p[1] === 'number').map((p) => p[0] + ' ' + secs(p[1])).join(' | ');
   }
 
   function render(s) {
     $('card').dataset.state = s.state;
+    if (s.engine) engine = s.engine;
+    $('card').dataset.engine = engine;
+    $('engine').hidden = engine !== 'live';
     $('state').textContent = LABELS[s.state] || s.state;
     show($('you'), s.transcript);
     show($('reply'), s.reply);
@@ -44,7 +49,7 @@
   }
 
   function fail(e) { render({ state: 'error', error: e.message, active: false, transcript: '', reply: '' }); }
-  const start = () => api('/api/voice/start', {}).then(render).catch(fail);
+  const start = () => api('/api/voice/start', engine === 'live' ? { live: true } : {}).then(render).catch(fail);
 
   $('again').addEventListener('click', start);
   $('stop').addEventListener('click', () => api('/api/voice/stop', {}).then(render).catch(fail));

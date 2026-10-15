@@ -240,6 +240,18 @@ class WakeListener:
     def _live(self) -> bool:
         return self.state in ("listening", "transcribing", "silent") and not self._stop.is_set()
 
+    def frames(self, stop: threading.Event):
+        """New 30 ms frames of the shared stream as they arrive (starting now), until `stop` is set or the stream ends."""
+        seen = self._frames
+        while not stop.is_set() and self._live():
+            if self._frames == seen:
+                time.sleep(0.01)
+                continue
+            fresh = min(self._frames - seen, len(self._ring))
+            batch = list(self._ring)[-fresh:]
+            seen = self._frames
+            yield from batch
+
     def capture(self, seconds: float, timeout: float = None):
         """The next `seconds` of audio from the stream the wake word already reads, or None if it is not running.
         (A second recorder on the same microphone source tends to get silence, so tools borrow this one.)"""

@@ -180,7 +180,7 @@ class VoiceSession:
         self._gen = 0
         self._thread = None
         self._tts = None
-        self._snap = {"state": IDLE, "transcript": "", "reply": "", "error": "", "note": "", "timings": {}, "seq": 0, "active": False}
+        self._snap = {"state": IDLE, "transcript": "", "reply": "", "error": "", "note": "", "timings": {}, "engine": "classic", "seq": 0, "active": False}
 
     # ---- state -------------------------------------------------------------
 
@@ -203,21 +203,23 @@ class VoiceSession:
 
     # ---- control -----------------------------------------------------------
 
-    def start(self, overlay: bool = False) -> dict:
-        """Begin one exchange. Returns {"started": bool, **state}; an exchange already running is left alone."""
+    def start(self, overlay: bool = False, live: bool = False) -> dict:
+        """Begin one exchange (or, with live=True, a Gemini Live conversation). Returns {"started": bool, **state};
+        an exchange already running is left alone."""
         with self._lock:
             if self._snap["state"] in ACTIVE:
                 return {"started": False, **self._snap}
             self._gen += 1
             gen = self._gen
             self._cancel = threading.Event()
-            self._snap.update(state=LISTENING, transcript="", reply="", error="", note="", timings={}, active=True)
+            self._snap.update(state=LISTENING, transcript="", reply="", error="", note="", timings={}, active=True,
+                              engine="live" if live else "classic")
             self._snap["seq"] += 1
             snap = dict(self._snap)
             cancel = self._cancel
         self.server.publish("voice", snap)
-        action_log.log_action("voice", "start", {"overlay": overlay}, "listening", 0, echo=False)
-        self._thread = threading.Thread(target=self._exchange, args=(gen, cancel), daemon=True)
+        action_log.log_action("voice", "start", {"overlay": overlay, "live": live}, "listening", 0, echo=False)
+        self._thread = threading.Thread(target=self._exchange, args=(gen, cancel, live), daemon=True)
         self._thread.start()
         if overlay:
             self.tasker(self.server.config["voice"].get("overlay_task", ""))
@@ -275,7 +277,18 @@ class VoiceSession:
 
     # ---- the exchange ------------------------------------------------------
 
-    def _exchange(self, gen: int, cancel: threading.Event) -> None:
+    def _exchange(self, gen: int, cancel: threading.Event, live: bool = False) -> None:
+        if live:
+            import live_voice
+            try:
+                live_voice.run(self, gen, cancel)
+                return
+            except live_voice.LiveUnavailable as e:
+                self._set(gen, engine="classic", note=f"Live is unavailable ({e}); using the classic voice")
+            except Exception as e:  # nothing here may take the server down
+                from tool_replies import summarize_error
+                self._set(gen, state=ERROR, error=summarize_error(e))
+                return
         server = self.server
         listener = server.wake
         convo = server.convo
