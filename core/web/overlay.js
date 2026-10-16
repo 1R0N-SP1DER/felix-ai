@@ -51,6 +51,16 @@
   function fail(e) { render({ state: 'error', error: e.message, active: false, transcript: '', reply: '' }); }
   const start = () => api('/api/voice/start', engine === 'live' ? { live: true } : {}).then(render).catch(fail);
 
+  $('typed').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = $('say').value.trim();
+    if (!text) return;
+    $('send').disabled = true;
+    try {
+      render(await api('/api/voice/say', { text, live: engine === 'live' }));
+      $('say').value = '';
+    } catch (err) { fail(err); } finally { $('send').disabled = false; }
+  });
   $('again').addEventListener('click', start);
   $('stop').addEventListener('click', () => api('/api/voice/stop', {}).then(render).catch(fail));
   $('open').addEventListener('click', () => api('/api/open', { close_overlay: true }).catch(fail));

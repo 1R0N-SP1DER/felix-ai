@@ -10,6 +10,7 @@
 #   faze voice | faze live | faze app | faze cli     same as start --voice / --live / --app / --cli
 #   faze overlay [--live]     print the link the Tasker Scene WebView should load (--live: the link starts a live conversation)
 #   faze voice-stop           stop the current voice exchange (Tasker overlay Stop button)
+#   faze livecheck            test, step by step, where the Live connection breaks (DNS, TCP, websocket, player)
 #   faze close                stop the exchange AND ask Tasker to close the overlay, even if the service is down
 #   faze open                 open the web app, no voice mode (Tasker overlay Open Faze button)
 #   faze stop | restart | status | logs
@@ -156,7 +157,7 @@ PY
     fi
 }
 
-usage() { echo "usage: $0 start [--voice|--live|--app|--cli] | voice | live | app | cli | overlay [--live] | voice-stop | close | open | stop | restart | status | logs"; }
+usage() { echo "usage: $0 start [--voice|--live|--app|--cli] | voice | live | app | cli | overlay [--live] | voice-stop | close | livecheck | open | stop | restart | status | logs"; }
 
 start_command() {
     local mode=""
@@ -222,6 +223,10 @@ case "${1:-status}" in
         else echo "no token yet: run faze start first"; exit 1; fi
         ;;
     cli) start_command --cli ;;
+    livecheck)
+        ( cd "${FAZE_CORE:-$HOME/felix-ai/core}" && PYTHONPATH=. python3 live_client.py check )
+        exit $?
+        ;;
     close)
         api_post /api/voice/stop '{"close": true}' > /dev/null 2>&1 || true
         if am broadcast -a net.dinglisch.android.tasker.ACTION_TASK --es task_name "${FAZE_CLOSE_TASK:-Faze Overlay Close}" > /dev/null 2>&1; then echo "closed"

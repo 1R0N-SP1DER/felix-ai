@@ -1,0 +1,813 @@
+diff --git a/core/doctor.py b/core/doctor.py
+index 798e5f3..b3fd990 100644
+--- a/core/doctor.py
++++ b/core/doctor.py
+@@ -133,6 +133,15 @@ def run_checks(config: dict) -> list:
+             return FAIL, "no engine: " + (stt.missing_reason(config) or "whisper missing") + " and no Gemini key"
+         return OK, ("online" if online else "") + (" + " if online and offline else "") + ("whisper installed" if offline else "")
+     add("Wake-word recognition", speech)
++
++    def live():
++        import live_client
++        steps = live_client.check(config)
++        bad = [x for x in steps if not x[1]]
++        if bad:
++            return FAIL, f"{bad[0][0]}: {bad[0][2]}"
++        return OK, "; ".join(f"{n}: {d}" for n, _, d in steps if n in ("websocket", "audio player"))
++    add("Gemini Live", need_key(live))
+     return out
+ 
+ 
+diff --git a/core/live_client.py b/core/live_client.py
+index 81262f9..357df8e 100644
+--- a/core/live_client.py
++++ b/core/live_client.py
+@@ -323,3 +323,95 @@ class PcmPlayer:
+                 proc.terminate()
+             except OSError:
+                 pass
++
++
++def check(config: dict = None, key: str = None, connect=None, resolve=socket.getaddrinfo) -> list:
++    """Step by step, where Live breaks in THIS process: [(step, ok, detail)]. A step that fails skips the ones that need it.
++    `faze livecheck` runs it from the shell; /doctor runs it inside the service, which is the one that matters."""
++    import os
++    live = (config or {}).get("live", {})
++    key = os.environ.get("GEMINI_API_KEY", "") if key is None else key
++    host = urllib.parse.urlparse(URL).hostname
++    steps = []
++
++    def step(name, fn):
++        started = time.monotonic()
++        try:
++            detail = fn()
++            steps.append((name, True, f"{detail} ({time.monotonic() - started:.1f}s)"))
++            return True
++        except Exception as e:
++            steps.append((name, False, scrub(f"{type(e).__name__}: {e}")[:200]))
++            return False
++
++    def skip(name, why):
++        steps.append((name, True, "skipped: " + why))
++
++    def package():
++        if _ws_connect is None and connect is None:
++            raise LiveError("not installed (pip install websockets)")
++        try:
++            import websockets
++            return "websockets " + getattr(websockets, "__version__", "?")
++        except ImportError:
++            return "custom connection"
++    ok = step("websockets", package)
++
++    def have_key():
++        if not key:
++            raise LiveError("GEMINI_API_KEY is not set in this process (put it in ~/.felix/env)")
++        return f"set ({len(key)} characters)"
++    ok = step("key", have_key) and ok
++
++    def lookup(family, label):
++        def run():
++            addr = resolve(host, 443, family, socket.SOCK_STREAM)[0][4][0]
++            return f"{label} {addr}"
++        return run
++    step("dns", lookup(0, "any"))
++    step("dns ipv4", lookup(socket.AF_INET, "ipv4"))
++
++    def tcp():
++        sock = _open_socket(host, 443, 6.0)
++        try:
++            return "connected to " + str(sock.getpeername()[0])
++        finally:
++            sock.close()
++    connected = step("tcp", tcp)
++
++    if ok and connected:
++        def handshake():
++            conn = LiveConnection(key, str(live.get("model") or "gemini-3.8-live"), connect=connect)
++            try:
++                conn.open("Reply briefly.", [], search=False)
++                return f"setup accepted for {conn.model} (shape {conn.shape})"
++            finally:
++                conn.close()
++        step("websocket", handshake)
++    else:
++        skip("websocket", "needs the package, the key and a TCP connection")
++
++    def player():
++        cmd = PcmPlayer(str(live.get("player", ""))).command_line()
++        if cmd is None:
++            raise LiveError("no player: pkg install pulseaudio (pacat) or ffmpeg (ffplay), or set live.player")
++        return cmd[0]
++    step("audio player", player)
++    return steps
++
++
++def format_check(steps: list) -> str:
++    return "\n".join(f"[{'ok  ' if ok else 'FAIL'}] {name}: {detail}" for name, ok, detail in steps)
++
++
++if __name__ == "__main__":
++    import sys
++    if len(sys.argv) > 1 and sys.argv[1] == "check":
++        import config_loader
++        import env_loader
++        env_loader.load_env()
++        result = check(config_loader.load_config())
++        print(format_check(result))
++        sys.exit(0 if all(ok for _, ok, _ in result) else 1)
++    print("usage: python3 live_client.py check")
++    sys.exit(2)
+diff --git a/core/live_voice.py b/core/live_voice.py
+index 21aba58..00cfd01 100644
+--- a/core/live_voice.py
++++ b/core/live_voice.py
+@@ -12,6 +12,7 @@ LiveUnavailable means nothing was said yet and the caller can fall back to the c
+ """
+ 
+ import os
++import queue
+ import threading
+ import time
+ 
+@@ -122,7 +123,23 @@ def run(session, gen: int, cancel: threading.Event, connect=None, player=None, c
+                 t["first_audio_ms"] = max(0, int((timing["audio"] - timing["user"]) * 1000))
+             return t
+ 
++        def send_typed():
++            """Text typed into the overlay goes to Gemini as a turn of its own; it interrupts anything being said."""
++            while True:
++                try:
++                    typed = session._typed.get_nowait()
++                except queue.Empty:
++                    return
++                if state["speaking"] or player.busy():
++                    player.stop()
++                state.update(speaking=False, turn_done=False, activity=clock(), gate_until=clock() + TAIL_S)
++                text["user"], text["reply"] = typed, ""
++                timing["user"] = clock()
++                session._set(gen, transcript=typed, reply="", state=THINKING)
++                conn.send_text(typed)
++
+         while not cancel.is_set():
++            send_typed()
+             now = clock()
+             if now - started > max_seconds:
+                 end_note = "Live session time limit reached"
+diff --git a/core/tests/overlay_smoke.js b/core/tests/overlay_smoke.js
+index 55cfd31..ae36e09 100644
+--- a/core/tests/overlay_smoke.js
++++ b/core/tests/overlay_smoke.js
+@@ -26,6 +26,11 @@ async function fakeFetch(url, opts) {
+   if (p === '/api/events') return { ok: true, status: 200, body: new ReadableStream({ start(c) { evCtl = c; } }) };
+   if (p === '/api/voice/state') return json(snap);
+   if (p === '/api/voice/start') { snap = Object.assign({}, snap, { state: 'listening', active: true, transcript: '', reply: '', note: '' }); return json(Object.assign({ started: true }, snap)); }
++  if (p === '/api/voice/say') {
++    if (body.text === 'FAIL') return { ok: false, status: 400, json: async () => ({ error: 'nothing to say' }) };
++    snap = Object.assign({}, snap, { state: 'thinking', transcript: body.text, reply: '', active: true });
++    return json(Object.assign({ started: true }, snap));
++  }
+   if (p === '/api/voice/stop') { snap = Object.assign({}, snap, { state: 'idle', active: false, note: 'Stopped' }); return json(snap); }
+   if (p === '/api/open') return json({ ok: true });
+   return { ok: false, status: 404, json: async () => ({}) };
+@@ -72,9 +77,19 @@ function boot(hash) {
+   out.open = calls.filter((c) => c.path === '/api/open').map((c) => c.body);
+   $('close').click(); await sleep(40);
+   out.close = calls.filter((c) => c.path === '/api/voice/stop').map((c) => c.body);
++  const says = () => calls.filter((c) => c.path === '/api/voice/say').map((c) => c.body);
++  const typeIn = async (text) => { $('say').value = text; $('typed').dispatchEvent(new dom.window.Event('submit', { cancelable: true, bubbles: true })); await sleep(60); };
++  await typeIn('   ');
++  out.typedBlank = says().length;
++  await typeIn('what is the time');
++  out.typedClassic = { bodies: says(), inputAfter: $('say').value, state: $('card').dataset.state, you: $('you').textContent, sendDisabled: $('send').disabled };
++  await typeIn('FAIL');
++  out.typedFail = { state: $('card').dataset.state, note: $('note').textContent, keptText: $('say').value, sendDisabled: $('send').disabled };
+   out.classicBadgeHidden = $('engine').hidden;
+   push({ state: 'idle', engine: 'live' }); await sleep(30);
+   out.liveBadgeHidden = $('engine').hidden;
++  await typeIn('hello live');
++  out.typedLive = says().slice(-1)[0];
+   $('again').click(); await sleep(60);
+   out.liveAgainBody = calls.filter((c) => c.path === '/api/voice/start').slice(-1)[0].body;
+   dom.window.close();
+diff --git a/core/tests/test_patch12.py b/core/tests/test_patch12.py
+index f60842d..d808aec 100644
+--- a/core/tests/test_patch12.py
++++ b/core/tests/test_patch12.py
+@@ -449,7 +449,8 @@ class TestDoctor(unittest.TestCase):
+                 mock.patch("web_search.ddg_search", return_value=[{"title": "Python", "url": "u", "snippet": ""}]), \
+                 mock.patch.object(actions, "youtube_find", return_value=("aaaaaaaaaaa", "A video")), \
+                 mock.patch("tts.synthesize_audio", return_value=(b"x" * 10, "audio/wav")), \
+-                mock.patch.object(stt, "available", return_value=True):
++                mock.patch.object(stt, "available", return_value=True), \
++                mock.patch("live_client.check", return_value=[("websocket", True, "stubbed")]):
+             return {name: (status, detail) for name, status, detail in doctor.run_checks(cfg)}
+ 
+     def test_report_marks_each_check(self):
+@@ -488,7 +489,8 @@ class TestDoctor(unittest.TestCase):
+     def test_a_crashing_check_cannot_break_the_report(self):
+         with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "k"}), mock.patch("gemini_client.ask_gemini", side_effect=RuntimeError("weird")), \
+                 mock.patch("web_search.ddg_search", side_effect=KeyError("x")), mock.patch.object(actions, "youtube_find", side_effect=ValueError("y")), \
+-                mock.patch("tts.synthesize_audio", side_effect=OSError("z")):
++                mock.patch("tts.synthesize_audio", side_effect=OSError("z")), \
++                mock.patch("live_client.check", return_value=[("websocket", True, "stubbed")]):
+             res = doctor.run_checks(load_config())
+         self.assertGreaterEqual(len(res), 10)
+         self.assertTrue(all(len(r) == 3 for r in res))
+diff --git a/core/tests/test_patch21.py b/core/tests/test_patch21.py
+index b460810..8b5e527 100644
+--- a/core/tests/test_patch21.py
++++ b/core/tests/test_patch21.py
+@@ -198,6 +198,7 @@ class FakeLive:
+         self.reject, self.reject_search, self.hold_speech, self.after = set(reject), reject_search, hold_speech, after
+         self.scripted, self.close_code, self.close_after_setup = scripted, close_code, close_after_setup
+         self.setups, self.tool_responses, self.audio_times, self.window = [], [], [], None
++        self.texts = []
+         self.audio_frames = 0
+         self.server = serve(self.handle, "127.0.0.1", 0)
+         self.port = self.server.socket.getsockname()[1]
+@@ -257,6 +258,8 @@ class FakeLive:
+         if "realtimeInput" in msg and "audio" in msg["realtimeInput"]:
+             self.audio_frames += 1
+             self.audio_times.append(time.monotonic())
++        if "realtimeInput" in msg and "text" in msg["realtimeInput"]:
++            self.texts.append(msg["realtimeInput"]["text"])
+         if "toolResponse" in msg:
+             self.tool_responses.append(msg["toolResponse"]["functionResponses"])
+         return msg
+diff --git a/core/tests/test_patch23.py b/core/tests/test_patch23.py
+new file mode 100644
+index 0000000..7d54ca0
+--- /dev/null
++++ b/core/tests/test_patch23.py
+@@ -0,0 +1,361 @@
++"""
++Patch 23: type to Faze (a text box in the overlay, for classic and live), and a step-by-step Live connection check
++(`faze livecheck`, and a row in /doctor) that shows where the connection breaks inside the process that matters.
++
++    PYTHONPATH=. python3 -m unittest tests.test_patch23 -v
++"""
++
++import os
++import socket
++import subprocess
++import sys
++import tempfile
++import threading
++import time
++import unittest
++from unittest import mock
++
++CORE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++sys.path.insert(0, CORE)
++
++import tests.test_patch21 as p21  # noqa: E402
++from tests.test_patch16 import VoiceBase, HAVE_JSDOM, run_node  # noqa: E402
++from tests.test_patch17 import TestOverlayButtonCommands  # noqa: E402,F401
++
++import doctor  # noqa: E402
++import live_client  # noqa: E402
++import stt  # noqa: E402
++from config_loader import load_config  # noqa: E402
++
++
++# ---------------------------------------------------------------- the connection check
++
++class Peer:
++    def __init__(self, ip="142.250.1.2"):
++        self.ip, self.closed = ip, False
++
++    def getpeername(self):
++        return (self.ip, 443)
++
++    def close(self):
++        self.closed = True
++
++
++class TestLiveCheck(unittest.TestCase):
++    def run_check(self, key="AQ.test", resolve=None, sock=None, connect=None, which=lambda n: "/bin/" + n, config=None):
++        resolve = resolve or (lambda host, port, family, kind: [(2, 1, 6, "", ("142.250.1.2", 443))])
++        sock_patch = mock.patch.object(live_client, "_open_socket", sock or (lambda host, port, timeout: Peer()))
++        player = mock.patch.object(live_client.PcmPlayer, "command_line", lambda self: ["pacat"] if which("pacat") else None)
++        with sock_patch, player:
++            return live_client.check(config or load_config(), key=key, connect=connect, resolve=resolve)
++
++    def names(self, steps):
++        return [s[0] for s in steps]
++
++    def test_everything_fine_without_a_real_server(self):
++        steps = self.run_check(connect=lambda url, **kw: (_ for _ in ()).throw(AssertionError("replaced below")))
++        self.assertEqual(self.names(steps), ["websockets", "key", "dns", "dns ipv4", "tcp", "websocket", "audio player"])
++
++    @unittest.skipUnless(p21.HAVE_WS, "websockets not installed")
++    def test_a_working_setup(self):
++        fake = p21.FakeLive(scripted=False)
++        self.addCleanup(fake.close)
++        steps = self.run_check(connect=fake.connect)
++        by = {name: (ok, detail) for name, ok, detail in steps}
++        self.assertTrue(all(ok for ok, _ in by.values()), by)
++        self.assertIn("142.250.1.2", by["dns"][1])
++        self.assertIn("setup accepted for gemini-3.8-live (shape generation)", by["websocket"][1])
++        self.assertEqual(by["audio player"][1].split()[0], "pacat")
++        self.assertEqual(len(fake.setups), 1)
++        self.assertEqual(fake.setups[0]["setup"]["model"], "models/gemini-3.8-live")
++
++    def test_the_phone_failure_is_shown_as_it_is(self):
++        def broken(host, port, family, kind):
++            raise socket.gaierror(7, "No address associated with hostname")
++
++        def no_tcp(host, port, timeout):
++            raise socket.gaierror(7, "No address associated with hostname")
++        steps = self.run_check(resolve=broken, sock=no_tcp)
++        by = {name: (ok, detail) for name, ok, detail in steps}
++        self.assertFalse(by["dns"][0])
++        self.assertIn("Errno 7", by["dns"][1])
++        self.assertFalse(by["dns ipv4"][0])
++        self.assertFalse(by["tcp"][0])
++        self.assertIn("skipped", by["websocket"][1])
++
++    def test_a_resolver_that_only_fails_without_a_family_points_at_ipv4(self):
++        def resolve(host, port, family, kind):
++            if family == 0:
++                raise socket.gaierror(7, "No address associated with hostname")
++            return [(2, 1, 6, "", ("142.250.1.2", 443))]
++        by = {n: ok for n, ok, _ in self.run_check(resolve=resolve)}
++        self.assertFalse(by["dns"])
++        self.assertTrue(by["dns ipv4"])
++        self.assertTrue(by["tcp"])
++
++    def test_no_key_and_no_package(self):
++        by = {n: (ok, d) for n, ok, d in self.run_check(key="")}
++        self.assertFalse(by["key"][0])
++        self.assertIn("~/.felix/env", by["key"][1])
++        self.assertIn("skipped", by["websocket"][1])
++        with mock.patch.object(live_client, "_ws_connect", None):
++            by = {n: (ok, d) for n, ok, d in self.run_check()}
++        self.assertFalse(by["websockets"][0])
++        self.assertIn("pip install websockets", by["websockets"][1])
++
++    def test_a_refused_setup_names_the_server_reason_and_never_the_key(self):
++        def refuse(url, **kw):
++            raise OSError("handshake failed for wss://x?key=SECRETKEY")
++        steps = self.run_check(key="SECRETKEY", connect=refuse)
++        by = {n: (ok, d) for n, ok, d in steps}
++        self.assertFalse(by["websocket"][0])
++        self.assertIn("could not connect", by["websocket"][1])
++        self.assertNotIn("SECRETKEY", repr(steps))
++
++    def test_no_audio_player(self):
++        by = {n: (ok, d) for n, ok, d in self.run_check(which=lambda n: None)}
++        self.assertFalse(by["audio player"][0])
++        self.assertIn("pulseaudio", by["audio player"][1])
++
++    def test_format(self):
++        text = live_client.format_check([("dns", True, "any 1.2.3.4 (0.0s)"), ("tcp", False, "gaierror: x")])
++        self.assertEqual(text.splitlines(), ["[ok  ] dns: any 1.2.3.4 (0.0s)", "[FAIL] tcp: gaierror: x"])
++
++    def test_command_line_usage(self):
++        out = subprocess.run([sys.executable, os.path.join(CORE, "live_client.py")], capture_output=True, text=True, cwd=CORE,
++                             env=dict(os.environ, PYTHONPATH=CORE))
++        self.assertEqual(out.returncode, 2)
++        self.assertIn("usage: python3 live_client.py check", out.stdout)
++
++
++class TestDoctorRow(unittest.TestCase):
++    def doctor(self, key="k", steps=None):
++        steps = steps or [("websockets", True, "x"), ("websocket", True, "setup accepted for gemini-3.8-live (shape generation) (0.9s)"),
++                          ("audio player", True, "pacat (0.0s)")]
++        import actions
++        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": key}), \
++                mock.patch("gemini_client.ask_gemini", return_value={"type": "text", "content": "OK"}), \
++                mock.patch("web_search.ddg_search", return_value=[]), \
++                mock.patch.object(actions, "youtube_find", return_value=("aaaaaaaaaaa", "v")), \
++                mock.patch("tts.synthesize_audio", return_value=(b"x", "audio/wav")), \
++                mock.patch.object(stt, "available", return_value=True), \
++                mock.patch("live_client.check", return_value=steps):
++            return {n: (s, d) for n, s, d in doctor.run_checks(load_config())}
++
++    def test_ok_row_shows_the_handshake_and_player(self):
++        status, detail = self.doctor()["Gemini Live"]
++        self.assertEqual(status, "ok")
++        self.assertIn("setup accepted", detail)
++        self.assertIn("audio player: pacat", detail)
++
++    def test_failure_shows_the_first_broken_step(self):
++        status, detail = self.doctor(steps=[("dns", False, "gaierror: [Errno 7] No address associated with hostname"), ("tcp", False, "later")])["Gemini Live"]
++        self.assertEqual(status, "fail")
++        self.assertIn("dns: gaierror: [Errno 7]", detail)
++        self.assertNotIn("later", detail)
++
++    def test_no_key_skips_it(self):
++        self.assertEqual(self.doctor(key="")["Gemini Live"][0], "skip")
++
++
++class TestLivecheckScript(TestOverlayButtonCommands):
++    def test_livecheck_runs_the_check_and_returns_its_exit_code(self):
++        core = os.path.join(self.dir, "core")
++        os.makedirs(core)
++        with open(os.path.join(core, "live_client.py"), "w") as f:
++            f.write("import sys\nprint('[FAIL] dns: Errno 7')\nsys.exit(1)\n" if sys.argv else "")
++        self.env["FAZE_CORE"] = core
++        out = self.run_svc("livecheck")
++        self.assertEqual((out.returncode, out.stdout.strip()), (1, "[FAIL] dns: Errno 7"))
++        with open(os.path.join(core, "live_client.py"), "w") as f:
++            f.write("print('[ok  ] dns: fine')\n")
++        out = self.run_svc("livecheck")
++        self.assertEqual((out.returncode, out.stdout.strip()), (0, "[ok  ] dns: fine"))
++
++    def test_usage_lists_it(self):
++        self.assertIn("livecheck", self.run_svc("bogus").stdout)
++
++
++# ---------------------------------------------------------------- typing to Faze
++
++class BlockingListener:
++    """A wake listener whose capture blocks until released, to catch an exchange while it is still listening."""
++
++    def __init__(self):
++        self.release, self.holds, self.captures = threading.Event(), [], 0
++
++    def hold(self, on):
++        self.holds.append(on)
++
++    def _live(self):
++        return True
++
++    def capture_utterance(self, **kw):
++        self.captures += 1
++        self.release.wait(10)
++        return b"\x01\x02" * 480
++
++
++class TestTypedClassic(VoiceBase):
++    def send_patch(self, reply="Half past four, if you must know."):
++        return mock.patch.object(self.convo, "send", return_value=reply)
++
++    def test_typed_text_runs_a_turn_without_the_microphone_or_stt(self):
++        with mock.patch("stt.transcribe_best", side_effect=AssertionError("typed text needs no transcription")) as best, \
++                self.send_patch() as send:
++            started = self.voice.say("what is the time")
++            self.assertTrue(started["started"])
++            done = self.wait_state("done")
++        send.assert_called_once_with("what is the time")
++        self.assertEqual((done["transcript"], done["engine"]), ("what is the time", "classic"))
++        self.assertEqual(done["reply"], "Half past four, if you must know.")
++        best.assert_not_called()
++        self.assertEqual(self.listener.holds, [])
++        self.assertIsNone(self.listener.args)  # capture_utterance was never asked
++        self.assertEqual(self.procs[0].argv[0], "termux-tts-speak")
++        self.assertIn("stt_ms", done["timings"])
++
++    def test_typed_text_is_trimmed_and_capped(self):
++        with self.send_patch() as send:
++            self.voice.say("  hello  " + "x" * 5000)
++            self.wait_state("done")
++        sent = send.call_args[0][0]
++        self.assertTrue(sent.startswith("hello  xxx"))
++        self.assertEqual(len(sent), 2000)
++
++    def test_nothing_typed_starts_nothing(self):
++        for blank in ("", "   ", None):
++            r = self.voice.say(blank)
++            self.assertEqual((r["started"], r["queued"], r["problem"]), (False, False, "nothing to say"))
++        self.assertEqual(self.voice.state()["state"], "idle")
++        self.assertEqual(self.states(), [])
++
++    def test_typing_replaces_an_exchange_that_is_still_listening(self):
++        blocker = BlockingListener()
++        self.httpd.wake = blocker
++        self.voice.start()
++        self.wait_state("listening")
++        time.sleep(0.1)
++        with self.send_patch() as send:
++            r = self.voice.say("typed instead")
++            self.assertTrue(r["started"])
++            done = self.wait_state("done")
++            blocker.release.set()  # the old exchange wakes up late and must change nothing
++            time.sleep(0.4)
++        send.assert_called_once_with("typed instead")
++        self.assertEqual(self.voice.state()["transcript"], "typed instead")
++        self.assertEqual(self.voice.state()["state"], "done")
++        self.assertEqual(done["transcript"], "typed instead")
++
++    def test_typing_while_the_reply_is_being_spoken_starts_over(self):
++        self.hang_tts = True
++        with self.send_patch("An answer that takes a moment to say out loud."):
++            self.voice.say("first question")
++            self.wait_state("speaking")
++            end = time.time() + 5
++            while time.time() < end and not self.procs:  # "speaking" is set as the sentence is queued
++                time.sleep(0.02)
++        with self.send_patch("Second answer, short and sweet.") as second:
++            self.voice.say("second question")
++            self.wait_state("speaking")
++            time.sleep(0.2)
++        second.assert_called_once_with("second question")
++        self.assertTrue(self.procs[0].terminated)  # the first was cut off
++        self.voice.stop()
++
++    def test_a_stale_error_from_an_earlier_exchange_does_not_block_typing(self):
++        self.voice._snap["error"] = "an old failure"
++        with self.send_patch():
++            code, d = self.jpost("/api/voice/say", {"text": "still works"})
++            self.assertEqual((code, d["ok"]), (200, True))
++            self.wait_state("done")
++
++    def test_the_endpoint(self):
++        self.listener.pcm = None
++        resp, _ = self.request("POST", "/api/voice/say", body={"text": "hi"}, token=None)
++        self.assertEqual(resp.status, 401)
++        code, d = self.jpost("/api/voice/say", {"text": "   "})
++        self.assertEqual((code, d["ok"], d["problem"]), (400, False, "nothing to say"))
++        with self.send_patch():
++            code, d = self.jpost("/api/voice/say", {"text": "what is the time"})
++            self.assertEqual((code, d["ok"], d["started"], d["engine"]), (200, True, True, "classic"))
++            self.wait_state("done")
++        self.assertEqual(self.jget("/api/voice/state")[1]["transcript"], "what is the time")
++
++
++@unittest.skipUnless(p21.HAVE_WS, "websockets not installed")
++class TestTypedLive(p21.LiveBase):
++    def wait_for(self, cond, what, seconds=8):
++        end = time.time() + seconds
++        while time.time() < end:
++            if cond():
++                return
++            time.sleep(0.02)
++        self.fail(f"timed out waiting for {what}")
++
++    def test_typed_text_goes_into_a_running_conversation(self):
++        fake = self.serve(scripted=False)
++        self.convo.config["live"]["idle_seconds"] = 30
++        self.voice.start(live=True)
++        self.wait_state("listening")
++        r = self.voice.say("what is two plus two")
++        self.assertEqual((r["started"], r["queued"]), (False, True))
++        self.wait_for(lambda: fake.texts == ["what is two plus two"], "the text to reach the server")
++        s = self.voice.state()
++        self.assertEqual((s["transcript"], s["reply"], s["state"]), ("what is two plus two", "", "thinking"))
++        self.assertEqual(s["engine"], "live")
++        self.voice.stop()
++
++    def test_typing_with_no_conversation_starts_one_with_that_text_first(self):
++        fake = self.serve(scripted=False)
++        self.convo.config["live"]["idle_seconds"] = 30
++        r = self.voice.say("hello there", live=True)
++        self.assertEqual((r["started"], r["engine"]), (True, "live"))
++        self.wait_for(lambda: fake.texts == ["hello there"], "the first text")
++        self.voice.stop()
++
++    def test_typing_interrupts_speech(self):
++        fake = self.serve(hold_speech=1.5)
++        self.voice.start(live=True)
++        self.wait_state("speaking", seconds=15)
++        self.voice.say("stop talking and listen")
++        self.wait_for(lambda: fake.texts == ["stop talking and listen"], "the text")
++        self.assertGreaterEqual(p21.FakePlayer.instances[0].stopped, 1)
++        self.voice.stop()
++
++    def test_when_live_is_unavailable_the_typed_text_is_answered_classically(self):
++        self.serve()
++        os.environ.pop("GEMINI_API_KEY")
++        with mock.patch.object(self.convo, "send", return_value="Answered the old way, but answered.") as send:
++            self.voice.say("what is the time", live=True)
++            done = self.wait_state("done", seconds=10)
++        send.assert_called_once_with("what is the time")
++        self.assertEqual(done["engine"], "classic")
++        self.assertIn("Live is unavailable", done["note"])
++
++
++@unittest.skipUnless(HAVE_JSDOM, "jsdom not installed")
++class TestOverlayTyping(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.res = run_node("overlay_smoke.js")
++
++    def test_blank_is_not_sent_and_text_is(self):
++        r = self.res
++        self.assertNotIn("crash", r, r.get("crash"))
++        self.assertEqual(r["errors"], [])
++        self.assertEqual(r["typedBlank"], 0)
++        c = r["typedClassic"]
++        self.assertEqual(c["bodies"], [{"text": "what is the time", "live": False}])
++        self.assertEqual((c["inputAfter"], c["you"], c["sendDisabled"]), ("", "what is the time", False))
++
++    def test_a_failed_send_keeps_the_text_and_shows_the_error(self):
++        f = self.res["typedFail"]
++        self.assertEqual((f["state"], f["note"], f["keptText"], f["sendDisabled"]), ("error", "request failed (400)", "FAIL", False))
++
++    def test_live_conversations_send_the_live_flag(self):
++        self.assertEqual(self.res["typedLive"], {"text": "hello live", "live": True})
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/core/voice_session.py b/core/voice_session.py
+index 8d7ee13..be54627 100644
+--- a/core/voice_session.py
++++ b/core/voice_session.py
+@@ -180,6 +180,7 @@ class VoiceSession:
+         self._gen = 0
+         self._thread = None
+         self._tts = None
++        self._typed = queue.Queue()  # text typed into a running live conversation, sent on by its loop
+         self._snap = {"state": IDLE, "transcript": "", "reply": "", "error": "", "note": "", "timings": {}, "engine": "classic", "seq": 0, "active": False}
+ 
+     # ---- state -------------------------------------------------------------
+@@ -203,7 +204,7 @@ class VoiceSession:
+ 
+     # ---- control -----------------------------------------------------------
+ 
+-    def start(self, overlay: bool = False, live: bool = False) -> dict:
++    def start(self, overlay: bool = False, live: bool = False, text: str = "") -> dict:
+         """Begin one exchange (or, with live=True, a Gemini Live conversation). Returns {"started": bool, **state};
+         an exchange already running is left alone."""
+         with self._lock:
+@@ -217,14 +218,32 @@ class VoiceSession:
+             self._snap["seq"] += 1
+             snap = dict(self._snap)
+             cancel = self._cancel
++            self._typed = queue.Queue()
++            if live and text:
++                self._typed.put(text)
+         self.server.publish("voice", snap)
+         action_log.log_action("voice", "start", {"overlay": overlay, "live": live}, "listening", 0, echo=False)
+-        self._thread = threading.Thread(target=self._exchange, args=(gen, cancel, live), daemon=True)
++        self._thread = threading.Thread(target=self._exchange, args=(gen, cancel, live, text), daemon=True)
+         self._thread.start()
+         if overlay:
+             self.tasker(self.server.config["voice"].get("overlay_task", ""))
+         return {"started": True, **snap}
+ 
++    def say(self, text: str, live: bool = False, overlay: bool = False) -> dict:
++        """Something typed instead of spoken. Into a running live conversation it is sent on to Gemini; otherwise it
++        starts an exchange with that text (a classic exchange that is still listening or answering is replaced)."""
++        text = (text or "").strip()[:2000]
++        if not text:
++            return {**self.state(), "started": False, "queued": False, "problem": "nothing to say"}
++        with self._lock:
++            active, engine = self._snap["state"] in ACTIVE, self._snap["engine"]
++        if active and engine == "live":
++            self._typed.put(text)
++            return {**self.state(), "started": False, "queued": True}
++        if active:
++            self.stop()
++        return self.start(overlay=overlay, live=live, text=text)
++
+     def stop(self, close_overlay: bool = False) -> dict:
+         with self._lock:
+             gen, was_active = self._gen, self._snap["state"] in ACTIVE
+@@ -277,7 +296,7 @@ class VoiceSession:
+ 
+     # ---- the exchange ------------------------------------------------------
+ 
+-    def _exchange(self, gen: int, cancel: threading.Event, live: bool = False) -> None:
++    def _exchange(self, gen: int, cancel: threading.Event, live: bool = False, typed: str = "") -> None:
+         if live:
+             import live_voice
+             try:
+@@ -305,24 +324,29 @@ class VoiceSession:
+                  "first_speech_ms": ms("text", "speech"), "total_ms": ms("start", "end")}
+             return {k: v for k, v in t.items() if v is not None}
+         try:
+-            if listener is not None:
+-                listener.hold(True)
+-                held = True
+-            pcm = self._hear(listener)
+-            marks["heard"] = time.monotonic()
+-            if cancel.is_set():
+-                return
+-            if not pcm:
+-                self._set(gen, state=IDLE, note="I did not hear anything")
+-                return
+-            self._set(gen, state=TRANSCRIBING)
+-            text = self._transcribe(pcm)
+-            marks["text"] = time.monotonic()
+-            if cancel.is_set():
+-                return
+-            if not text:
+-                self._set(gen, state=IDLE, note="I did not catch that")
+-                return
++            typed = (typed or "").strip()
++            if typed:  # typed, not spoken: no microphone and no transcription
++                text = typed
++                marks["heard"] = marks["text"] = time.monotonic()
++            else:
++                if listener is not None:
++                    listener.hold(True)
++                    held = True
++                pcm = self._hear(listener)
++                marks["heard"] = time.monotonic()
++                if cancel.is_set():
++                    return
++                if not pcm:
++                    self._set(gen, state=IDLE, note="I did not hear anything")
++                    return
++                self._set(gen, state=TRANSCRIBING)
++                text = self._transcribe(pcm)
++                marks["text"] = time.monotonic()
++                if cancel.is_set():
++                    return
++                if not text:
++                    self._set(gen, state=IDLE, note="I did not catch that")
++                    return
+             self._set(gen, transcript=text, state=THINKING)
+             if not server.chat_lock.acquire(blocking=False):
+                 self._set(gen, state=ERROR, error="Faze is still answering the last message")
+diff --git a/core/web/overlay.css b/core/web/overlay.css
+index 811da7d..4fb9b6d 100644
+--- a/core/web/overlay.css
++++ b/core/web/overlay.css
+@@ -27,3 +27,8 @@ body { display: flex; align-items: flex-end; justify-content: center; padding: 1
+ @keyframes spin { to { transform: rotate(360deg); } }
+ @media (prefers-reduced-motion: reduce) { #orb i { animation: none !important; } }
+ #engine { grid-column: 2; justify-self: start; font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent); }
++#typed { grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 8px; }
++#say { flex: 1; min-width: 0; min-height: 44px; padding: 0 14px; border-radius: 14px; border: 1px solid var(--line); background: #0b0d13; color: var(--text); font: inherit; }
++#say:focus { outline: none; border-color: var(--accent); }
++#send { flex: 0 0 76px; min-height: 44px; border-radius: 14px; border: 1px solid var(--accent); background: #1a2340; color: var(--text); font: inherit; }
++#send:disabled { opacity: .5; }
+diff --git a/core/web/overlay.html b/core/web/overlay.html
+index ccfc64b..cee42cb 100644
+--- a/core/web/overlay.html
++++ b/core/web/overlay.html
+@@ -15,6 +15,10 @@
+     <p id="you" hidden></p>
+     <p id="reply" hidden></p>
+     <p id="note" hidden></p>
++    <form id="typed" autocomplete="off">
++      <input id="say" type="text" enterkeyhint="send" maxlength="2000" placeholder="Type to Faze" aria-label="Type a message">
++      <button id="send" type="submit">Send</button>
++    </form>
+     <div id="actions">
+       <button id="again" type="button">Again</button>
+       <button id="stop" type="button">Stop</button>
+diff --git a/core/web/overlay.js b/core/web/overlay.js
+index d44130e..6f1ff3a 100644
+--- a/core/web/overlay.js
++++ b/core/web/overlay.js
+@@ -51,6 +51,16 @@
+   function fail(e) { render({ state: 'error', error: e.message, active: false, transcript: '', reply: '' }); }
+   const start = () => api('/api/voice/start', engine === 'live' ? { live: true } : {}).then(render).catch(fail);
+ 
++  $('typed').addEventListener('submit', async (e) => {
++    e.preventDefault();
++    const text = $('say').value.trim();
++    if (!text) return;
++    $('send').disabled = true;
++    try {
++      render(await api('/api/voice/say', { text, live: engine === 'live' }));
++      $('say').value = '';
++    } catch (err) { fail(err); } finally { $('send').disabled = false; }
++  });
+   $('again').addEventListener('click', start);
+   $('stop').addEventListener('click', () => api('/api/voice/stop', {}).then(render).catch(fail));
+   $('open').addEventListener('click', () => api('/api/open', { close_overlay: true }).catch(fail));
+diff --git a/core/web_server.py b/core/web_server.py
+index c526874..35660c3 100644
+--- a/core/web_server.py
++++ b/core/web_server.py
+@@ -397,6 +397,11 @@ class Handler(BaseHTTPRequestHandler):
+             return self._speak(data)
+         if path == "/api/voice/start":
+             return self._json(200, {"ok": True, **self.server.voice.start(overlay=bool(data.get("overlay")), live=bool(data.get("live")))})
++        if path == "/api/voice/say":
++            result = self.server.voice.say(str(data.get("text", "")), live=bool(data.get("live")), overlay=bool(data.get("overlay")))
++            if result.get("problem"):
++                return self._json(400, {"ok": False, **result})
++            return self._json(200, {"ok": True, **result})
+         if path == "/api/voice/stop":
+             return self._json(200, {"ok": True, **self.server.voice.stop(close_overlay=bool(data.get("close")))})
+         if path == "/api/open":
+diff --git a/scripts/faze_service.sh b/scripts/faze_service.sh
+index 3b44b1d..b44b434 100755
+--- a/scripts/faze_service.sh
++++ b/scripts/faze_service.sh
+@@ -10,6 +10,7 @@
+ #   faze voice | faze live | faze app | faze cli     same as start --voice / --live / --app / --cli
+ #   faze overlay [--live]     print the link the Tasker Scene WebView should load (--live: the link starts a live conversation)
+ #   faze voice-stop           stop the current voice exchange (Tasker overlay Stop button)
++#   faze livecheck            test, step by step, where the Live connection breaks (DNS, TCP, websocket, player)
+ #   faze close                stop the exchange AND ask Tasker to close the overlay, even if the service is down
+ #   faze open                 open the web app, no voice mode (Tasker overlay Open Faze button)
+ #   faze stop | restart | status | logs
+@@ -156,7 +157,7 @@ PY
+     fi
+ }
+ 
+-usage() { echo "usage: $0 start [--voice|--live|--app|--cli] | voice | live | app | cli | overlay [--live] | voice-stop | close | open | stop | restart | status | logs"; }
++usage() { echo "usage: $0 start [--voice|--live|--app|--cli] | voice | live | app | cli | overlay [--live] | voice-stop | close | livecheck | open | stop | restart | status | logs"; }
+ 
+ start_command() {
+     local mode=""
+@@ -222,6 +223,10 @@ case "${1:-status}" in
+         else echo "no token yet: run faze start first"; exit 1; fi
+         ;;
+     cli) start_command --cli ;;
++    livecheck)
++        ( cd "${FAZE_CORE:-$HOME/felix-ai/core}" && PYTHONPATH=. python3 live_client.py check )
++        exit $?
++        ;;
+     close)
+         api_post /api/voice/stop '{"close": true}' > /dev/null 2>&1 || true
+         if am broadcast -a net.dinglisch.android.tasker.ACTION_TASK --es task_name "${FAZE_CLOSE_TASK:-Faze Overlay Close}" > /dev/null 2>&1; then echo "closed"

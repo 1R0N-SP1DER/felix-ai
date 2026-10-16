@@ -26,6 +26,11 @@ async function fakeFetch(url, opts) {
   if (p === '/api/events') return { ok: true, status: 200, body: new ReadableStream({ start(c) { evCtl = c; } }) };
   if (p === '/api/voice/state') return json(snap);
   if (p === '/api/voice/start') { snap = Object.assign({}, snap, { state: 'listening', active: true, transcript: '', reply: '', note: '' }); return json(Object.assign({ started: true }, snap)); }
+  if (p === '/api/voice/say') {
+    if (body.text === 'FAIL') return { ok: false, status: 400, json: async () => ({ error: 'nothing to say' }) };
+    snap = Object.assign({}, snap, { state: 'thinking', transcript: body.text, reply: '', active: true });
+    return json(Object.assign({ started: true }, snap));
+  }
   if (p === '/api/voice/stop') { snap = Object.assign({}, snap, { state: 'idle', active: false, note: 'Stopped' }); return json(snap); }
   if (p === '/api/open') return json({ ok: true });
   return { ok: false, status: 404, json: async () => ({}) };
@@ -72,9 +77,19 @@ function boot(hash) {
   out.open = calls.filter((c) => c.path === '/api/open').map((c) => c.body);
   $('close').click(); await sleep(40);
   out.close = calls.filter((c) => c.path === '/api/voice/stop').map((c) => c.body);
+  const says = () => calls.filter((c) => c.path === '/api/voice/say').map((c) => c.body);
+  const typeIn = async (text) => { $('say').value = text; $('typed').dispatchEvent(new dom.window.Event('submit', { cancelable: true, bubbles: true })); await sleep(60); };
+  await typeIn('   ');
+  out.typedBlank = says().length;
+  await typeIn('what is the time');
+  out.typedClassic = { bodies: says(), inputAfter: $('say').value, state: $('card').dataset.state, you: $('you').textContent, sendDisabled: $('send').disabled };
+  await typeIn('FAIL');
+  out.typedFail = { state: $('card').dataset.state, note: $('note').textContent, keptText: $('say').value, sendDisabled: $('send').disabled };
   out.classicBadgeHidden = $('engine').hidden;
   push({ state: 'idle', engine: 'live' }); await sleep(30);
   out.liveBadgeHidden = $('engine').hidden;
+  await typeIn('hello live');
+  out.typedLive = says().slice(-1)[0];
   $('again').click(); await sleep(60);
   out.liveAgainBody = calls.filter((c) => c.path === '/api/voice/start').slice(-1)[0].body;
   dom.window.close();

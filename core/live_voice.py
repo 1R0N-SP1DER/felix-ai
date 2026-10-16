@@ -12,6 +12,7 @@ LiveUnavailable means nothing was said yet and the caller can fall back to the c
 """
 
 import os
+import queue
 import threading
 import time
 
@@ -122,7 +123,23 @@ def run(session, gen: int, cancel: threading.Event, connect=None, player=None, c
                 t["first_audio_ms"] = max(0, int((timing["audio"] - timing["user"]) * 1000))
             return t
 
+        def send_typed():
+            """Text typed into the overlay goes to Gemini as a turn of its own; it interrupts anything being said."""
+            while True:
+                try:
+                    typed = session._typed.get_nowait()
+                except queue.Empty:
+                    return
+                if state["speaking"] or player.busy():
+                    player.stop()
+                state.update(speaking=False, turn_done=False, activity=clock(), gate_until=clock() + TAIL_S)
+                text["user"], text["reply"] = typed, ""
+                timing["user"] = clock()
+                session._set(gen, transcript=typed, reply="", state=THINKING)
+                conn.send_text(typed)
+
         while not cancel.is_set():
+            send_typed()
             now = clock()
             if now - started > max_seconds:
                 end_note = "Live session time limit reached"

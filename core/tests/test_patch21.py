@@ -198,6 +198,7 @@ class FakeLive:
         self.reject, self.reject_search, self.hold_speech, self.after = set(reject), reject_search, hold_speech, after
         self.scripted, self.close_code, self.close_after_setup = scripted, close_code, close_after_setup
         self.setups, self.tool_responses, self.audio_times, self.window = [], [], [], None
+        self.texts = []
         self.audio_frames = 0
         self.server = serve(self.handle, "127.0.0.1", 0)
         self.port = self.server.socket.getsockname()[1]
@@ -257,6 +258,8 @@ class FakeLive:
         if "realtimeInput" in msg and "audio" in msg["realtimeInput"]:
             self.audio_frames += 1
             self.audio_times.append(time.monotonic())
+        if "realtimeInput" in msg and "text" in msg["realtimeInput"]:
+            self.texts.append(msg["realtimeInput"]["text"])
         if "toolResponse" in msg:
             self.tool_responses.append(msg["toolResponse"]["functionResponses"])
         return msg

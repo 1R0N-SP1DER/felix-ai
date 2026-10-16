@@ -397,6 +397,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._speak(data)
         if path == "/api/voice/start":
             return self._json(200, {"ok": True, **self.server.voice.start(overlay=bool(data.get("overlay")), live=bool(data.get("live")))})
+        if path == "/api/voice/say":
+            result = self.server.voice.say(str(data.get("text", "")), live=bool(data.get("live")), overlay=bool(data.get("overlay")))
+            if result.get("problem"):
+                return self._json(400, {"ok": False, **result})
+            return self._json(200, {"ok": True, **result})
         if path == "/api/voice/stop":
             return self._json(200, {"ok": True, **self.server.voice.stop(close_overlay=bool(data.get("close")))})
         if path == "/api/open":

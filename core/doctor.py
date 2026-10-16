@@ -133,6 +133,15 @@ def run_checks(config: dict) -> list:
             return FAIL, "no engine: " + (stt.missing_reason(config) or "whisper missing") + " and no Gemini key"
         return OK, ("online" if online else "") + (" + " if online and offline else "") + ("whisper installed" if offline else "")
     add("Wake-word recognition", speech)
+
+    def live():
+        import live_client
+        steps = live_client.check(config)
+        bad = [x for x in steps if not x[1]]
+        if bad:
+            return FAIL, f"{bad[0][0]}: {bad[0][2]}"
+        return OK, "; ".join(f"{n}: {d}" for n, _, d in steps if n in ("websocket", "audio player"))
+    add("Gemini Live", need_key(live))
     return out
 
 

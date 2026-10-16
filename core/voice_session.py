@@ -180,6 +180,7 @@ class VoiceSession:
         self._gen = 0
         self._thread = None
         self._tts = None
+        self._typed = queue.Queue()  # text typed into a running live conversation, sent on by its loop
         self._snap = {"state": IDLE, "transcript": "", "reply": "", "error": "", "note": "", "timings": {}, "engine": "classic", "seq": 0, "active": False}
 
     # ---- state -------------------------------------------------------------
@@ -203,7 +204,7 @@ class VoiceSession:
 
     # ---- control -----------------------------------------------------------
 
-    def start(self, overlay: bool = False, live: bool = False) -> dict:
+    def start(self, overlay: bool = False, live: bool = False, text: str = "") -> dict:
         """Begin one exchange (or, with live=True, a Gemini Live conversation). Returns {"started": bool, **state};
         an exchange already running is left alone."""
         with self._lock:
@@ -217,13 +218,31 @@ class VoiceSession:
             self._snap["seq"] += 1
             snap = dict(self._snap)
             cancel = self._cancel
+            self._typed = queue.Queue()
+            if live and text:
+                self._typed.put(text)
         self.server.publish("voice", snap)
         action_log.log_action("voice", "start", {"overlay": overlay, "live": live}, "listening", 0, echo=False)
-        self._thread = threading.Thread(target=self._exchange, args=(gen, cancel, live), daemon=True)
+        self._thread = threading.Thread(target=self._exchange, args=(gen, cancel, live, text), daemon=True)
         self._thread.start()
         if overlay:
             self.tasker(self.server.config["voice"].get("overlay_task", ""))
         return {"started": True, **snap}
+
+    def say(self, text: str, live: bool = False, overlay: bool = False) -> dict:
+        """Something typed instead of spoken. Into a running live conversation it is sent on to Gemini; otherwise it
+        starts an exchange with that text (a classic exchange that is still listening or answering is replaced)."""
+        text = (text or "").strip()[:2000]
+        if not text:
+            return {**self.state(), "started": False, "queued": False, "problem": "nothing to say"}
+        with self._lock:
+            active, engine = self._snap["state"] in ACTIVE, self._snap["engine"]
+        if active and engine == "live":
+            self._typed.put(text)
+            return {**self.state(), "started": False, "queued": True}
+        if active:
+            self.stop()
+        return self.start(overlay=overlay, live=live, text=text)
 
     def stop(self, close_overlay: bool = False) -> dict:
         with self._lock:
@@ -277,7 +296,7 @@ class VoiceSession:
 
     # ---- the exchange ------------------------------------------------------
 
-    def _exchange(self, gen: int, cancel: threading.Event, live: bool = False) -> None:
+    def _exchange(self, gen: int, cancel: threading.Event, live: bool = False, typed: str = "") -> None:
         if live:
             import live_voice
             try:
@@ -305,24 +324,29 @@ class VoiceSession:
                  "first_speech_ms": ms("text", "speech"), "total_ms": ms("start", "end")}
             return {k: v for k, v in t.items() if v is not None}
         try:
-            if listener is not None:
-                listener.hold(True)
-                held = True
-            pcm = self._hear(listener)
-            marks["heard"] = time.monotonic()
-            if cancel.is_set():
-                return
-            if not pcm:
-                self._set(gen, state=IDLE, note="I did not hear anything")
-                return
-            self._set(gen, state=TRANSCRIBING)
-            text = self._transcribe(pcm)
-            marks["text"] = time.monotonic()
-            if cancel.is_set():
-                return
-            if not text:
-                self._set(gen, state=IDLE, note="I did not catch that")
-                return
+            typed = (typed or "").strip()
+            if typed:  # typed, not spoken: no microphone and no transcription
+                text = typed
+                marks["heard"] = marks["text"] = time.monotonic()
+            else:
+                if listener is not None:
+                    listener.hold(True)
+                    held = True
+                pcm = self._hear(listener)
+                marks["heard"] = time.monotonic()
+                if cancel.is_set():
+                    return
+                if not pcm:
+                    self._set(gen, state=IDLE, note="I did not hear anything")
+                    return
+                self._set(gen, state=TRANSCRIBING)
+                text = self._transcribe(pcm)
+                marks["text"] = time.monotonic()
+                if cancel.is_set():
+                    return
+                if not text:
+                    self._set(gen, state=IDLE, note="I did not catch that")
+                    return
             self._set(gen, transcript=text, state=THINKING)
             if not server.chat_lock.acquire(blocking=False):
                 self._set(gen, state=ERROR, error="Faze is still answering the last message")

@@ -323,3 +323,95 @@ class PcmPlayer:
                 proc.terminate()
             except OSError:
                 pass
+
+
+def check(config: dict = None, key: str = None, connect=None, resolve=socket.getaddrinfo) -> list:
+    """Step by step, where Live breaks in THIS process: [(step, ok, detail)]. A step that fails skips the ones that need it.
+    `faze livecheck` runs it from the shell; /doctor runs it inside the service, which is the one that matters."""
+    import os
+    live = (config or {}).get("live", {})
+    key = os.environ.get("GEMINI_API_KEY", "") if key is None else key
+    host = urllib.parse.urlparse(URL).hostname
+    steps = []
+
+    def step(name, fn):
+        started = time.monotonic()
+        try:
+            detail = fn()
+            steps.append((name, True, f"{detail} ({time.monotonic() - started:.1f}s)"))
+            return True
+        except Exception as e:
+            steps.append((name, False, scrub(f"{type(e).__name__}: {e}")[:200]))
+            return False
+
+    def skip(name, why):
+        steps.append((name, True, "skipped: " + why))
+
+    def package():
+        if _ws_connect is None and connect is None:
+            raise LiveError("not installed (pip install websockets)")
+        try:
+            import websockets
+            return "websockets " + getattr(websockets, "__version__", "?")
+        except ImportError:
+            return "custom connection"
+    ok = step("websockets", package)
+
+    def have_key():
+        if not key:
+            raise LiveError("GEMINI_API_KEY is not set in this process (put it in ~/.felix/env)")
+        return f"set ({len(key)} characters)"
+    ok = step("key", have_key) and ok
+
+    def lookup(family, label):
+        def run():
+            addr = resolve(host, 443, family, socket.SOCK_STREAM)[0][4][0]
+            return f"{label} {addr}"
+        return run
+    step("dns", lookup(0, "any"))
+    step("dns ipv4", lookup(socket.AF_INET, "ipv4"))
+
+    def tcp():
+        sock = _open_socket(host, 443, 6.0)
+        try:
+            return "connected to " + str(sock.getpeername()[0])
+        finally:
+            sock.close()
+    connected = step("tcp", tcp)
+
+    if ok and connected:
+        def handshake():
+            conn = LiveConnection(key, str(live.get("model") or "gemini-3.8-live"), connect=connect)
+            try:
+                conn.open("Reply briefly.", [], search=False)
+                return f"setup accepted for {conn.model} (shape {conn.shape})"
+            finally:
+                conn.close()
+        step("websocket", handshake)
+    else:
+        skip("websocket", "needs the package, the key and a TCP connection")
+
+    def player():
+        cmd = PcmPlayer(str(live.get("player", ""))).command_line()
+        if cmd is None:
+            raise LiveError("no player: pkg install pulseaudio (pacat) or ffmpeg (ffplay), or set live.player")
+        return cmd[0]
+    step("audio player", player)
+    return steps
+
+
+def format_check(steps: list) -> str:
+    return "\n".join(f"[{'ok  ' if ok else 'FAIL'}] {name}: {detail}" for name, ok, detail in steps)
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "check":
+        import config_loader
+        import env_loader
+        env_loader.load_env()
+        result = check(config_loader.load_config())
+        print(format_check(result))
+        sys.exit(0 if all(ok for _, ok, _ in result) else 1)
+    print("usage: python3 live_client.py check")
+    sys.exit(2)

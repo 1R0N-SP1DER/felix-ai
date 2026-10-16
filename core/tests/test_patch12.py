@@ -449,7 +449,8 @@ class TestDoctor(unittest.TestCase):
                 mock.patch("web_search.ddg_search", return_value=[{"title": "Python", "url": "u", "snippet": ""}]), \
                 mock.patch.object(actions, "youtube_find", return_value=("aaaaaaaaaaa", "A video")), \
                 mock.patch("tts.synthesize_audio", return_value=(b"x" * 10, "audio/wav")), \
-                mock.patch.object(stt, "available", return_value=True):
+                mock.patch.object(stt, "available", return_value=True), \
+                mock.patch("live_client.check", return_value=[("websocket", True, "stubbed")]):
             return {name: (status, detail) for name, status, detail in doctor.run_checks(cfg)}
 
     def test_report_marks_each_check(self):
@@ -488,7 +489,8 @@ class TestDoctor(unittest.TestCase):
     def test_a_crashing_check_cannot_break_the_report(self):
         with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "k"}), mock.patch("gemini_client.ask_gemini", side_effect=RuntimeError("weird")), \
                 mock.patch("web_search.ddg_search", side_effect=KeyError("x")), mock.patch.object(actions, "youtube_find", side_effect=ValueError("y")), \
-                mock.patch("tts.synthesize_audio", side_effect=OSError("z")):
+                mock.patch("tts.synthesize_audio", side_effect=OSError("z")), \
+                mock.patch("live_client.check", return_value=[("websocket", True, "stubbed")]):
             res = doctor.run_checks(load_config())
         self.assertGreaterEqual(len(res), 10)
         self.assertTrue(all(len(r) == 3 for r in res))
