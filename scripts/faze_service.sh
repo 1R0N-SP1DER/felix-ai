@@ -10,6 +10,7 @@
 #   faze voice | faze live | faze app | faze cli     same as start --voice / --live / --app / --cli
 #   faze overlay [--live]     print the link the Tasker Scene WebView should load (--live: the link starts a live conversation)
 #   faze voice-stop           stop the current voice exchange (Tasker overlay Stop button)
+#   faze say [--live] <text>  type to Faze: starts an exchange with that text, or goes into the running live conversation
 #   faze livecheck            test, step by step, where the Live connection breaks (DNS, TCP, websocket, player)
 #   faze close                stop the exchange AND ask Tasker to close the overlay, even if the service is down
 #   faze open                 open the web app, no voice mode (Tasker overlay Open Faze button)
@@ -157,7 +158,7 @@ PY
     fi
 }
 
-usage() { echo "usage: $0 start [--voice|--live|--app|--cli] | voice | live | app | cli | overlay [--live] | voice-stop | close | livecheck | open | stop | restart | status | logs"; }
+usage() { echo "usage: $0 start [--voice|--live|--app|--cli] | voice | live | app | cli | overlay [--live] | voice-stop | close | livecheck | say <text> | open | stop | restart | status | logs"; }
 
 start_command() {
     local mode=""
@@ -223,6 +224,21 @@ case "${1:-status}" in
         else echo "no token yet: run faze start first"; exit 1; fi
         ;;
     cli) start_command --cli ;;
+    say)
+        shift
+        live=false
+        if [ "$1" = "--live" ]; then live=true; shift; fi
+        if [ $# -eq 0 ]; then echo "usage: faze say [--live] <text>"; exit 2; fi
+        start_service
+        if ! wait_ready; then echo "the service did not come up in time; see: faze logs"; exit 1; fi
+        body="$(python3 -c 'import json,sys; print(json.dumps({"text": " ".join(sys.argv[2:]), "live": sys.argv[1] == "true", "overlay": True}))' "$live" "$@")"
+        if reply="$(api_post /api/voice/say "$body")"; then
+            case "$reply" in
+                *'"queued": true'*) echo "sent to the live conversation" ;;
+                *) echo "sent" ;;
+            esac
+        else echo "could not send; see: faze logs"; exit 1; fi
+        ;;
     livecheck)
         ( cd "${FAZE_CORE:-$HOME/felix-ai/core}" && PYTHONPATH=. python3 live_client.py check )
         exit $?

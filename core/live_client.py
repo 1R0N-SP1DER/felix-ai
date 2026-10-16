@@ -70,9 +70,12 @@ def _default_connect(url: str, open_timeout: float = SETUP_TIMEOUT, **kw):
     try:
         for extra in ({"proxy": None}, {}):  # `proxy` exists only in newer websockets releases
             try:
-                return _ws_connect(url, sock=sock, open_timeout=open_timeout, **kw, **extra)
+                opened = _ws_connect(url, sock=sock, open_timeout=open_timeout, **kw, **extra)
             except TypeError:
                 continue
+            # newer websockets want `with connect(...) as ws`; entering it by hand keeps the socket open for the whole
+            # conversation and avoids the "must be used as a context manager" warning
+            return opened.__enter__() if hasattr(opened, "__enter__") else opened
         raise LiveError("this websockets version cannot connect through a socket (pip install -U websockets)")
     except BaseException:
         sock.close()
@@ -325,13 +328,14 @@ class PcmPlayer:
                 pass
 
 
-def check(config: dict = None, key: str = None, connect=None, resolve=socket.getaddrinfo) -> list:
+def check(config: dict = None, key: str = None, connect=None, resolve=None) -> list:
     """Step by step, where Live breaks in THIS process: [(step, ok, detail)]. A step that fails skips the ones that need it.
     `faze livecheck` runs it from the shell; /doctor runs it inside the service, which is the one that matters."""
     import os
     live = (config or {}).get("live", {})
     key = os.environ.get("GEMINI_API_KEY", "") if key is None else key
     host = urllib.parse.urlparse(URL).hostname
+    resolve = resolve or (lambda *a: socket.getaddrinfo(*a))  # looked up when called, so netfix's version is the one tested
     steps = []
 
     def step(name, fn):
@@ -410,6 +414,8 @@ if __name__ == "__main__":
         import config_loader
         import env_loader
         env_loader.load_env()
+        import netfix
+        netfix.install(config_loader.load_config())
         result = check(config_loader.load_config())
         print(format_check(result))
         sys.exit(0 if all(ok for _, ok, _ in result) else 1)

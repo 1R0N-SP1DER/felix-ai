@@ -79,6 +79,10 @@ function boot(hash) {
   out.close = calls.filter((c) => c.path === '/api/voice/stop').map((c) => c.body);
   const says = () => calls.filter((c) => c.path === '/api/voice/say').map((c) => c.body);
   const typeIn = async (text) => { $('say').value = text; $('typed').dispatchEvent(new dom.window.Event('submit', { cancelable: true, bubbles: true })); await sleep(60); };
+  $('say').dispatchEvent(new dom.window.Event('focus'));
+  out.typingOnFocus = d.body.classList.contains('typing');
+  $('say').dispatchEvent(new dom.window.Event('blur'));
+  out.typingOnBlur = d.body.classList.contains('typing');
   await typeIn('   ');
   out.typedBlank = says().length;
   await typeIn('what is the time');

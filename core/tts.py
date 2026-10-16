@@ -139,6 +139,9 @@ def synthesize_audio(text: str, voice: str, model: str, timeout: float = 60.0, p
 if __name__ == "__main__":
     import env_loader
     env_loader.load_env()
+    import netfix
+    from config_loader import load_config as _load_config
+    netfix.install(_load_config())
     # python3 tts.py "hello there" [Voice]   -> writes ~/faze_tts_test.wav, or prints exactly why not
     import sys
     from config_loader import load_config

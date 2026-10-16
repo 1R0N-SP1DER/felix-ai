@@ -1,0 +1,522 @@
+diff --git a/core/config_loader.py b/core/config_loader.py
+index 29824f6..26e69fc 100644
+--- a/core/config_loader.py
++++ b/core/config_loader.py
+@@ -34,7 +34,7 @@ DEFAULTS = {
+               "overlay_task": "Faze Overlay", "overlay_close_task": "Faze Overlay Close"},  # Tasker task names (empty: do not ask Tasker)
+     "live": {"model": "gemini-3.8-live", "barge_in": False, "search": True, "idle_seconds": 15,
+              "max_seconds": 600, "player": ""},   # the dedicated live voice mode (faze start --live); Gemini Live over a WebSocket
+-    "net": {"check": True},                # probe connectivity so online services are used only when reachable
++    "net": {"check": True, "ipv4_first": True},   # ipv4_first: try IPv4 name lookups first (the any-family lookup stalls ~5 s on some phones)                # probe connectivity so online services are used only when reachable
+     "tts": {"engine": "system", "voice": "kore", "model": "gemini-3.1-flash-tts-preview"},
+     "wake": {
+         "enabled": False,
+@@ -119,6 +119,7 @@ SETTINGS = {
+     "wake.open_app": (bool, None),
+     "stt.engine": (str, ("auto", "gemini", "whisper")),
+     "net.check": (bool, None),
++    "net.ipv4_first": (bool, None),
+     "live.model": (str, None),
+     "live.barge_in": (bool, None),
+     "live.search": (bool, None),
+diff --git a/core/env_loader.py b/core/env_loader.py
+index 980d99a..26fa1be 100644
+--- a/core/env_loader.py
++++ b/core/env_loader.py
+@@ -13,7 +13,7 @@ A value already in the environment always wins; quoted values and plain values w
+ import os
+ import re
+ 
+-NAMES = ("GEMINI_API_KEY",)
++NAMES = ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "TAVILY_API_KEY", "CEREBRAS_API_KEY", "MISTRAL_API_KEY", "ANTHROPIC_API_KEY")
+ SHELL_FILES = (".bashrc", ".bash_profile", ".profile")
+ _LINE = re.compile(r"""^\s*(?P<export>export\s+)?(?P<name>[A-Z][A-Z0-9_]*)=(?:"(?P<dq>[^"]*)"|'(?P<sq>[^']*)'|(?P<bare>[^\s#]*))""")
+ 
+diff --git a/core/gemini_client.py b/core/gemini_client.py
+index fb2cd79..5fa4193 100644
+--- a/core/gemini_client.py
++++ b/core/gemini_client.py
+@@ -260,6 +260,9 @@ def ask_gemini_stream(system_message: str, conversation_messages: list, tools_sc
+ if __name__ == "__main__":
+     import env_loader
+     env_loader.load_env()
++    import netfix
++    from config_loader import load_config as _load_config
++    netfix.install(_load_config())
+     try:
+         result = ask_gemini(
+             system_message="You are a helpful assistant.",
+diff --git a/core/live_client.py b/core/live_client.py
+index 357df8e..41a575e 100644
+--- a/core/live_client.py
++++ b/core/live_client.py
+@@ -70,9 +70,12 @@ def _default_connect(url: str, open_timeout: float = SETUP_TIMEOUT, **kw):
+     try:
+         for extra in ({"proxy": None}, {}):  # `proxy` exists only in newer websockets releases
+             try:
+-                return _ws_connect(url, sock=sock, open_timeout=open_timeout, **kw, **extra)
++                opened = _ws_connect(url, sock=sock, open_timeout=open_timeout, **kw, **extra)
+             except TypeError:
+                 continue
++            # newer websockets want `with connect(...) as ws`; entering it by hand keeps the socket open for the whole
++            # conversation and avoids the "must be used as a context manager" warning
++            return opened.__enter__() if hasattr(opened, "__enter__") else opened
+         raise LiveError("this websockets version cannot connect through a socket (pip install -U websockets)")
+     except BaseException:
+         sock.close()
+@@ -325,13 +328,14 @@ class PcmPlayer:
+                 pass
+ 
+ 
+-def check(config: dict = None, key: str = None, connect=None, resolve=socket.getaddrinfo) -> list:
++def check(config: dict = None, key: str = None, connect=None, resolve=None) -> list:
+     """Step by step, where Live breaks in THIS process: [(step, ok, detail)]. A step that fails skips the ones that need it.
+     `faze livecheck` runs it from the shell; /doctor runs it inside the service, which is the one that matters."""
+     import os
+     live = (config or {}).get("live", {})
+     key = os.environ.get("GEMINI_API_KEY", "") if key is None else key
+     host = urllib.parse.urlparse(URL).hostname
++    resolve = resolve or (lambda *a: socket.getaddrinfo(*a))  # looked up when called, so netfix's version is the one tested
+     steps = []
+ 
+     def step(name, fn):
+@@ -410,6 +414,8 @@ if __name__ == "__main__":
+         import config_loader
+         import env_loader
+         env_loader.load_env()
++        import netfix
++        netfix.install(config_loader.load_config())
+         result = check(config_loader.load_config())
+         print(format_check(result))
+         sys.exit(0 if all(ok for _, ok, _ in result) else 1)
+diff --git a/core/netfix.py b/core/netfix.py
+new file mode 100644
+index 0000000..3f3aea3
+--- /dev/null
++++ b/core/netfix.py
+@@ -0,0 +1,47 @@
++"""
++felix-ai Core -- netfix.py
++Name lookups that ask for "any address family" waited about five seconds on the phone before answering (the AAAA
++query for an IPv6 address the phone cannot use times out), while an IPv4-only lookup answered at once. Every request
++Faze makes (Gemini, search, speech, Live) paid that wait now and then, and the Live connection sometimes gave up with
++"[Errno 7] No address associated with hostname".
++
++install() makes lookups try IPv4 first and fall back to the normal lookup only if that finds nothing, so a network that
++is IPv6-only still works. `net.ipv4_first = false` turns it off.
++"""
++
++import socket
++
++_original = socket.getaddrinfo
++_installed = False
++
++
++def _ipv4_first(host, port, family=0, type=0, proto=0, flags=0):
++    if family == socket.AF_UNSPEC and host:
++        try:
++            found = _original(host, port, socket.AF_INET, type, proto, flags)
++            if found:
++                return found
++        except socket.gaierror:
++            pass
++    return _original(host, port, family, type, proto, flags)
++
++
++def install(config: dict = None) -> bool:
++    """Returns True when lookups are now IPv4-first."""
++    global _installed
++    if config is not None and not config.get("net", {}).get("ipv4_first", True):
++        uninstall()
++        return False
++    socket.getaddrinfo = _ipv4_first
++    _installed = True
++    return True
++
++
++def uninstall() -> None:
++    global _installed
++    socket.getaddrinfo = _original
++    _installed = False
++
++
++def installed() -> bool:
++    return _installed and socket.getaddrinfo is _ipv4_first
+diff --git a/core/orchestrator.py b/core/orchestrator.py
+index 64edcd4..7ac38bf 100644
+--- a/core/orchestrator.py
++++ b/core/orchestrator.py
+@@ -1347,6 +1347,9 @@ def make_prefix_hook(name: str, show_tag: bool):
+ if __name__ == "__main__":
+     import env_loader
+     env_loader.load_env()
++    import netfix
++    from config_loader import load_config as _load_config
++    netfix.install(_load_config())
+     init_db()
+     try:
+         setup_fts()
+diff --git a/core/tests/overlay_smoke.js b/core/tests/overlay_smoke.js
+index ae36e09..c298227 100644
+--- a/core/tests/overlay_smoke.js
++++ b/core/tests/overlay_smoke.js
+@@ -79,6 +79,10 @@ function boot(hash) {
+   out.close = calls.filter((c) => c.path === '/api/voice/stop').map((c) => c.body);
+   const says = () => calls.filter((c) => c.path === '/api/voice/say').map((c) => c.body);
+   const typeIn = async (text) => { $('say').value = text; $('typed').dispatchEvent(new dom.window.Event('submit', { cancelable: true, bubbles: true })); await sleep(60); };
++  $('say').dispatchEvent(new dom.window.Event('focus'));
++  out.typingOnFocus = d.body.classList.contains('typing');
++  $('say').dispatchEvent(new dom.window.Event('blur'));
++  out.typingOnBlur = d.body.classList.contains('typing');
+   await typeIn('   ');
+   out.typedBlank = says().length;
+   await typeIn('what is the time');
+diff --git a/core/tests/test_patch24.py b/core/tests/test_patch24.py
+new file mode 100644
+index 0000000..9382498
+--- /dev/null
++++ b/core/tests/test_patch24.py
+@@ -0,0 +1,260 @@
++"""
++Patch 24: IPv4-first name lookups (the any-family lookup stalled ~5 s on the phone), websockets used the supported way,
++`faze say` to type to Faze from anywhere (a Tasker input dialog, the shell), a typing mode in the overlay, and the new
++provider keys picked up from ~/.felix/env.
++
++    PYTHONPATH=. python3 -m unittest tests.test_patch24 -v
++"""
++
++import json
++import os
++import socket
++import subprocess
++import sys
++import tempfile
++import threading
++import unittest
++from http.server import HTTPServer
++from unittest import mock
++
++CORE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++sys.path.insert(0, CORE)
++
++import tests.test_patch17 as p17  # noqa: E402
++from tests.test_patch16 import HAVE_JSDOM, run_node  # noqa: E402
++from tests.test_patch15 import Quiet  # noqa: E402
++
++import config_loader  # noqa: E402
++import env_loader  # noqa: E402
++import live_client  # noqa: E402
++import netfix  # noqa: E402
++
++
++# ---------------------------------------------------------------- IPv4-first lookups
++
++class TestNetfix(unittest.TestCase):
++    def setUp(self):
++        self.addCleanup(netfix.uninstall)
++        self.calls = []
++        self.answers = {}
++
++        def spy(host, port, family=0, type=0, proto=0, flags=0):
++            self.calls.append(family)
++            answer = self.answers.get(family, [(family or socket.AF_INET6, 1, 6, "", ("::1", port))])
++            if isinstance(answer, Exception):
++                raise answer
++            return answer
++        patch = mock.patch.object(netfix, "_original", spy)
++        patch.start()
++        self.addCleanup(patch.stop)
++
++    def test_any_family_asks_for_ipv4_first(self):
++        self.answers[socket.AF_INET] = [(socket.AF_INET, 1, 6, "", ("1.2.3.4", 443))]
++        self.assertEqual(netfix._ipv4_first("h", 443)[0][4], ("1.2.3.4", 443))
++        self.assertEqual(self.calls, [socket.AF_INET])  # the slow any-family lookup was never made
++
++    def test_falls_back_when_ipv4_finds_nothing_or_fails(self):
++        self.answers[socket.AF_INET] = socket.gaierror(7, "No address associated with hostname")
++        self.answers[socket.AF_UNSPEC] = [(socket.AF_INET6, 1, 6, "", ("2001:db8::1", 443, 0, 0))]
++        self.assertEqual(netfix._ipv4_first("ipv6only.example", 443)[0][4][0], "2001:db8::1")
++        self.assertEqual(self.calls, [socket.AF_INET, socket.AF_UNSPEC])
++        self.calls.clear()
++        self.answers[socket.AF_INET] = []
++        netfix._ipv4_first("h", 443)
++        self.assertEqual(self.calls, [socket.AF_INET, socket.AF_UNSPEC])
++
++    def test_a_failure_in_both_is_raised(self):
++        self.answers[socket.AF_INET] = socket.gaierror(7, "x")
++        self.answers[socket.AF_UNSPEC] = socket.gaierror(7, "x")
++        with self.assertRaises(socket.gaierror):
++            netfix._ipv4_first("nowhere.example", 443)
++
++    def test_an_explicit_family_is_respected(self):
++        netfix._ipv4_first("h", 443, socket.AF_INET6)
++        self.assertEqual(self.calls, [socket.AF_INET6])
++
++    def test_extra_arguments_are_passed_through(self):
++        seen = []
++        with mock.patch.object(netfix, "_original", lambda *a: seen.append(a) or [(2, 1, 6, "", ("1.1.1.1", 80))]):
++            netfix._ipv4_first("h", 80, 0, socket.SOCK_STREAM, 6, 0)
++        self.assertEqual(seen, [("h", 80, socket.AF_INET, socket.SOCK_STREAM, 6, 0)])
++
++    def test_install_replaces_getaddrinfo_and_uninstall_restores_it(self):
++        self.assertFalse(netfix.installed())
++        self.assertTrue(netfix.install())
++        self.assertIs(socket.getaddrinfo, netfix._ipv4_first)
++        self.assertTrue(netfix.installed())
++        self.assertTrue(netfix.install())  # twice is fine
++        self.assertIs(socket.getaddrinfo, netfix._ipv4_first)
++        netfix.uninstall()
++        self.assertIsNot(socket.getaddrinfo, netfix._ipv4_first)
++        self.assertFalse(netfix.installed())
++
++    def test_the_setting_turns_it_off(self):
++        self.assertTrue(netfix.install(config_loader.load_config()))
++        self.assertFalse(netfix.install({"net": {"ipv4_first": False}}))
++        self.assertFalse(netfix.installed())
++
++    def test_the_setting_exists_and_defaults_on(self):
++        self.assertEqual(config_loader.SETTINGS["net.ipv4_first"], (bool, None))
++        self.assertEqual(config_loader.load_config()["net"], {"check": True, "ipv4_first": True})
++
++    def test_every_entry_point_installs_it(self):
++        for name in ("orchestrator.py", "tts.py", "gemini_client.py", "live_client.py"):
++            with open(os.path.join(CORE, name)) as f:
++                src = f.read()
++            self.assertIn("netfix.install(", src, name)
++
++    def test_real_lookups_still_work(self):
++        netfix.uninstall()
++        mock.patch.stopall()
++        netfix.install()
++        try:
++            self.assertTrue(socket.getaddrinfo("localhost", 80, 0, socket.SOCK_STREAM))
++            self.assertTrue(socket.getaddrinfo("127.0.0.1", 80, socket.AF_UNSPEC, socket.SOCK_STREAM))
++        finally:
++            netfix.uninstall()
++
++
++# ---------------------------------------------------------------- live_client
++
++class TestWebsocketsUse(unittest.TestCase):
++    def test_a_context_manager_is_entered_by_hand_and_its_connection_returned(self):
++        events = []
++
++        class Manager:
++            def __enter__(self):
++                events.append("enter")
++                return "the-connection"
++
++            def __exit__(self, *a):
++                events.append("exit")
++        sock = type("S", (), {"close": lambda self: events.append("sock closed")})()
++        with mock.patch.object(live_client, "_open_socket", return_value=sock), mock.patch.object(live_client, "_ws_connect", lambda *a, **k: Manager()):
++            self.assertEqual(live_client._default_connect("wss://h/x?key=k"), "the-connection")
++        self.assertEqual(events, ["enter"])  # still open: it lives for the whole conversation
++
++    def test_a_plain_connection_is_returned_as_it_is(self):
++        sock = type("S", (), {"close": lambda self: None})()
++        with mock.patch.object(live_client, "_open_socket", return_value=sock), mock.patch.object(live_client, "_ws_connect", lambda *a, **k: "plain"):
++            self.assertEqual(live_client._default_connect("wss://h/x"), "plain")
++
++    def test_check_looks_names_up_at_call_time(self):
++        seen = []
++
++        def lookup(host, port, family, kind):
++            seen.append(family)
++            return [(2, 1, 6, "", ("142.250.1.2", 443))]
++        peer = type("P", (), {"getpeername": lambda s: ("142.250.1.2", 443), "close": lambda s: None})()
++        with mock.patch("socket.getaddrinfo", lookup), mock.patch.object(live_client, "_open_socket", return_value=peer), \
++                mock.patch.object(live_client.PcmPlayer, "command_line", lambda self: ["pacat"]):
++            steps = live_client.check(config_loader.load_config(), key="", connect=lambda *a, **k: None)
++        self.assertEqual(seen, [0, socket.AF_INET])
++        self.assertTrue(dict((n, ok) for n, ok, _ in steps)["dns"])
++
++
++# ---------------------------------------------------------------- provider keys
++
++class TestProviderKeys(unittest.TestCase):
++    def test_new_keys_are_found_and_the_environment_still_wins(self):
++        home = tempfile.mkdtemp(prefix="faze-env24-")
++        os.makedirs(os.path.join(home, ".felix"))
++        with open(os.path.join(home, ".felix", "env"), "w") as f:
++            f.write("GEMINI_API_KEY=AQ.g\nGROQ_API_KEY=gsk_x\nexport OPENROUTER_API_KEY='sk-or-y'\nTAVILY_API_KEY=\"tvly-z\"\nUNRELATED=1\n")
++        environ = {"GROQ_API_KEY": "already"}
++        loaded = env_loader.load_env(home=home, environ=environ)
++        self.assertEqual(environ, {"GROQ_API_KEY": "already", "GEMINI_API_KEY": "AQ.g", "OPENROUTER_API_KEY": "sk-or-y", "TAVILY_API_KEY": "tvly-z"})
++        self.assertEqual(sorted(loaded), ["GEMINI_API_KEY", "OPENROUTER_API_KEY", "TAVILY_API_KEY"])
++
++    def test_the_names(self):
++        for name in ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "TAVILY_API_KEY", "CEREBRAS_API_KEY", "MISTRAL_API_KEY", "ANTHROPIC_API_KEY"):
++            self.assertIn(name, env_loader.NAMES)
++
++
++# ---------------------------------------------------------------- faze say
++
++class TestSayScript(p17.TestOverlayButtonCommands):
++    """The fake-service harness from patch 17; only the tests below run (its own are inherited and still pass)."""
++
++    def up(self, reply='{"ok": true, "started": true}'):
++        self.token()
++        with open(os.path.join(self.dir, "fake_faze.sh"), "w") as f:
++            f.write("#!/bin/bash\nsleep 60\n")
++        os.chmod(os.path.join(self.dir, "fake_faze.sh"), 0o755)
++        httpd = HTTPServer(("127.0.0.1", self.port), Quiet)
++        threading.Thread(target=httpd.serve_forever, daemon=True).start()
++        self.addCleanup(httpd.shutdown)
++        self.addCleanup(httpd.server_close)
++        reply_file = os.path.join(self.dir, "reply.txt")
++        with open(reply_file, "w") as f:
++            f.write(reply)
++        self.write("http.sh", f'echo "$1 $2 $3" >> "{self.posted}"; cat "{reply_file}"')
++        self.env.update(FAZE_CMD=os.path.join(self.dir, "fake_faze.sh"), FAZE_RESTART_DELAY="0.2", FAZE_READY_TIMEOUT="5")
++        self.addCleanup(lambda: self.run_svc("stop"))
++
++    def posted_call(self):
++        with open(self.posted) as f:
++            line = f.read().strip().splitlines()[-1]
++        path, rest = line.split(" ", 1)
++        body, token = rest.rsplit(" ", 1)
++        return path, json.loads(body), token
++
++    def test_say_sends_the_text_and_asks_for_the_overlay(self):
++        self.up()
++        out = self.run_svc("say", "what", "is", "the", "time")
++        self.assertEqual((out.returncode, out.stdout.strip().splitlines()[-1]), (0, "sent"), out.stderr)
++        self.assertEqual(self.posted_call(), ("/api/voice/say", {"text": "what is the time", "live": False, "overlay": True}, "tok123"))
++        self.assertFalse(os.path.exists(self.opened))
++
++    def test_say_live_and_the_queued_reply(self):
++        self.up(reply='{"ok": true, "started": false, "queued": true}')
++        out = self.run_svc("say", "--live", "hello")
++        self.assertEqual(out.stdout.strip().splitlines()[-1], "sent to the live conversation")
++        self.assertEqual(self.posted_call()[1], {"text": "hello", "live": True, "overlay": True})
++
++    def test_quotes_and_unicode_survive(self):
++        self.up()
++        text = 'it\'s "fine" \u00e9 \\ and $HOME `x`'
++        self.run_svc("say", text)
++        self.assertEqual(self.posted_call()[1]["text"], text)
++
++    def test_nothing_to_say(self):
++        self.up()
++        out = self.run_svc("say")
++        self.assertEqual(out.returncode, 2)
++        self.assertIn("usage: faze say", out.stdout)
++        self.assertFalse(os.path.exists(self.posted))
++        self.assertEqual(self.run_svc("say", "--live").returncode, 2)
++
++    def test_a_failed_send_is_reported(self):
++        self.up()
++        self.write("http.sh", "exit 7")
++        out = self.run_svc("say", "hello")
++        self.assertEqual(out.returncode, 1)
++        self.assertIn("could not send", out.stdout)
++
++    def test_usage_lists_it(self):
++        self.assertIn("say <text>", self.run_svc("bogus").stdout)
++
++
++@unittest.skipUnless(HAVE_JSDOM, "jsdom not installed")
++class TestOverlayTypingMode(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.res = run_node("overlay_smoke.js")
++
++    def test_focus_moves_the_card_out_of_the_keyboard_s_way(self):
++        self.assertNotIn("crash", self.res, self.res.get("crash"))
++        self.assertEqual(self.res["errors"], [])
++        self.assertTrue(self.res["typingOnFocus"])
++        self.assertFalse(self.res["typingOnBlur"])
++
++    def test_the_stylesheet_defines_typing_mode(self):
++        with open(os.path.join(CORE, "web", "overlay.css")) as f:
++            css = f.read()
++        self.assertIn("body.typing { align-items: flex-start;", css)
++        self.assertIn("body.typing #actions { display: none; }", css)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/core/tts.py b/core/tts.py
+index 54c654e..4fd62d9 100644
+--- a/core/tts.py
++++ b/core/tts.py
+@@ -139,6 +139,9 @@ def synthesize_audio(text: str, voice: str, model: str, timeout: float = 60.0, p
+ if __name__ == "__main__":
+     import env_loader
+     env_loader.load_env()
++    import netfix
++    from config_loader import load_config as _load_config
++    netfix.install(_load_config())
+     # python3 tts.py "hello there" [Voice]   -> writes ~/faze_tts_test.wav, or prints exactly why not
+     import sys
+     from config_loader import load_config
+diff --git a/core/web/overlay.css b/core/web/overlay.css
+index 4fb9b6d..6c9648a 100644
+--- a/core/web/overlay.css
++++ b/core/web/overlay.css
+@@ -32,3 +32,7 @@ body { display: flex; align-items: flex-end; justify-content: center; padding: 1
+ #say:focus { outline: none; border-color: var(--accent); }
+ #send { flex: 0 0 76px; min-height: 44px; border-radius: 14px; border: 1px solid var(--accent); background: #1a2340; color: var(--text); font: inherit; }
+ #send:disabled { opacity: .5; }
++body.typing { align-items: flex-start; padding-top: calc(12px + env(safe-area-inset-top, 0px)); }
++body.typing #reply { max-height: 14vh; }
++body.typing #you, body.typing #note { max-height: 8vh; }
++body.typing #actions { display: none; }
+diff --git a/core/web/overlay.js b/core/web/overlay.js
+index 6f1ff3a..d3372af 100644
+--- a/core/web/overlay.js
++++ b/core/web/overlay.js
+@@ -51,6 +51,9 @@
+   function fail(e) { render({ state: 'error', error: e.message, active: false, transcript: '', reply: '' }); }
+   const start = () => api('/api/voice/start', engine === 'live' ? { live: true } : {}).then(render).catch(fail);
+ 
++  // Typing opens the keyboard over the bottom of the screen, so the card moves to the top and shrinks while the box has focus.
++  $('say').addEventListener('focus', () => document.body.classList.add('typing'));
++  $('say').addEventListener('blur', () => document.body.classList.remove('typing'));
+   $('typed').addEventListener('submit', async (e) => {
+     e.preventDefault();
+     const text = $('say').value.trim();
+diff --git a/scripts/faze_service.sh b/scripts/faze_service.sh
+index b44b434..0248427 100755
+--- a/scripts/faze_service.sh
++++ b/scripts/faze_service.sh
+@@ -10,6 +10,7 @@
+ #   faze voice | faze live | faze app | faze cli     same as start --voice / --live / --app / --cli
+ #   faze overlay [--live]     print the link the Tasker Scene WebView should load (--live: the link starts a live conversation)
+ #   faze voice-stop           stop the current voice exchange (Tasker overlay Stop button)
++#   faze say [--live] <text>  type to Faze: starts an exchange with that text, or goes into the running live conversation
+ #   faze livecheck            test, step by step, where the Live connection breaks (DNS, TCP, websocket, player)
+ #   faze close                stop the exchange AND ask Tasker to close the overlay, even if the service is down
+ #   faze open                 open the web app, no voice mode (Tasker overlay Open Faze button)
+@@ -157,7 +158,7 @@ PY
+     fi
+ }
+ 
+-usage() { echo "usage: $0 start [--voice|--live|--app|--cli] | voice | live | app | cli | overlay [--live] | voice-stop | close | livecheck | open | stop | restart | status | logs"; }
++usage() { echo "usage: $0 start [--voice|--live|--app|--cli] | voice | live | app | cli | overlay [--live] | voice-stop | close | livecheck | say <text> | open | stop | restart | status | logs"; }
+ 
+ start_command() {
+     local mode=""
+@@ -223,6 +224,21 @@ case "${1:-status}" in
+         else echo "no token yet: run faze start first"; exit 1; fi
+         ;;
+     cli) start_command --cli ;;
++    say)
++        shift
++        live=false
++        if [ "$1" = "--live" ]; then live=true; shift; fi
++        if [ $# -eq 0 ]; then echo "usage: faze say [--live] <text>"; exit 2; fi
++        start_service
++        if ! wait_ready; then echo "the service did not come up in time; see: faze logs"; exit 1; fi
++        body="$(python3 -c 'import json,sys; print(json.dumps({"text": " ".join(sys.argv[2:]), "live": sys.argv[1] == "true", "overlay": True}))' "$live" "$@")"
++        if reply="$(api_post /api/voice/say "$body")"; then
++            case "$reply" in
++                *'"queued": true'*) echo "sent to the live conversation" ;;
++                *) echo "sent" ;;
++            esac
++        else echo "could not send; see: faze logs"; exit 1; fi
++        ;;
+     livecheck)
+         ( cd "${FAZE_CORE:-$HOME/felix-ai/core}" && PYTHONPATH=. python3 live_client.py check )
+         exit $?

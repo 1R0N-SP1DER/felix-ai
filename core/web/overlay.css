@@ -32,3 +32,7 @@ body { display: flex; align-items: flex-end; justify-content: center; padding: 1
 #say:focus { outline: none; border-color: var(--accent); }
 #send { flex: 0 0 76px; min-height: 44px; border-radius: 14px; border: 1px solid var(--accent); background: #1a2340; color: var(--text); font: inherit; }
 #send:disabled { opacity: .5; }
+body.typing { align-items: flex-start; padding-top: calc(12px + env(safe-area-inset-top, 0px)); }
+body.typing #reply { max-height: 14vh; }
+body.typing #you, body.typing #note { max-height: 8vh; }
+body.typing #actions { display: none; }

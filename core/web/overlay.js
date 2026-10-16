@@ -51,6 +51,9 @@
   function fail(e) { render({ state: 'error', error: e.message, active: false, transcript: '', reply: '' }); }
   const start = () => api('/api/voice/start', engine === 'live' ? { live: true } : {}).then(render).catch(fail);
 
+  // Typing opens the keyboard over the bottom of the screen, so the card moves to the top and shrinks while the box has focus.
+  $('say').addEventListener('focus', () => document.body.classList.add('typing'));
+  $('say').addEventListener('blur', () => document.body.classList.remove('typing'));
   $('typed').addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = $('say').value.trim();

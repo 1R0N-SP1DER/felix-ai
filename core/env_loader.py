@@ -13,7 +13,7 @@ A value already in the environment always wins; quoted values and plain values w
 import os
 import re
 
-NAMES = ("GEMINI_API_KEY",)
+NAMES = ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "TAVILY_API_KEY", "CEREBRAS_API_KEY", "MISTRAL_API_KEY", "ANTHROPIC_API_KEY")
 SHELL_FILES = (".bashrc", ".bash_profile", ".profile")
 _LINE = re.compile(r"""^\s*(?P<export>export\s+)?(?P<name>[A-Z][A-Z0-9_]*)=(?:"(?P<dq>[^"]*)"|'(?P<sq>[^']*)'|(?P<bare>[^\s#]*))""")
 

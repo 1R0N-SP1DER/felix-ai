@@ -260,6 +260,9 @@ def ask_gemini_stream(system_message: str, conversation_messages: list, tools_sc
 if __name__ == "__main__":
     import env_loader
     env_loader.load_env()
+    import netfix
+    from config_loader import load_config as _load_config
+    netfix.install(_load_config())
     try:
         result = ask_gemini(
             system_message="You are a helpful assistant.",

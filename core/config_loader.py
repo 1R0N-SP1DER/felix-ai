@@ -34,7 +34,7 @@ DEFAULTS = {
               "overlay_task": "Faze Overlay", "overlay_close_task": "Faze Overlay Close"},  # Tasker task names (empty: do not ask Tasker)
     "live": {"model": "gemini-3.8-live", "barge_in": False, "search": True, "idle_seconds": 15,
              "max_seconds": 600, "player": ""},   # the dedicated live voice mode (faze start --live); Gemini Live over a WebSocket
-    "net": {"check": True},                # probe connectivity so online services are used only when reachable
+    "net": {"check": True, "ipv4_first": True},   # ipv4_first: try IPv4 name lookups first (the any-family lookup stalls ~5 s on some phones)                # probe connectivity so online services are used only when reachable
     "tts": {"engine": "system", "voice": "kore", "model": "gemini-3.1-flash-tts-preview"},
     "wake": {
         "enabled": False,
@@ -119,6 +119,7 @@ SETTINGS = {
     "wake.open_app": (bool, None),
     "stt.engine": (str, ("auto", "gemini", "whisper")),
     "net.check": (bool, None),
+    "net.ipv4_first": (bool, None),
     "live.model": (str, None),
     "live.barge_in": (bool, None),
     "live.search": (bool, None),
