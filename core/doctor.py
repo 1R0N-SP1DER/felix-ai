@@ -73,6 +73,43 @@ def run_checks(config: dict) -> list:
         return OK, f"{len(results)} results, first: {results[0]['title'][:50]}"
     add("Backup web search", ddg)
 
+    def tavily():
+        text = web_search.tavily_search("python programming language", os.environ["TAVILY_API_KEY"], 3)
+        return OK, f"{text.count(chr(10) + '   http')} sources"
+    add("Tavily search", tavily if os.environ.get("TAVILY_API_KEY") else (lambda: (SKIP, "no TAVILY_API_KEY")))
+
+    import remote_models
+
+    def provider_checks(name):
+        label = remote_models.PROVIDERS[name]["label"]
+
+        def say_ok():
+            model = remote_models.model_for(name, config)
+            r = remote_models.chat(name, model, [{"role": "user", "content": "Reply with the single word OK."}], max_tokens=20)
+            return (OK, f"{model} answered") if (r["content"] or "").strip() else (WARN, f"{model} sent an empty reply")
+
+        def uses_tools():
+            model = remote_models.model_for(name, config)
+            schema = [t for t in agent.gemini_schema(config) if t["function"]["name"] == "get_current_datetime"]
+            r = remote_models.chat(name, model, [{"role": "user", "content": "What time is it right now? Use the tool."}], schema, max_tokens=80)
+            names = [c["name"] for c in (r["tool_calls"] or [])]
+            return (OK, f"{model} called {names[0]}") if names else (WARN, f"{model} answered without calling the tool")
+        for title, fn in ((f"{label} chat", say_ok), (f"{label} tool calling", uses_tools)):
+            if not remote_models.has_key(name):
+                add(title, lambda: (SKIP, f"no {remote_models.PROVIDERS[name]['env']}"))
+            elif not remote_models.available(name):
+                add(title, lambda: (WARN, remote_models.note(name)))
+            else:
+                add(title, lambda fn=fn: _remote(fn))
+
+    def _remote(fn):
+        try:
+            return fn()
+        except remote_models.RemoteError as e:
+            return FAIL, str(e)[:200]
+    for provider in remote_models.PROVIDERS:
+        provider_checks(provider)
+
     def device():
         if actions._is_android():
             return OK, "am found" + (", su found" if shutil.which("su") else ", no su (background launches may be blocked)")

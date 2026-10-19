@@ -36,6 +36,7 @@ import device
 import stt
 import tts
 import net_status
+import remote_models
 import wake
 from voice_session import VoiceSession
 from icons import make_icon
@@ -456,6 +457,8 @@ class Handler(BaseHTTPRequestHandler):
             "think": convo.config["reasoning"]["mode"],
             "think_level": convo.config["reasoning"]["level"],
             "online": net_status.last(),
+            "providers": {p: {"has_key": remote_models.has_key(p), "ready": remote_models.available(p), "note": remote_models.note(p),
+                              "model": str(convo.config.get(p, {}).get("model", ""))} for p in remote_models.PROVIDERS},
             "gemini_thinking": convo.config["gemini"]["thinking"],
             "stt": {"server": stt.available(convo.config), "pref": convo.config["voice"]["stt"],
                     "reason": stt.missing_reason(convo.config)},

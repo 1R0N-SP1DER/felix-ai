@@ -35,6 +35,7 @@ from action_log import log_action
 from config_loader import (load_config, get_llm_url, describe_settings,
                            set_user_setting, unset_user_setting, SETTINGS, load_user_overrides)
 import net_status
+import remote_models
 from local_server import ServerManager
 from memory_store import init_db, log_message
 from memory_recall import setup_fts
@@ -62,7 +63,8 @@ DEVICE = "phone"
 MAX_TOOL_CALLS_PER_TURN = 5
 MAX_PARALLEL_CALLS = 4  # tool calls Gemini may make in one round
 MAX_HISTORY_MESSAGES = 20
-FORCEABLE_MODELS = ("qwen", "gemini", "lfm")
+REMOTE_PROVIDERS = ("groq", "openrouter")
+FORCEABLE_MODELS = ("qwen", "gemini", "lfm") + REMOTE_PROVIDERS
 
 # Slash commands: the single list used by /help, the terminal's tab
 # completion and the web app's command menu. `args` are the choices for the
@@ -75,6 +77,8 @@ COMMANDS = [
          {"value": "qwen", "description": "Local Qwen with tools"},
          {"value": "lfm", "description": "Local LFM, fast chat without tools"},
          {"value": "gemini", "description": "Gemini online helper"},
+         {"value": "groq", "description": "Groq online model with tools and search (needs GROQ_API_KEY)"},
+         {"value": "openrouter", "description": "OpenRouter online model with tools and search (needs OPENROUTER_API_KEY)"},
      ]},
     {"name": "think", "description": "How much the model thinks (Qwen: on/off, Gemini: a level)",
      "usage": "/think [auto|off|low|medium|high|max]",
@@ -979,7 +983,7 @@ class Conversation:
             self.stop_lfm()
             return "Switched to auto routing"
         if mode not in FORCEABLE_MODELS:
-            return "Invalid mode. Use auto, qwen, gemini, or lfm"
+            return "Invalid mode. Use auto, qwen, gemini, groq, openrouter, or lfm"
         turns = 0
         if len(args) > 1:
             try:
@@ -987,7 +991,7 @@ class Conversation:
                 if turns < 1:
                     raise ValueError
             except ValueError:
-                return "Usage: /model gemini|qwen|lfm [n]"
+                return "Usage: /model gemini|qwen|lfm|groq|openrouter [n]"
         self.forced_model, self.forced_remaining = mode, turns
         if turns == 0:  # no count: stays until turned off, and across restarts
             self._persisted_force = mode
@@ -1198,6 +1202,107 @@ class Conversation:
         return isinstance(e, GeminiError) and (
             text.startswith("Network error") or " returned 429" in text or bool(re.search(r" returned 5\d\d", text)))
 
+    def _call_remote_with_tools(self, provider: str, max_rounds: int = 5) -> str:
+        """An online OpenAI-format model (Groq, OpenRouter) in a real tool loop: it picks tools, their results go back to
+        it, and it writes the answer. Same permission and phone-control gates as every other route."""
+        model = remote_models.model_for(provider, self.config)
+        schema = agent.gemini_schema(self.config)
+        system = self.system_static + gemini_tool_note(schema) + agent.agent_note(self.config)
+        history = [m for m in self._request_messages() if m.get("role") != "system"]
+        messages = [{"role": "system", "content": system}] + history
+        done = {}
+        malformed = 0
+        for round_no in range(max_rounds):
+            last = round_no == max_rounds - 1
+            try:
+                result = remote_models.chat(provider, model, messages, None if last else schema, on_token=self.on_token,
+                                            cancelled=self._cancel.is_set)
+            except remote_models.Cancelled:
+                raise TurnCancelled()
+            except remote_models.RemoteError as e:
+                if e.kind == "tool_failed" and malformed < 2:  # these models sometimes garble a tool call; a retry usually works
+                    malformed += 1
+                    if malformed == 2:
+                        schema = None
+                    continue
+                raise
+            calls = result["tool_calls"]
+            if not calls:
+                text = (result["content"] or "").strip()
+                if not text:
+                    raise remote_models.RemoteError("empty", f"{remote_models.PROVIDERS[provider]['label']} sent an empty reply")
+                self.last_reply_streamed = result["streamed"]
+                return text
+            if result["streamed"] and self.on_token:
+                self.on_token("reset", "")
+            calls = calls[:MAX_TOOL_CALLS_PER_TURN]
+            messages.append({"role": "assistant", "content": result["content"] or None, "tool_calls": [
+                {"id": c["id"] or f"call_{i}", "type": "function", "function": {"name": c["name"], "arguments": c["arguments"] or "{}"}}
+                for i, c in enumerate(calls)]})
+            for i, c in enumerate(calls):
+                try:
+                    args = json.loads(c["arguments"]) if c["arguments"] else {}
+                    args = args if isinstance(args, dict) else {}
+                except json.JSONDecodeError:
+                    args = {}
+                key = (c["name"], json.dumps(args, sort_keys=True))
+                if key not in done:  # an identical repeat is answered, not run again
+                    ok, out = self._execute_tool(c["name"], args, provider)
+                    done[key] = ("" if ok else "Error: ") + str(out)[:4000]
+                messages.append({"role": "tool", "tool_call_id": c["id"] or f"call_{i}", "content": done[key]})
+        raise remote_models.RemoteError("server", "it kept calling tools without answering")
+
+    def _online_order(self) -> list:
+        """Online backends for this message, in the user's order (online.order)."""
+        out = []
+        for name in str(self.config.get("online", {}).get("order", "gemini")).split(","):
+            name = name.strip()
+            if name in ("gemini",) + REMOTE_PROVIDERS and name not in out:
+                out.append(name)
+        return out
+
+    def _forced_remote(self, provider: str) -> str:
+        """A forced online model stays on; if it is rate-limited or down, the other online backends and then the local
+        models answer instead, and the reason is shown."""
+        local = [t for t in self.config["fallback"]["order"].split(",") if t in ("lfm", "qwen")]
+        chain = [provider] + [p for p in self._online_order() if p != provider]
+        errors = []
+        for index, name in enumerate(chain):
+            try:
+                if name == "gemini":
+                    if not self._gemini_on():
+                        continue
+                    if time.monotonic() < self._gemini_down_until:
+                        raise GeminiError("Network error: Gemini unreachable, retrying shortly")
+                    if index:
+                        self._announce("gemini", "fallback")
+                    return self._call_gemini_with_tools()
+                if not remote_models.available(name):
+                    errors.append(f"{name}: {remote_models.note(name)}")
+                    continue
+                if index:
+                    self._announce(name, "fallback")
+                return self._call_remote_with_tools(name)
+            except TurnCancelled:
+                raise
+            except Exception as e:
+                cause = str(e) if isinstance(e, (LocalModelError, remote_models.RemoteError)) else summarize_error(e)
+                errors.append(f"{name}: {cause}")
+                log_action(name, "fallback", {}, cause, 0)
+                if name == "gemini" and self._gemini_unreachable(e):
+                    self._gemini_down_until = max(self._gemini_down_until, time.monotonic() + 60)
+        for tag in local:
+            if tag == "lfm" and not self._lfm_configured():
+                continue
+            self._announce(tag, "offline fallback")
+            try:
+                return self._call_lfm() if tag == "lfm" else self._forced_qwen()
+            except TurnCancelled:
+                raise
+            except Exception as fe:
+                errors.append(f"{tag}: {str(fe) if isinstance(fe, LocalModelError) else summarize_error(fe)}")
+        raise RouteError("; ".join(errors))
+
     def _forced_gemini(self) -> str:
         """Gemini stays on until you turn it off; if it can't be reached the
         reply comes from a local model instead, and Gemini is retried in a minute."""
@@ -1244,8 +1349,12 @@ class Conversation:
             chain.append(("lfm", self._call_lfm))
         elif chat == "wait":
             chain.append(("qwen", self._wait_then_qwen))
-        if self._gemini_on():
-            chain.append(("gemini", self._call_gemini_with_tools))
+        for name in self._online_order():
+            if name == "gemini":
+                if self._gemini_on():
+                    chain.append(("gemini", self._call_gemini_with_tools))
+            elif remote_models.available(name):
+                chain.append((name, lambda name=name: self._call_remote_with_tools(name)))
         return chain
 
     def _run_auto(self) -> str:
@@ -1260,7 +1369,7 @@ class Conversation:
             except TurnCancelled:
                 raise
             except Exception as e:
-                cause = str(e) if isinstance(e, LocalModelError) else summarize_error(e)
+                cause = str(e) if isinstance(e, (LocalModelError, remote_models.RemoteError)) else summarize_error(e)
                 errors.append(f"{tag}: {cause}")
                 log_action(tag, "fallback", {}, cause, 0)
                 if tag == "qwen" and isinstance(e, LocalModelError) and e.server_down:
@@ -1308,6 +1417,8 @@ class Conversation:
                 self._announce(forced, "forced")
             if forced == "gemini":
                 reply = self._forced_gemini()
+            elif forced in REMOTE_PROVIDERS:
+                reply = self._forced_remote(forced)
             elif forced == "qwen":
                 reply = self._forced_qwen()
             elif forced == "lfm":
@@ -1319,7 +1430,7 @@ class Conversation:
         except RouteError as e:
             return self._fail(f"[couldn't answer -- {e}]")
         except Exception as e:
-            cause = str(e) if isinstance(e, LocalModelError) else summarize_error(e)
+            cause = str(e) if isinstance(e, (LocalModelError, remote_models.RemoteError)) else summarize_error(e)
             return self._fail(f"[{forced or 'auto'} failed: {cause}]")
 
         if forced and self.forced_model != "lfm":

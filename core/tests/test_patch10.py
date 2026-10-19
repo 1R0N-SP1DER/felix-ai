@@ -522,7 +522,7 @@ class TestBrowserAgentUi(unittest.TestCase):
         self.assertEqual(self.res["errors"], [])
 
     def test_model_picker_has_no_slider_and_morphs_tick_into_dropdown(self):
-        self.assertEqual({k: self.res["modelSheet"][k] for k in ("items", "controls", "slider")}, {"items": 4, "controls": 3, "slider": False})
+        self.assertEqual({k: self.res["modelSheet"][k] for k in ("items", "controls", "slider")}, {"items": 5, "controls": 4, "slider": False})
         p = self.res["picker"]
         self.assertFalse(p["autoHasControl"])
         self.assertEqual((p["arrow"], p["activeBefore"]), ("\u25be", False))

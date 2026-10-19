@@ -34,6 +34,9 @@ DEFAULTS = {
               "overlay_task": "Faze Overlay", "overlay_close_task": "Faze Overlay Close"},  # Tasker task names (empty: do not ask Tasker)
     "live": {"model": "gemini-3.8-live", "barge_in": False, "search": True, "idle_seconds": 15,
              "max_seconds": 600, "player": ""},   # the dedicated live voice mode (faze start --live); Gemini Live over a WebSocket
+    "groq": {"model": ""},            # empty: the best tool-capable model Groq lists for your key
+    "openrouter": {"model": ""},      # empty: a free tool-capable model from OpenRouter's list
+    "online": {"order": "gemini"},    # online backends tried in auto mode and as fallbacks, e.g. "groq,gemini,openrouter"
     "net": {"check": True, "ipv4_first": True},   # ipv4_first: try IPv4 name lookups first (the any-family lookup stalls ~5 s on some phones)                # probe connectivity so online services are used only when reachable
     "tts": {"engine": "system", "voice": "kore", "model": "gemini-3.1-flash-tts-preview"},
     "wake": {
@@ -118,6 +121,9 @@ SETTINGS = {
     "wake.cooldown": (int, None),
     "wake.open_app": (bool, None),
     "stt.engine": (str, ("auto", "gemini", "whisper")),
+    "groq.model": (str, None),
+    "openrouter.model": (str, None),
+    "online.order": (str, None),
     "net.check": (bool, None),
     "net.ipv4_first": (bool, None),
     "live.model": (str, None),
@@ -140,7 +146,7 @@ SETTINGS = {
     "device.control": (str, ("off", "ask", "on")),
     "device.max_steps": (int, None),
     "device.cursor": (bool, None),
-    "search.engine": (str, ("auto", "gemini", "web")),
+    "search.engine": (str, ("auto", "gemini", "web", "tavily")),
     "weather.location": (str, None),
     "actions.root": (str, ("auto", "always", "never")),
     "wake.engine": (str, ("auto", "gemini", "whisper")),

@@ -101,7 +101,7 @@
     return pick.replace(/\{user\}/g, user || 'there').replace(/\{ai\}/g, ai || 'Faze');
   }
 
-  const MODEL_NAMES = { auto: 'Auto', qwen: 'Qwen', lfm: 'LFM', gemini: 'Gemini' };
+  const MODEL_NAMES = { auto: 'Auto', qwen: 'Qwen', lfm: 'LFM', gemini: 'Gemini', groq: 'Groq', openrouter: 'OpenRouter' };
 
   function modelLabel(mode, turns) {
     const name = MODEL_NAMES[mode] || mode;
@@ -197,9 +197,9 @@
     vibrate: 'Vibrating', enable_thinking_mode: 'Thinking deeply',
   };
   // The glyph beside the model name. New models: add a line here, in MODEL_NAMES and in core.js.
-  const MODEL_GLYPH = { auto: '\u25CE', qwen: '\u25C7', lfm: '\u25C8', gemini: '\u25C9', regex: '\u2301', intent: '\u2301', needle: '\u2301' };
+  const MODEL_GLYPH = { auto: '\u25CE', qwen: '\u25C7', lfm: '\u25C8', gemini: '\u25C9', groq: '\u25D1', openrouter: '\u25D2', regex: '\u2301', intent: '\u2301', needle: '\u2301' };
 
-  const MODEL_FORM_TAGS = new Set(['qwen', 'lfm', 'gemini']); // routes that count as a model for the "N models" indicator
+  const MODEL_FORM_TAGS = new Set(['qwen', 'lfm', 'gemini', 'groq', 'openrouter']); // routes that count as a model for the "N models" indicator
 
   // "[layer -> tool] {args} => result (12ms)" into its parts; null when it is not a trace line.
   function parseTrace(line) {
@@ -560,6 +560,13 @@
     return s;
   }
 
+  // Online providers show up only when their key is set; a rate-limited one says so.
+  function providerState(s, id) {
+    const p = (s.providers || {})[id];
+    if (!p || !p.has_key) return { cls: '', sub: 'no key', hidden: true };
+    return { cls: p.ready ? 'ok' : 'warn', sub: p.ready ? (p.model || 'online model with tools') : p.note };
+  }
+
   function modelStates(s) {
     const q = s.qwen.state;
     const qOk = q === 'ready' || q === 'unmanaged';
@@ -568,6 +575,8 @@
       qwen: { cls: qOk ? 'ok' : (q === 'failed' ? 'bad' : 'warn'), sub: qOk ? 'ready' : (s.qwen.note || q).replace(/^qwen /, '') },
       lfm: { cls: s.lfm === 'running' ? 'ok' : '', sub: s.lfm },
       gemini: { cls: s.gemini ? 'ok' : 'bad', sub: s.gemini ? 'online helper' : 'turned off' },
+      groq: providerState(s, 'groq'),
+      openrouter: providerState(s, 'openrouter'),
     };
   }
 
@@ -653,7 +662,8 @@
     if (list.querySelector('.stay-ctl.open')) return;  // do not yank a dropdown away mid-choice
     list.textContent = '';
     const st = modelStates(status);
-    for (const id of ['auto', 'qwen', 'lfm', 'gemini']) {
+    for (const id of ['auto', 'qwen', 'lfm', 'gemini', 'groq', 'openrouter']) {
+      if (st[id].hidden) continue;
       const item = document.createElement('div');
       item.className = 'model-item';
       const row = document.createElement('button');
@@ -670,6 +680,7 @@
 
   // Thinking is one level for whichever model answers; what it means depends on the model picked in the sheet.
   function thinkHint(mode, level, gem) {
+    if (mode === 'groq' || mode === 'openrouter') return 'This online model has no thinking setting yet. It still applies when Qwen or Gemini answers.';
     if (mode === 'lfm') return 'LFM cannot think, so this does nothing while LFM is forced. It still applies when Qwen or Gemini answers.';
     if (mode === 'qwen') return 'Qwen has one thinking mode: any level except Off turns it on, Auto lets Qwen ask for it. Slow on a phone, about 6 words a second, and you can press stop.';
     if (mode === 'gemini') return 'Gemini: Off is minimal, Low, Medium and High are as named, Max is High, Auto uses your gemini.thinking setting (' + (gem || 'low') + '). Lower is faster.';
@@ -681,7 +692,7 @@
     $('menu-think-val').textContent = level;
     const sel = $('think-level');
     if (document.activeElement !== sel) sel.value = level;
-    sel.disabled = s.mode === 'lfm';
+    sel.disabled = s.mode === 'lfm' || s.mode === 'groq' || s.mode === 'openrouter';
     $('think-hint').textContent = thinkHint(s.mode || 'auto', level, s.gemini_thinking);
   }
 

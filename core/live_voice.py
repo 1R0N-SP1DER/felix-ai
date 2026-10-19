@@ -72,6 +72,7 @@ def run(session, gen: int, cancel: threading.Event, connect=None, player=None, c
     idle_limit = float(live.get("idle_seconds", 15))
     max_seconds = float(live.get("max_seconds", 600))
     held = False
+    final = {}  # published after the microphone, the player and the chat lock are released, never before
     try:
         with_search = bool(live.get("search", True))
         try:
@@ -198,7 +199,7 @@ def run(session, gen: int, cancel: threading.Event, connect=None, player=None, c
                     state["ending"] = True
                 elif kind == "closed":
                     if state["turns"] == 0 and not text["user"]:
-                        session._set(gen, state=ERROR, error="the Live session closed: " + str(ev[1])[:160])
+                        final.update(state=ERROR, error="the Live session closed: " + str(ev[1])[:160])
                         return
                     end_note = "Live session closed" + (f" ({str(ev[1])[:80]})" if ev[1] and "1000" not in str(ev[1]) else "")
                     ended = True
@@ -208,9 +209,10 @@ def run(session, gen: int, cancel: threading.Event, connect=None, player=None, c
         if not cancel.is_set():
             t = finish_timing()
             action_log.log_action("live", "timings", t, end_note or "ended", 0, echo=False)
-            session._set(gen, state=DONE, timings=t, note=end_note or "Conversation ended")
+            final.update(state=DONE, timings=t, note=end_note or "Conversation ended")
     except LiveError as e:
-        session._set(gen, state=ERROR, error=str(e)[:200])
+        final.clear()
+        final.update(state=ERROR, error=str(e)[:200])
     finally:
         stop_mic.set()
         player.stop()
@@ -218,3 +220,5 @@ def run(session, gen: int, cancel: threading.Event, connect=None, player=None, c
         if held:
             listener.hold(False)
         server.chat_lock.release()
+        if final and not cancel.is_set():
+            session._set(gen, **final)

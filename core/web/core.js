@@ -19,7 +19,7 @@
   };
   const CYCLE = ['faze', 'gpt', 'claude', 'gemini', 'qwen', 'kimi', 'lfm'];
   // Which form each backend wears. New models only need a line here (and a shape above).
-  const MODEL_FORM = { auto: 'faze', faze: 'faze', qwen: 'qwen', lfm: 'lfm', gemini: 'gemini', regex: 'faze', intent: 'faze', needle: 'faze' };
+  const MODEL_FORM = { auto: 'faze', faze: 'faze', qwen: 'qwen', lfm: 'lfm', gemini: 'gemini', groq: 'kimi', openrouter: 'gpt', regex: 'faze', intent: 'faze', needle: 'faze' };
   const _cache = {};
 
   function radii(name) {

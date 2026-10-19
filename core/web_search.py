@@ -75,3 +75,38 @@ def format_results(query: str, results: list) -> str:
     for i, r in enumerate(results, 1):
         lines.append(f"{i}. {r['title']}" + (f": {r['snippet']}" if r["snippet"] else "") + f"\n   {r['url']}")
     return "\n".join(lines)
+
+
+TAVILY_URL = "https://api.tavily.com/search"
+
+
+def tavily_search(query: str, key: str, max_results: int = 5, post=requests.post, timeout: float = 15.0) -> str:
+    """Tavily's search: a short synthesized answer plus the sources it came from, as text the model can answer from.
+    Raises SearchError with a plain reason (the key refused, the plan used up, no network, nothing found)."""
+    if not key:
+        raise SearchError("Tavily has no key (put TAVILY_API_KEY in ~/.felix/env)")
+    try:
+        r = post(TAVILY_URL, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                 json={"query": query, "max_results": max_results, "include_answer": True, "search_depth": "basic"}, timeout=timeout)
+    except requests.RequestException as e:
+        raise SearchError(f"Tavily could not be reached ({type(e).__name__})")
+    if r.status_code in (401, 403):
+        raise SearchError("Tavily refused the key")
+    if r.status_code in (429, 432, 433):
+        raise SearchError(f"Tavily limit reached ({r.status_code})")
+    if r.status_code != 200:
+        raise SearchError(f"Tavily answered {r.status_code}")
+    try:
+        data = r.json()
+    except ValueError:
+        raise SearchError("Tavily sent something unreadable")
+    results = data.get("results") or []
+    if not results and not data.get("answer"):
+        raise SearchError("Tavily found nothing")
+    lines = [f"Web search results for '{query}' (answer from them and say if they don't settle it):"]
+    if data.get("answer"):
+        lines.append("Summary: " + str(data["answer"]).strip())
+    for i, item in enumerate(results[:max_results], 1):
+        snippet = re.sub(r"\s+", " ", str(item.get("content", ""))).strip()[:240]
+        lines.append(f"{i}. {item.get('title', '').strip()}" + (f": {snippet}" if snippet else "") + f"\n   {item.get('url', '')}")
+    return "\n".join(lines)

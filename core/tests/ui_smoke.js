@@ -12,6 +12,7 @@ let ops = 0;
 
 const status = { name: 'Faze', qwen: { state: 'ready', detail: '', note: '' }, lfm: 'idle', gemini: true, mode: 'auto', busy: false, notices: [],
   show_tag: true, wake: { enabled: true, state: 'listening', phrase: 'hey faze', detail: '', engine: 'auto' }, tts: { engine: 'system' }, user_name: 'Felix', forced_turns: 0, turns: 0, agent: { mode: 'ask', high_tools: false, tools: 1, tasks: 1, rev: 7 }, think: 'auto', think_level: 'auto', gemini_thinking: 'low',
+  providers: { groq: { has_key: true, ready: true, note: 'ready', model: 'openai/gpt-oss-120b' }, openrouter: { has_key: false, ready: false, note: 'no key', model: '' } },
   stt: { server: false, pref: 'auto', reason: 'no whisper' } };
 
 function sse(events) {
@@ -197,6 +198,7 @@ async function fakeFetch(url, opts) {
   const rowFor = (name) => [...d.querySelectorAll('.model-item')].find((i) => i.querySelector('.name').firstChild.textContent === name);
   const ctlOf = (name) => rowFor(name).querySelector('.stay-ctl');
   out.picker = { autoHasControl: !!rowFor('Auto').querySelector('.stay-ctl'), arrow: ctlOf('Qwen').querySelector('.stay-trigger').textContent, activeBefore: ctlOf('Qwen').classList.contains('active') };
+  out.providerRows = { names: [...d.querySelectorAll('.model-row .name')].map((n) => n.firstChild.textContent), groqSub: (d.querySelector('.model-row.groq-probe') || rowFor('Groq').querySelector('small')).textContent };
   rowFor('Qwen').querySelector('.model-row').click();
   await sleep(120);
   out.picker.chose = calls.filter((c) => c.path === '/api/command' && /^\/model qwen/.test(c.body.line)).map((c) => c.body.line);
@@ -226,6 +228,8 @@ async function fakeFetch(url, opts) {
   out.think.hintQwen = hint(); out.think.disabledQwen = $('think-level').disabled;
   await pickModel('Gemini');
   out.think.hintGemini = hint(); out.think.disabledGemini = $('think-level').disabled;
+  await pickModel('Groq');
+  out.think.hintGroq = hint(); out.think.disabledGroq = $('think-level').disabled; out.groqMode = status.mode; out.groqCmds = calls.filter((c) => c.path === '/api/command' && /^\/model groq/.test(c.body.line)).map((c) => c.body.line);
   await pickModel('LFM');
   out.think.hintLfm = hint(); out.think.disabledLfm = $('think-level').disabled;
   await pickModel('Gemini');

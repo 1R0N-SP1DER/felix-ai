@@ -11,6 +11,7 @@
 #   faze overlay [--live]     print the link the Tasker Scene WebView should load (--live: the link starts a live conversation)
 #   faze voice-stop           stop the current voice exchange (Tasker overlay Stop button)
 #   faze say [--live] <text>  type to Faze: starts an exchange with that text, or goes into the running live conversation
+#   faze bench [args]         compare online models on your real tools: tool choice, speed, limits (faze bench --list shows the models)
 #   faze livecheck            test, step by step, where the Live connection breaks (DNS, TCP, websocket, player)
 #   faze close                stop the exchange AND ask Tasker to close the overlay, even if the service is down
 #   faze open                 open the web app, no voice mode (Tasker overlay Open Faze button)
@@ -158,7 +159,7 @@ PY
     fi
 }
 
-usage() { echo "usage: $0 start [--voice|--live|--app|--cli] | voice | live | app | cli | overlay [--live] | voice-stop | close | livecheck | say <text> | open | stop | restart | status | logs"; }
+usage() { echo "usage: $0 start [--voice|--live|--app|--cli] | voice | live | app | cli | overlay [--live] | voice-stop | close | livecheck | bench | say <text> | open | stop | restart | status | logs"; }
 
 start_command() {
     local mode=""
@@ -238,6 +239,11 @@ case "${1:-status}" in
                 *) echo "sent" ;;
             esac
         else echo "could not send; see: faze logs"; exit 1; fi
+        ;;
+    bench)
+        shift
+        ( cd "${FAZE_CORE:-$HOME/felix-ai/core}" && PYTHONPATH=. python3 bench.py "$@" )
+        exit $?
         ;;
     livecheck)
         ( cd "${FAZE_CORE:-$HOME/felix-ai/core}" && PYTHONPATH=. python3 live_client.py check )

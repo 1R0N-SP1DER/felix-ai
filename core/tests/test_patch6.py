@@ -482,7 +482,7 @@ class TestAppHelpers(unittest.TestCase):
             nope: q('/zzz'), plain: q('hello'), multi: q('/model\\nx'), desc: q('/clear chat') }}));""")
         self.assertEqual([r[0] for r in res["all"]], ["/" + c["name"] for c in COMMANDS])
         self.assertEqual(res["mo"][0], ["/model", "/model", True])
-        self.assertEqual([r[0] for r in res["model"]], ["auto", "qwen", "lfm", "gemini"])
+        self.assertEqual([r[0] for r in res["model"]], ["auto", "qwen", "lfm", "gemini", "groq", "openrouter"])
         self.assertEqual(res["mq"], [["qwen", "/model qwen", True]])
         self.assertEqual(res["mx"], [])
         self.assertEqual(res["set"], [["set", "/settings set ", False], ["unset", "/settings unset ", False]])

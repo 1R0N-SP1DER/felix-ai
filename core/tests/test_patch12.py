@@ -247,7 +247,7 @@ class TestSearchTool(unittest.TestCase):
         self.assertEqual((tool_executor.SEARCH["engine"], actions.SETTINGS["root"]), ("auto", "auto"))
 
     def test_settings_are_registered(self):
-        for key, choices in (("search.engine", ("auto", "gemini", "web")), ("actions.root", ("auto", "always", "never")), ("wake.engine", ("auto", "gemini", "whisper"))):
+        for key, choices in (("search.engine", ("auto", "gemini", "web", "tavily")), ("actions.root", ("auto", "always", "never")), ("wake.engine", ("auto", "gemini", "whisper"))):
             self.assertEqual(SETTINGS[key], (str, choices))
         cfg = load_config()
         self.assertEqual((cfg["wake"]["engine"], cfg["wake"]["end_silence_ms"], cfg["wake"]["online_per_min"]), ("auto", 500, 10))

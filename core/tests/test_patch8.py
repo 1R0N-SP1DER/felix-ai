@@ -271,7 +271,7 @@ class TestBrowserSmoke(unittest.TestCase):
         self.assertEqual(self.res["project"], ["\u25A3 Work"])
 
     def test_sheets_menus_and_log_panel(self):
-        self.assertEqual((self.res["modelSheet"]["open"], self.res["modelSheet"]["rows"]), (True, 4))
+        self.assertEqual((self.res["modelSheet"]["open"], self.res["modelSheet"]["rows"]), (True, 5))  # Auto, Qwen, LFM, Gemini and Groq (the fake status has a Groq key, no OpenRouter key)
         self.assertEqual(self.res["slash"], ["/log"])
         lp = self.res["logPanel"]
         self.assertTrue(lp["open"] and lp["noChatCall"])

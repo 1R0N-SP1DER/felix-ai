@@ -315,6 +315,7 @@ class VoiceSession:
         locked = False
         speaker = None
         marks = {"start": time.monotonic()}
+        final = {}  # the last state is published after the microphone and the chat lock are released, never before
 
         def ms(a, b):
             return int((marks[b] - marks[a]) * 1000) if a in marks and b in marks else None
@@ -337,7 +338,7 @@ class VoiceSession:
                 if cancel.is_set():
                     return
                 if not pcm:
-                    self._set(gen, state=IDLE, note="I did not hear anything")
+                    final.update(state=IDLE, note="I did not hear anything")
                     return
                 self._set(gen, state=TRANSCRIBING)
                 text = self._transcribe(pcm)
@@ -345,11 +346,11 @@ class VoiceSession:
                 if cancel.is_set():
                     return
                 if not text:
-                    self._set(gen, state=IDLE, note="I did not catch that")
+                    final.update(state=IDLE, note="I did not catch that")
                     return
             self._set(gen, transcript=text, state=THINKING)
             if not server.chat_lock.acquire(blocking=False):
-                self._set(gen, state=ERROR, error="Faze is still answering the last message")
+                final.update(state=ERROR, error="Faze is still answering the last message")
                 return
             locked = True
             streamed, sentences = [], SentenceStream()
@@ -407,10 +408,11 @@ class VoiceSession:
                 marks["end"] = time.monotonic()
                 t = timings()
                 action_log.log_action("voice", "timings", t, "done", 0, echo=False)
-                self._set(gen, state=DONE, timings=t)
+                final.update(state=DONE, timings=t)
         except Exception as e:  # nothing here may take the server down
             from tool_replies import summarize_error
-            self._set(gen, state=ERROR, error=summarize_error(e))
+            final.clear()
+            final.update(state=ERROR, error=summarize_error(e))
         finally:
             if speaker is not None:
                 speaker.abort()
@@ -418,6 +420,8 @@ class VoiceSession:
                 server.chat_lock.release()
             if held and listener is not None:
                 listener.hold(False)
+            if final and not cancel.is_set():
+                self._set(gen, **final)
 
     def _hear(self, listener):
         """One utterance of PCM, or None. The wake stream when it runs, else a short direct recording."""

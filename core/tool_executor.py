@@ -5,6 +5,7 @@ and enable_thinking_mode -- the local model's real escape hatches for
 anything beyond its own reliability.
 """
 
+import os
 import re
 import subprocess
 import json
@@ -147,7 +148,7 @@ def delegate_to_gemini(parameters: dict) -> str:
     return f"Gemini responded with a tool request ({result['name']}) instead of an answer -- unexpected for a delegated request."
 
 
-SEARCH = {"engine": "auto", "blocked_until": 0.0}
+SEARCH = {"engine": "auto", "blocked_until": 0.0, "tavily_blocked_until": 0.0}
 WEATHER = {"location": ""}
 BREAKER_SECONDS = 600.0
 
@@ -156,7 +157,7 @@ def configure(config: dict) -> None:
     """Pick up settings that tools depend on (search engine, root mode)."""
     import actions
     engine = (config.get("search") or {}).get("engine", "auto")
-    SEARCH["engine"] = engine if engine in ("auto", "gemini", "web") else "auto"
+    SEARCH["engine"] = engine if engine in ("auto", "gemini", "web", "tavily") else "auto"
     WEATHER["location"] = str((config.get("weather") or {}).get("location", "")).strip()
     actions.configure(config)
     import device
@@ -260,6 +261,16 @@ def search_web(parameters: dict) -> str:
         raise ToolExecutionError("search_web requires a 'query' parameter.")
     engine = SEARCH["engine"]
     why = ""
+    tavily_key = os.environ.get("TAVILY_API_KEY", "").strip()
+    if engine == "tavily" or (engine == "auto" and tavily_key and time.monotonic() >= SEARCH["tavily_blocked_until"]):
+        try:
+            return web_search.tavily_search(query, tavily_key)
+        except web_search.SearchError as e:
+            why = str(e)
+            if re.search(r"limit|refused", why, re.IGNORECASE):
+                SEARCH["tavily_blocked_until"] = time.monotonic() + BREAKER_SECONDS
+            if engine == "tavily":
+                raise ToolExecutionError(f"Web search failed: {why}")
     if engine in ("auto", "gemini") and (engine == "gemini" or time.monotonic() >= SEARCH["blocked_until"]):
         try:
             result = ask_gemini(
@@ -271,8 +282,8 @@ def search_web(parameters: dict) -> str:
                 return result["content"]
             why = "Gemini search gave no usable answer"
         except GeminiError as e:
-            why = str(e)
-            if re.search(r"429|quota|rate", why, re.IGNORECASE):
+            why = (why + "; " if why else "") + str(e)
+            if re.search(r"429|quota|rate", str(e), re.IGNORECASE):
                 SEARCH["blocked_until"] = time.monotonic() + BREAKER_SECONDS  # stop asking for a while
         if engine == "gemini":
             raise ToolExecutionError(f"Web search failed: {why}")
