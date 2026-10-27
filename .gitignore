@@ -11,3 +11,4 @@ __pycache__/
 *.gguf
 core/android-arm64/
 core/bootstrap_import.py
+faze_patch*.patch
