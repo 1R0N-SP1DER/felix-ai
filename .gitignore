@@ -12,3 +12,4 @@ __pycache__/
 core/android-arm64/
 core/bootstrap_import.py
 faze_patch*.patch
+faze_patch*.patch
