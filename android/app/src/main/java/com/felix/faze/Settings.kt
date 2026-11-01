@@ -36,6 +36,14 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getBoolean("speak", true)
         set(value) = prefs.edit().putBoolean("speak", value).apply()
 
+    var wakeEnabled: Boolean
+        get() = prefs.getBoolean("wake_on", false)
+        set(value) = prefs.edit().putBoolean("wake_on", value).apply()
+
+    var wakePhrase: String
+        get() = text("wake_phrase")
+        set(value) = put("wake_phrase", value)
+
     override fun tavilyKey(): String = tavily
 
     override fun weatherLocation(): String = city

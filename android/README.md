@@ -31,3 +31,15 @@ Keys are stored in the app's private storage on the phone and never leave it exc
 `app/debug.keystore` is the well-known Android debug key (password `android`). It is committed on purpose: without it every
 CI build is signed with a fresh random key and Android refuses to install one build over the previous one. It is for
 personal debug builds only; do not publish anything signed with it.
+
+## Patch 29: always-on listening and the new screens
+
+- `ListenService`: a foreground service of type `microphone`. It listens for the wake phrase (default "hey faze", set under
+  Settings) with a small offline Vosk model, beeps, records one request until you stop talking, and sends it through the same
+  path as typed text. Start it from Settings > Always listening while the app is on screen (Android 14+ refuses a microphone
+  service started from the background). The app brings it back by itself the next time you open it.
+- The wake model (about 40 MB) is downloaded once, over HTTPS, from Settings. It is unzipped with a path check.
+- `Permissions.kt`: the approval gate. Same tiers as `core/permission_policy.py` (clipboard read/write ask first, unknown tools
+  are blocked). Allow/Deny on the approval card is the only way a gated tool runs; no answer in 60 s means no.
+- Saved chats live in the app's private folder (`filesDir/chats`). New screens: home with the core, chat with tool chips,
+  approval card and live bar, a chats drawer with search, and Settings.

@@ -19,6 +19,9 @@ interface EngineConfig {
 interface EngineListener {
     fun onBusy(busy: Boolean)
     fun onStatus(text: String)
+
+    /** How long the model took for the turn that just finished (milliseconds). */
+    fun onTiming(llmMs: Long) {}
 }
 
 /**
@@ -34,10 +37,12 @@ class ChatEngine(
     private val executor: Executor,
     private val messages: MutableList<ChatMessage>,
     private val listener: EngineListener,
+    private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
 ) {
     private var nextId = 1L
     private var busy = false // main thread only
     private val cancel = AtomicBoolean(false)
+    private var started = 0L // main thread only
 
     fun isBusy(): Boolean = busy
 
@@ -46,6 +51,8 @@ class ChatEngine(
         val clean = text.trim()
         if (clean.isEmpty() || busy) return
         busy = true
+        started = clock()
+        nextId = maxOf(nextId, (messages.maxOfOrNull { it.id } ?: 0L) + 1) // a chat loaded from disk keeps its own ids
         cancel.set(false)
         messages.add(ChatMessage(nextId++, "user", clean))
         val history = history()
@@ -120,6 +127,7 @@ class ChatEngine(
             }
             ui {
                 update(replyId) { it.copy(text = reply) }
+                listener.onTiming(clock() - started)
                 finish(replyId)
             }
         } catch (e: Cancelled) {

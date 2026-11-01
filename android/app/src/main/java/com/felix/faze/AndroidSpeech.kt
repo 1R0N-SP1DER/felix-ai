@@ -108,6 +108,8 @@ class Speaker(context: android.content.Context) : SpeechOut {
         }
     }
 
+    fun isSpeaking(): Boolean = synchronized(this) { waiting.isNotEmpty() || tts?.isSpeaking == true }
+
     fun shutdown() {
         tts?.stop()
         tts?.shutdown()
