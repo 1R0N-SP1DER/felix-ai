@@ -10,7 +10,10 @@ data class ChatRecord(val id: String, val title: String, val updated: Long, val 
 class ChatStore(private val dir: File, private val now: () -> Long = { System.currentTimeMillis() }) {
     init { dir.mkdirs() }
 
-    private fun file(id: String) = File(dir, id.filter { it.isLetterOrDigit() || it == '-' || it == '_' } + ".json")
+    /** Only letters, digits, '-' and '_' survive, so an id can never point outside [dir]. */
+    private fun safe(id: String) = id.filter { it.isLetterOrDigit() || it == '-' || it == '_' }
+
+    private fun file(id: String) = File(dir, safe(id) + ".json")
 
     fun titleFor(messages: List<ChatMessage>): String {
         val first = messages.firstOrNull { it.role == "user" }?.text?.trim().orEmpty().replace(Regex("\\s+"), " ")
@@ -18,12 +21,13 @@ class ChatStore(private val dir: File, private val now: () -> Long = { System.cu
     }
 
     fun save(id: String, messages: List<ChatMessage>) {
+        if (safe(id).isEmpty()) return // an id with nothing usable in it can't name a file
         val kept = messages.filter { it.text.isNotEmpty() || it.steps.isNotEmpty() }
         if (kept.none { it.role == "user" }) return // nothing worth keeping yet
         val arr = JSONArray()
         for (m in kept) arr.put(JSONObject().put("id", m.id).put("role", m.role).put("text", m.text).put("steps", JSONArray(m.steps)))
-        val body = JSONObject().put("id", id).put("title", titleFor(kept)).put("updated", now()).put("messages", arr).toString()
-        val tmp = File(dir, "$id.tmp")
+        val body = JSONObject().put("id", safe(id)).put("title", titleFor(kept)).put("updated", now()).put("messages", arr).toString()
+        val tmp = File(dir, safe(id) + ".tmp")
         tmp.writeText(body)
         if (!tmp.renameTo(file(id))) { // some filesystems refuse to rename over a file
             file(id).delete()
