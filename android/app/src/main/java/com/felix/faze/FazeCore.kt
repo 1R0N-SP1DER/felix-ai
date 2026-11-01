@@ -206,11 +206,40 @@ class FazeCore(private val app: Application) : EngineListener {
         handlePcm(pcm)
     }
 
+    /** Stop recording and throw the audio away (the overlay was closed, or the person backed out). */
+    fun cancelRecording() {
+        if (!recording) return
+        recording = false
+        recorder.stop()
+        listenControl?.resume()
+    }
+
+    /** One short line for what the assistant is doing right now, or empty when it is idle. */
+    fun liveLabel(): String = when {
+        recording -> "Listening… tap Done when you finish"
+        heard -> "Listening…"
+        transcribing -> "Transcribing…"
+        speaking -> "Speaking…"
+        busy -> "Thinking…"
+        else -> if (listening) "Wake word on" else ""
+    }
+
+    fun coreMode(): CoreMode = when {
+        recording || heard -> CoreMode.LISTENING
+        speaking -> CoreMode.SPEAKING
+        busy || transcribing -> CoreMode.THINKING
+        else -> CoreMode.IDLE
+    }
+
     /** One spoken request, as 16 kHz mono PCM: transcribed, then sent like typed text. Safe to call from any thread. */
     fun handlePcm(pcm: ByteArray) {
         main.post {
             if (pcm.size < Recorder.RATE) { // under half a second of audio
                 status = "didn't catch anything"
+                return@post
+            }
+            if (Pcm.isSilent(pcm)) { // Android hands a background app a microphone that records only zeros
+                status = "The microphone gave only silence. Android blocks it in the background: turn on Always listening, or open the app."
                 return@post
             }
             status = "transcribing..."

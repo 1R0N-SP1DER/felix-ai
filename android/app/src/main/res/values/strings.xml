@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="a11y_description">Lets Faze notice the two volume buttons held together, so you can open its overlay from any app. It only watches the volume keys; it does not read the screen.</string>
+</resources>

@@ -16,16 +16,12 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import java.io.ByteArrayOutputStream
-import org.json.JSONObject
-import org.vosk.LibVosk
-import org.vosk.LogLevel
-import org.vosk.Model
-import org.vosk.Recognizer
+import java.util.concurrent.Executors
 
 /**
- * The always-on part: a foreground service of type "microphone" that listens for the wake phrase with the small offline
- * model (nothing leaves the phone until the phrase is heard), then records one request and hands it to [FazeCore].
- * Android only lets a microphone service start while the app is on screen, so it is started from the app, not at boot.
+ * The always-on part: a foreground service of type "microphone" that waits for the wake phrase with a [WakeEngine] (offline
+ * Vosk or Porcupine), then records one request and hands it to [FazeCore]. Android only lets a microphone service start while
+ * the app is on screen, so it is started from the app, not at boot.
  */
 class ListenService : Service() {
     private var loop: Thread? = null
@@ -39,9 +35,17 @@ class ListenService : Service() {
     @Volatile
     private var released = true
 
+    private val rootExec = Executors.newSingleThreadExecutor()
+    private lateinit var guard: MicDotGuard
+
     private val core: FazeCore get() = (application as FazeApp).core
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        guard = MicDotGuard(AndroidRootShell(), { core.settings.hideMicDot }, { core.reportStatus(it) })
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
@@ -58,12 +62,14 @@ class ListenService : Service() {
             core.listenControl = object : ListenControl {
                 override fun pause() {
                     paused = true
+                    rootExec.execute { guard.restore() } // someone is really recording: the dot should show
                     val end = System.currentTimeMillis() + 1500
                     while (!released && System.currentTimeMillis() < end) Thread.sleep(20) // wait until the microphone is let go
                 }
 
                 override fun resume() {
                     paused = false
+                    rootExec.execute { guard.waiting() }
                 }
             }
             loop = Thread { listen() }.also { it.start() }
@@ -79,19 +85,22 @@ class ListenService : Service() {
         false
     }
 
+    /** A quiet notification: lowest importance, so there is no icon in the status bar, only an entry in the shade. */
     private fun notification(): Notification {
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CHANNEL, "Listening", NotificationManager.IMPORTANCE_LOW))
+        nm.deleteNotificationChannel("listen") // the old channel (patch 29) showed an icon
+        nm.createNotificationChannel(NotificationChannel(CHANNEL, "Listening", NotificationManager.IMPORTANCE_MIN).apply { setShowBadge(false) })
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(this, 1, Intent(this, ListenService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE)
-        val phrase = Wake.phrase(core.settings.wakePhrase)
         return NotificationCompat.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setSmallIcon(R.drawable.ic_stat_faze)
             .setContentTitle("Faze is listening")
-            .setContentText("Say \"$phrase\"")
+            .setContentText(if (core.settings.wakeEngine == "porcupine") "Wake word: Porcupine" else "Say \"${Wake.phrase(core.settings.wakePhrase)}\"")
             .setContentIntent(open)
             .addAction(0, "Turn off", stop)
             .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setSilent(true)
             .build()
     }
 
@@ -123,31 +132,45 @@ class ListenService : Service() {
         return null
     }
 
-    private fun heardText(json: String, key: String): String = try {
-        JSONObject(json).optString(key, "")
-    } catch (e: Exception) {
-        ""
+    /** Builds the engine the person chose, or says why it can't start. */
+    private fun makeEngine(): WakeEngine? {
+        val s = core.settings
+        return try {
+            if (s.wakeEngine == "porcupine") {
+                if (s.picovoiceKey.isEmpty()) {
+                    core.reportStatus("Porcupine needs your Picovoice AccessKey (Settings)")
+                    return null
+                }
+                PorcupineWake(this, s.picovoiceKey, ModelStore.keywordFile(this), s.porcupineKeyword, 0.7f)
+            } else {
+                val dir = ModelStore.ready(this)
+                if (dir == null) {
+                    core.reportStatus("download the wake word model first (Settings)")
+                    return null
+                }
+                VoskWake(dir, Wake.phrase(s.wakePhrase))
+            }
+        } catch (e: Throwable) {
+            core.reportStatus("wake word failed to start: ${e.message ?: e.javaClass.simpleName}")
+            null
+        }
     }
 
     private fun listen() {
-        val modelDir = ModelStore.ready(this)
-        if (modelDir == null) {
-            core.reportStatus("download the wake word model first (Settings)")
+        val engine = makeEngine()
+        if (engine == null) {
             core.settings.wakeEnabled = false
+            running = false
             stopSelf()
             return
         }
-        val phrase = Wake.phrase(core.settings.wakePhrase)
-        var model: Model? = null
-        var recognizer: Recognizer? = null
         var audio: AudioRecord? = null
         try {
-            LibVosk.setLogLevel(LogLevel.WARNINGS)
-            model = Model(modelDir.absolutePath)
-            recognizer = Recognizer(model, RATE.toFloat(), Wake.grammarJson(phrase))
             val cooldown = Cooldown(4)
+            val frames = FrameBuffer(engine.frameSize)
             val buffer = ShortArray(1600)
             core.markListening(true)
+            rootExec.execute { guard.waiting() }
             while (running) {
                 if (paused || core.occupied()) { // push-to-talk has the microphone, or the assistant is talking
                     audio = closeAudio(audio)
@@ -160,7 +183,8 @@ class ListenService : Service() {
                         core.reportStatus("couldn't open the microphone for listening")
                         break
                     }
-                    recognizer.reset()
+                    engine.reset()
+                    frames.clear()
                 }
                 val n = audio.read(buffer, 0, buffer.size)
                 if (n < 0) {
@@ -169,21 +193,30 @@ class ListenService : Service() {
                     continue
                 }
                 if (n == 0) continue
-                val text = if (recognizer.acceptWaveForm(buffer, n)) heardText(recognizer.result, "text") else heardText(recognizer.partialResult, "partial")
-                if (text.isNotEmpty() && Wake.matches(text, phrase) && cooldown.ready()) {
+                var woke = false
+                frames.push(buffer, n) { frame -> if (!woke && engine.process(frame)) woke = true }
+                if (woke && cooldown.ready()) {
                     cooldown.fire()
-                    recognizer.reset()
+                    engine.reset()
+                    frames.clear()
+                    rootExec.execute { guard.recording() }
                     val pcm = capture(audio)
+                    rootExec.execute { guard.waiting() }
                     if (pcm != null) core.handlePcm(pcm)
-                    recognizer.reset()
+                    engine.reset()
+                    frames.clear()
                 }
             }
         } catch (e: Throwable) {
             core.reportStatus("listening stopped: ${e.message ?: e.javaClass.simpleName}")
         } finally {
             closeAudio(audio)
-            recognizer?.close()
-            model?.close()
+            try {
+                engine.close()
+            } catch (e: Throwable) {
+                // nothing more to do
+            }
+            rootExec.execute { guard.restore() }
             core.markListening(false)
             core.markHeard(false)
             core.listenControl = null
@@ -227,6 +260,8 @@ class ListenService : Service() {
         } catch (e: InterruptedException) {
             // shutting down anyway
         }
+        rootExec.execute { guard.restore() }
+        rootExec.shutdown()
         core.listenControl = null
         core.markListening(false)
         super.onDestroy()
@@ -234,7 +269,7 @@ class ListenService : Service() {
 
     companion object {
         const val ACTION_STOP = "com.felix.faze.STOP_LISTENING"
-        private const val CHANNEL = "listen"
+        private const val CHANNEL = "listen_quiet"
         private const val NOTE_ID = 7
         private const val RATE = 16000
     }

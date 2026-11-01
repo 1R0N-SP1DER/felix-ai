@@ -19,10 +19,17 @@ class WakeTest {
         assertEquals(listOf("hi yo"), Wake.accepted("hi yo")) // a short last word is too easy to mishear
     }
 
-    @Test fun theGrammarIsValidJsonForTheRecognizer() {
-        val g = Wake.grammarJson("hey faze")
-        assertEquals("[\"hey faze\", \"faze\", \"[unk]\"]", g)
-        org.json.JSONArray(g) // parses
+    @Test fun theGrammarHasDecoysSoLookAlikesAreNotForcedOntoThePhrase() {
+        val g = Wake.strictGrammar("hey faze")
+        assertEquals("hey faze", g.first())
+        assertEquals("[unk]", g.last())
+        assertTrue(g.contains("hey phase"))
+        assertTrue(g.contains("hay faze"))
+        assertTrue(g.contains("phase"))
+        assertFalse(g.contains("faze")) // the bare word is no longer a wake call
+        assertEquals(g.size, g.toSet().size)
+        org.json.JSONArray(Wake.strictGrammarJson("hey faze")) // valid JSON
+        assertEquals(listOf("ok computer", "[unk]"), Wake.strictGrammar("OK computer"))
     }
 
     @Test fun matchingIsExactOrAboutOneEditPerFiveLetters() {

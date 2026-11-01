@@ -44,6 +44,30 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = text("wake_phrase")
         set(value) = put("wake_phrase", value)
 
+    /** "vosk" (offline, nothing leaves the phone) or "porcupine" (Picovoice; needs an AccessKey that checks in online). */
+    var wakeEngine: String
+        get() = text("wake_engine").ifEmpty { "vosk" }
+        set(value) = put("wake_engine", value)
+
+    var picovoiceKey: String
+        get() = text("picovoice_key")
+        set(value) = put("picovoice_key", value)
+
+    /** Name of one of Porcupine's built-in keywords, used when no custom keyword file was imported. */
+    var porcupineKeyword: String
+        get() = text("porcupine_keyword").ifEmpty { "JARVIS" }
+        set(value) = put("porcupine_keyword", value)
+
+    /** Root only: keep the green microphone dot off while only waiting for the wake word. */
+    var hideMicDot: Boolean
+        get() = prefs.getBoolean("hide_mic_dot", false)
+        set(value) = prefs.edit().putBoolean("hide_mic_dot", value).apply()
+
+    /** Both volume keys held opens the overlay (needs the accessibility service). */
+    var chordEnabled: Boolean
+        get() = prefs.getBoolean("chord_on", true)
+        set(value) = prefs.edit().putBoolean("chord_on", value).apply()
+
     override fun tavilyKey(): String = tavily
 
     override fun weatherLocation(): String = city
