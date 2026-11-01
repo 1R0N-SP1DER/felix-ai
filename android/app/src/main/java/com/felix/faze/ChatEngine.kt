@@ -1,0 +1,145 @@
+package com.felix.faze
+
+import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicBoolean
+
+data class ChatMessage(val id: Long, val role: String, val text: String, val steps: List<String> = emptyList())
+
+interface SpeechOut {
+    fun speak(sentence: String)
+    fun stop()
+}
+
+interface EngineConfig {
+    fun model(): String
+    fun userName(): String
+    fun speak(): Boolean
+}
+
+interface EngineListener {
+    fun onBusy(busy: Boolean)
+    fun onStatus(text: String)
+}
+
+/**
+ * One conversation: sends a message through the agent on a background thread, streams the reply into the message list,
+ * and speaks it sentence by sentence while it is still being written. Everything that touches [messages] or the
+ * listener goes through [ui] (the main thread), so the screen never sees a half-updated list.
+ */
+class ChatEngine(
+    private val agent: Agent,
+    private val config: EngineConfig,
+    private val speech: SpeechOut,
+    private val ui: (() -> Unit) -> Unit,
+    private val executor: Executor,
+    private val messages: MutableList<ChatMessage>,
+    private val listener: EngineListener,
+) {
+    private var nextId = 1L
+    private var busy = false // main thread only
+    private val cancel = AtomicBoolean(false)
+
+    fun isBusy(): Boolean = busy
+
+    /** Main thread. Ignored while a reply is still being written. */
+    fun send(text: String) {
+        val clean = text.trim()
+        if (clean.isEmpty() || busy) return
+        busy = true
+        cancel.set(false)
+        messages.add(ChatMessage(nextId++, "user", clean))
+        val history = history()
+        val replyId = nextId++
+        messages.add(ChatMessage(replyId, "assistant", ""))
+        listener.onBusy(true)
+        listener.onStatus("")
+        executor.execute { run(replyId, history) }
+    }
+
+    /** Main thread: stop the reply and the speech. What was written so far stays. */
+    fun stop() {
+        cancel.set(true)
+        speech.stop()
+    }
+
+    private fun history(): List<Pair<String, String>> =
+        messages.filter { it.text.isNotEmpty() }.map { Pair(it.role, it.text) }.takeLast(MAX_HISTORY)
+
+    private fun update(id: Long, change: (ChatMessage) -> ChatMessage) {
+        val i = messages.indexOfFirst { it.id == id }
+        if (i >= 0) messages[i] = change(messages[i])
+    }
+
+    private fun finish(replyId: Long) {
+        val i = messages.indexOfFirst { it.id == replyId }
+        if (i >= 0 && messages[i].text.isEmpty() && messages[i].steps.isEmpty()) messages.removeAt(i)
+        busy = false
+        listener.onBusy(false)
+    }
+
+    private fun describe(e: RemoteError): String =
+        if (e.kind == "rate_limit" && e.retryAfter > 0) "${e.message} Try again in ${e.retryAfter.toInt()} seconds."
+        else e.message ?: "something went wrong"
+
+    private fun run(replyId: Long, history: List<Pair<String, String>>) {
+        val speaking = config.speak()
+        val sentences = SentenceStream()
+        val shown = StringBuilder()
+        val steps = ArrayList<String>()
+        val system = Persona.system(config.userName()) + Persona.toolNote(agent.toolNames())
+        val events = AgentEvents(
+            onToken = { piece ->
+                shown.append(piece)
+                val now = shown.toString()
+                ui { update(replyId) { it.copy(text = now) } }
+                if (speaking) for (s in sentences.feed(piece)) speech.speak(s)
+            },
+            onReset = { // a tool call followed text: what was shown is dropped, and so is what was not yet spoken
+                shown.setLength(0)
+                sentences.reset()
+                speech.stop()
+                ui { update(replyId) { it.copy(text = "") } }
+            },
+            onTool = { name, ok ->
+                steps.add(if (ok) name else "$name (failed)")
+                val copy = ArrayList(steps)
+                ui { update(replyId) { it.copy(steps = copy) } }
+            },
+        )
+        try {
+            val reply = agent.run(config.model(), system, history, events) { cancel.get() }
+            if (speaking) {
+                val written = shown.toString()
+                if (written.isEmpty()) { // an answer that never streamed
+                    sentences.reset()
+                    sentences.feed(reply)
+                } else if (reply.startsWith(written) && reply.length > written.length) {
+                    sentences.feed(reply.substring(written.length))
+                }
+                for (s in sentences.finish()) speech.speak(s)
+            }
+            ui {
+                update(replyId) { it.copy(text = reply) }
+                finish(replyId)
+            }
+        } catch (e: Cancelled) {
+            ui { finish(replyId) }
+        } catch (e: RemoteError) {
+            val message = describe(e)
+            ui {
+                listener.onStatus(message)
+                finish(replyId)
+            }
+        } catch (e: Exception) {
+            val message = "something went wrong: ${e.message ?: e.javaClass.simpleName}"
+            ui {
+                listener.onStatus(message)
+                finish(replyId)
+            }
+        }
+    }
+
+    companion object {
+        const val MAX_HISTORY = 20
+    }
+}
