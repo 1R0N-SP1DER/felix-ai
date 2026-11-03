@@ -147,6 +147,12 @@ class FazeCore(private val app: Application) : EngineListener {
         speaker.stop()
     }
 
+    /** The Listen button under a turn: say that message aloud (markdown and code are skipped, as on the web page). */
+    fun speakText(text: String) {
+        speaker.stop()
+        for (sentence in Speakable.split(Speakable.clean(text), true).first) speaker.speak(sentence)
+    }
+
     fun testVoice() {
         speaker.stop()
         speaker.speak("This is how I sound.")

@@ -73,7 +73,6 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit, onSettings: () -> Unit) {
     }
 
     val mode = core.coreMode()
-    val active = mode != CoreMode.IDLE
 
     Box(modifier = Modifier.fillMaxSize().background(Palette.Bg)) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -86,28 +85,16 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit, onSettings: () -> Unit) {
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
                     ) {
-                        items(core.messages, key = { it.id }) { Bubble(it) }
+                        items(core.messages, key = { it.id }) { TurnView(it, core.busy && it.id == core.messages.last().id && it.role == "assistant", core) }
                     }
                 }
             }
 
             core.approval?.let { ApprovalCard(it, onAllow = { core.resolveApproval(it.id, true) }, onDeny = { core.resolveApproval(it.id, false) }) }
 
-            if (core.status.isNotEmpty()) {
-                Text(
-                    core.status,
-                    color = if (core.recording || core.transcribing) Palette.Accent else Palette.Bad,
-                    fontSize = 13.sp,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                )
-            }
-
-            if (active || core.timing.isNotEmpty()) {
-                LiveBar(mode, label(core), core.timing, onStop = { if (core.recording) core.finishRecording() else core.stop() })
-            }
+            LiveBarView(core, mode)
 
             Composer(
                 value = input,
@@ -141,44 +128,6 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit, onSettings: () -> Unit) {
     }
 }
 
-private fun label(core: FazeCore): String = when {
-    core.recording -> "Listening… tap Done when you finish"
-    core.heard -> "Listening…"
-    core.transcribing -> "Transcribing…"
-    core.speaking -> "Speaking…"
-    core.busy -> "Thinking…"
-    else -> if (core.listening) "Wake word on" else ""
-}
-
-@Composable
-private fun Bubble(m: ChatMessage) {
-    val mine = m.role == "user"
-    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
-        if (m.steps.isNotEmpty()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(bottom = 4.dp)) {
-                for (step in m.steps) {
-                    val failed = step.endsWith("(failed)")
-                    Text(
-                        (if (failed) "✕ " else "✓ ") + step.removeSuffix(" (failed)"),
-                        color = if (failed) Palette.Bad else Palette.Dim,
-                        fontSize = 11.sp,
-                        modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(Palette.Surface).border(1.dp, Palette.Line, RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 3.dp),
-                    )
-                }
-            }
-        }
-        Text(
-            if (m.text.isEmpty()) "…" else m.text,
-            color = Palette.Text,
-            fontSize = 16.sp,
-            fontFamily = LocalReadFont.current,
-            modifier = Modifier.widthIn(max = 330.dp)
-                .background(if (mine) Palette.Surface2 else Palette.Bg, if (mine) RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp) else RoundedCornerShape(16.dp))
-                .padding(horizontal = if (mine) 12.dp else 4.dp, vertical = 8.dp),
-        )
-    }
-}
-
 /** A tool that needs a yes before it runs. Nothing happens until one of the two buttons is pressed (or it times out: no). */
 @Composable
 private fun ApprovalCard(request: ApprovalRequest, onAllow: () -> Unit, onDeny: () -> Unit) {
@@ -201,24 +150,3 @@ private fun ApprovalCard(request: ApprovalRequest, onAllow: () -> Unit, onDeny: 
     }
 }
 
-@Composable
-private fun LiveBar(mode: CoreMode, label: String, timing: String, onStop: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).clip(RoundedCornerShape(16.dp)).background(Palette.Surface)
-            .border(1.dp, Palette.Line, RoundedCornerShape(16.dp)).padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        CoreView(mode, 30.dp)
-        Column(modifier = Modifier.weight(1f)) {
-            if (label.isNotEmpty()) Text(label, color = Palette.Text, fontSize = 13.sp)
-            if (timing.isNotEmpty()) Text(timing, color = Palette.Muted, fontSize = 11.sp)
-        }
-        if (mode != CoreMode.IDLE) {
-            Box(
-                modifier = Modifier.size(30.dp).clip(CircleShape).border(1.dp, Palette.Line, CircleShape).clickable { onStop() },
-                contentAlignment = Alignment.Center,
-            ) { Text("■", color = Palette.Dim, fontSize = 12.sp) }
-        }
-    }
-}
