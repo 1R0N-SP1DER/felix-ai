@@ -211,20 +211,21 @@ fun Hint(text: String) {
 
 /** A closed drop-down: the current choice in a small bordered field that opens a menu. */
 @Composable
-fun SelectBox(current: String, options: List<Pair<String, String>>, soon: Boolean = false, onPick: (String) -> Unit) {
+fun SelectBox(current: String, options: List<Pair<String, String>>, soon: Boolean = false, enabled: Boolean = true, modifier: Modifier = Modifier, onPick: (String) -> Unit) {
     val context = LocalContext.current
     var open by remember { mutableStateOf(false) }
-    Box {
+    Box(modifier = if (enabled) modifier else modifier.alpha(0.5f)) {
         Row(
             modifier = Modifier
+                .then(if (modifier == Modifier) Modifier else Modifier.fillMaxWidth())
                 .clip(RoundedCornerShape(8.dp))
                 .background(Palette.Faint)
                 .border(1.dp, Palette.Line, RoundedCornerShape(8.dp))
-                .clickable { if (soon) soonToast(context) else open = true }
+                .clickable { if (enabled) { if (soon) soonToast(context) else open = true } }
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(options.firstOrNull { it.first == current }?.second ?: current, color = Palette.Text, fontSize = 15.sp)
+            Text(options.firstOrNull { it.first == current }?.second ?: current, color = Palette.Text, fontSize = 15.sp, modifier = Modifier.weight(1f, fill = modifier != Modifier))
             Text("  ▾", color = Palette.Muted, fontSize = 12.sp)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {

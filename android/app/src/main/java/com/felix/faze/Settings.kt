@@ -57,6 +57,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = text("font_choice").ifEmpty { "system" }
         set(value) = put("font_choice", value)
 
+    /** The thinking level picked in the model sheet: auto, off, low, medium, high or max. Kept for the models that use it. */
+    var thinkLevel: String
+        get() = text("think_level").ifEmpty { "auto" }
+        set(value) = put("think_level", value)
+
     var motion: Boolean
         get() = prefs.getBoolean("motion", true)
         set(value) = prefs.edit().putBoolean("motion", value).apply()

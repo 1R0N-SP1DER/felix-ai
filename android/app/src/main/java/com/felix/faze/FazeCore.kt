@@ -142,6 +142,11 @@ class FazeCore(private val app: Application) : EngineListener {
         speaker.setVoice(settings.voiceRate, settings.voicePitch)
     }
 
+    /** The stop button in the top bar: be quiet now (the request, if one is running, carries on). */
+    fun stopSpeaking() {
+        speaker.stop()
+    }
+
     fun testVoice() {
         speaker.stop()
         speaker.speak("This is how I sound.")

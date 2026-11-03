@@ -83,7 +83,7 @@ fun FazeRoot(vm: ChatViewModel = viewModel()) {
         },
     ) {
         if (settings) SettingsScreen(core) { settings = false }
-        else ChatScreen(core) { scope.launch { drawer.open() } }
+        else ChatScreen(core, onMenu = { scope.launch { drawer.open() } }, onSettings = { settings = true })
     }
     }
 }

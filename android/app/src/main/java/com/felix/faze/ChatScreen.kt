@@ -51,7 +51,7 @@ import androidx.core.content.ContextCompat
 private val Pill = RoundedCornerShape(28.dp)
 
 @Composable
-fun ChatScreen(core: FazeCore, onMenu: () -> Unit) {
+fun ChatScreen(core: FazeCore, onMenu: () -> Unit, onSettings: () -> Unit) {
     val context = LocalContext.current
     var input by remember { mutableStateOf("") }
     var insertTick by remember { mutableStateOf(0) }
@@ -59,6 +59,10 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit) {
     LaunchedEffect(insertTick) { if (insertTick > 0) focus.requestFocus() }
     val listState = rememberLazyListState()
     val lastLength = core.messages.lastOrNull()?.text?.length ?: 0
+    var plusOpen by remember { mutableStateOf(false) }
+    var toolsOpen by remember { mutableStateOf(false) }
+    var modelOpen by remember { mutableStateOf(false) }
+    var composerHeight by remember { mutableStateOf(64.dp) }
 
     LaunchedEffect(core.messages.size, lastLength) {
         if (core.messages.isNotEmpty()) listState.scrollToItem(core.messages.size - 1)
@@ -68,66 +72,72 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit) {
         if (granted) core.startRecording()
     }
 
-    val mode = when {
-        core.recording || core.heard -> CoreMode.LISTENING
-        core.speaking -> CoreMode.SPEAKING
-        core.busy || core.transcribing -> CoreMode.THINKING
-        else -> CoreMode.IDLE
-    }
+    val mode = core.coreMode()
     val active = mode != CoreMode.IDLE
 
-    Column(modifier = Modifier.fillMaxSize().background(Palette.Bg)) {
-        TopBar(core, onMenu)
+    Box(modifier = Modifier.fillMaxSize().background(Palette.Bg)) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            TopBar(core, onMenu) { modelOpen = true }
 
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            if (core.messages.isEmpty()) {
-                HomeScreen(core, mode) { text -> input = text; insertTick++ }
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    items(core.messages, key = { it.id }) { Bubble(it) }
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                if (core.messages.isEmpty()) {
+                    HomeScreen(core, mode) { text -> input = text; insertTick++ }
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(core.messages, key = { it.id }) { Bubble(it) }
+                    }
                 }
             }
-        }
 
-        core.approval?.let { ApprovalCard(it, onAllow = { core.resolveApproval(it.id, true) }, onDeny = { core.resolveApproval(it.id, false) }) }
+            core.approval?.let { ApprovalCard(it, onAllow = { core.resolveApproval(it.id, true) }, onDeny = { core.resolveApproval(it.id, false) }) }
 
-        if (core.status.isNotEmpty()) {
-            Text(
-                core.status,
-                color = if (core.recording || core.transcribing) Palette.Accent else Palette.Bad,
-                fontSize = 13.sp,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            if (core.status.isNotEmpty()) {
+                Text(
+                    core.status,
+                    color = if (core.recording || core.transcribing) Palette.Accent else Palette.Bad,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+
+            if (active || core.timing.isNotEmpty()) {
+                LiveBar(mode, label(core), core.timing, onStop = { if (core.recording) core.finishRecording() else core.stop() })
+            }
+
+            Composer(
+                value = input,
+                focus = focus,
+                onValue = { input = it },
+                recording = core.recording,
+                busy = core.busy,
+                onSend = {
+                    if (core.busy) core.stop()
+                    else if (input.isNotBlank()) {
+                        core.send(input)
+                        input = ""
+                    }
+                },
+                onMic = {
+                    if (core.recording) core.finishRecording()
+                    else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) core.startRecording()
+                    else micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                },
+                onPlus = { plusOpen = !plusOpen; toolsOpen = false },
+                onTools = { toolsOpen = !toolsOpen; plusOpen = false },
+                onModel = { modelOpen = true },
+                onHeight = { composerHeight = it },
             )
         }
 
-        if (active || core.timing.isNotEmpty()) {
-            LiveBar(mode, label(core), core.timing, onStop = { if (core.recording) core.finishRecording() else core.stop() })
-        }
-
-        Composer(
-            value = input,
-            focus = focus,
-            onValue = { input = it },
-            recording = core.recording,
-            busy = core.busy,
-            onSend = {
-                if (core.busy) core.stop()
-                else if (input.isNotBlank()) {
-                    core.send(input)
-                    input = ""
-                }
-            },
-            onMic = {
-                if (core.recording) core.finishRecording()
-                else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) core.startRecording()
-                else micPermission.launch(Manifest.permission.RECORD_AUDIO)
-            },
-        )
+        val menuBottom = composerHeight + 34.dp
+        PlusMenu(core, plusOpen, menuBottom, { plusOpen = false }, onThinking = { modelOpen = true }, onNew = { core.newChat() }, onSettings = onSettings)
+        ToolsMenu(toolsOpen, menuBottom, { toolsOpen = false }) { text -> input = text; insertTick++ }
+        ModelSheetView(core, modelOpen) { modelOpen = false }
     }
 }
 
@@ -138,39 +148,6 @@ private fun label(core: FazeCore): String = when {
     core.speaking -> "Speaking…"
     core.busy -> "Thinking…"
     else -> if (core.listening) "Wake word on" else ""
-}
-
-@Composable
-private fun TopBar(core: FazeCore, onMenu: () -> Unit) {
-    var model by remember { mutableStateOf(core.settings.model()) }
-    var open by remember { mutableStateOf(false) }
-    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = onMenu) { Text("☰", color = Palette.Dim, fontSize = 20.sp) }
-        Box {
-            Row(
-                modifier = Modifier.clip(RoundedCornerShape(14.dp)).background(Palette.Surface).border(1.dp, Palette.Line, RoundedCornerShape(14.dp))
-                    .clickable { open = true }.padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("◎ ", color = Palette.Accent, fontSize = 13.sp)
-                Text("Groq " + ModelChoices.label(model) + " ▾", color = Palette.Text, fontSize = 13.sp)
-            }
-            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                for (choice in ModelChoices.all) {
-                    DropdownMenuItem(
-                        text = { Column { Text(choice.label); Text(choice.note, fontSize = 11.sp, color = Palette.Muted) } },
-                        onClick = {
-                            core.settings.modelName = choice.id
-                            model = choice.id
-                            open = false
-                        },
-                    )
-                }
-            }
-        }
-        Box(modifier = Modifier.weight(1f))
-        if (core.listening) Text("● wake on", color = Palette.Ok, fontSize = 12.sp, modifier = Modifier.padding(end = 12.dp))
-    }
 }
 
 @Composable
@@ -244,38 +221,4 @@ private fun LiveBar(mode: CoreMode, label: String, timing: String, onStop: () ->
             ) { Text("■", color = Palette.Dim, fontSize = 12.sp) }
         }
     }
-}
-
-@Composable
-private fun Composer(value: String, focus: FocusRequester, onValue: (String) -> Unit, recording: Boolean, busy: Boolean, onSend: () -> Unit, onMic: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(12.dp).clip(Pill).background(Palette.Surface).border(1.dp, Palette.Line, Pill).padding(start = 16.dp, top = 6.dp, end = 6.dp, bottom = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Box(modifier = Modifier.weight(1f)) {
-            if (value.isEmpty()) Text("Message FAZE", color = Palette.Muted, fontSize = 16.sp)
-            BasicTextField(
-                value = value,
-                onValueChange = onValue,
-                textStyle = TextStyle(color = Palette.Text, fontSize = 16.sp),
-                cursorBrush = SolidColor(Palette.Accent),
-                maxLines = 4,
-                modifier = Modifier.fillMaxWidth().focusRequester(focus),
-            )
-        }
-        val sending = busy || value.isNotBlank()
-        if (sending) {
-            RoundButton(if (busy) "■" else "↑", Palette.Accent, Palette.AccentInk, onSend)
-        }
-        RoundButton(if (recording) "Done" else "Mic", if (recording) Palette.Warn else Palette.Surface2, if (recording) Palette.AccentInk else Palette.Text, onMic)
-    }
-}
-
-@Composable
-private fun RoundButton(text: String, fill: androidx.compose.ui.graphics.Color, ink: androidx.compose.ui.graphics.Color, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier.size(42.dp).clip(CircleShape).background(fill).clickable { onClick() },
-        contentAlignment = Alignment.Center,
-    ) { Text(text, color = ink, fontSize = if (text.length > 1) 12.sp else 18.sp, fontWeight = FontWeight.Medium) }
 }
