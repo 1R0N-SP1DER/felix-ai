@@ -25,7 +25,9 @@ class FazeAccessibilityService : AccessibilityService() {
 
     private val ticker = object : Runnable {
         override fun run() {
-            act(detector.check(SystemClock.uptimeMillis()))
+            val now = SystemClock.uptimeMillis()
+            act(detector.check(now))
+            step(detector.poll(now))
             if (detector.anyHeld()) handler.postDelayed(this, 80)
         }
     }
@@ -43,6 +45,7 @@ class FazeAccessibilityService : AccessibilityService() {
         if (down && event.repeatCount == 0 && !detector.anyHeld()) rememberVolumes()
         val result = detector.onKey(event.keyCode, down, event.repeatCount, SystemClock.uptimeMillis())
         act(result.action)
+        step(result.adjust)
         if (detector.anyHeld()) {
             handler.removeCallbacks(ticker)
             handler.postDelayed(ticker, 80)
@@ -68,7 +71,18 @@ class FazeAccessibilityService : AccessibilityService() {
         }
     }
 
-    // The first key of the chord still changes the volume once before the second arrives; put it back.
+    /** Every volume key is swallowed (so a chord never shows the volume slider); a real single press is replayed here. */
+    private fun step(direction: Int) {
+        if (direction == 0) return
+        val am = getSystemService(AudioManager::class.java)
+        am.adjustSuggestedStreamVolume(
+            if (direction > 0) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER,
+            AudioManager.USE_DEFAULT_STREAM_TYPE,
+            AudioManager.FLAG_SHOW_UI,
+        )
+    }
+
+    // A key held a while before the chord completes may already have stepped the volume once; put it back.
     private fun rememberVolumes() {
         val am = getSystemService(AudioManager::class.java)
         savedMusic = am.getStreamVolume(AudioManager.STREAM_MUSIC)

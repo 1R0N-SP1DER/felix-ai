@@ -4,7 +4,7 @@ import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class ChatRecord(val id: String, val title: String, val updated: Long, val messages: List<ChatMessage>)
+data class ChatRecord(val id: String, val title: String, val updated: Long, val messages: List<ChatMessage>, val renamed: Boolean = false)
 
 /** Saved chats: one small JSON file per chat in the app's private folder. */
 class ChatStore(private val dir: File, private val now: () -> Long = { System.currentTimeMillis() }) {
@@ -26,7 +26,10 @@ class ChatStore(private val dir: File, private val now: () -> Long = { System.cu
         if (kept.none { it.role == "user" }) return // nothing worth keeping yet
         val arr = JSONArray()
         for (m in kept) arr.put(JSONObject().put("id", m.id).put("role", m.role).put("text", m.text).put("steps", JSONArray(m.steps)))
-        val body = JSONObject().put("id", safe(id)).put("title", titleFor(kept)).put("updated", now()).put("messages", arr).toString()
+        val existing = read(file(id))
+        val keepName = existing?.renamed == true // a name the person chose is not overwritten by the automatic one
+        val body = JSONObject().put("id", safe(id)).put("title", if (keepName) existing!!.title else titleFor(kept)).put("renamed", keepName)
+            .put("updated", now()).put("messages", arr).toString()
         val tmp = File(dir, safe(id) + ".tmp")
         tmp.writeText(body)
         if (!tmp.renameTo(file(id))) { // some filesystems refuse to rename over a file
@@ -47,7 +50,7 @@ class ChatStore(private val dir: File, private val now: () -> Long = { System.cu
                 val s = m.optJSONArray("steps")
                 ChatMessage(m.getLong("id"), m.getString("role"), m.getString("text"), if (s == null) emptyList() else (0 until s.length()).map { i -> s.getString(i) })
             }
-            ChatRecord(o.getString("id"), o.getString("title"), o.getLong("updated"), list)
+            ChatRecord(o.getString("id"), o.getString("title"), o.getLong("updated"), list, o.optBoolean("renamed", false))
         } catch (e: Exception) {
             null // a damaged file is skipped, not fatal
         }
@@ -58,6 +61,17 @@ class ChatStore(private val dir: File, private val now: () -> Long = { System.cu
         val q = query.trim().lowercase()
         val all = (dir.listFiles { f -> f.name.endsWith(".json") } ?: emptyArray()).mapNotNull { read(it) }.sortedByDescending { it.updated }
         return if (q.isEmpty()) all else all.filter { r -> r.title.lowercase().contains(q) || r.messages.any { it.text.lowercase().contains(q) } }
+    }
+
+    /** Gives a chat a name of the person's choosing (up to 60 characters). A blank name is ignored. */
+    fun rename(id: String, title: String) {
+        val name = title.trim().replace(Regex("\\s+"), " ").take(60)
+        val record = load(id) ?: return
+        if (name.isEmpty()) return
+        val arr = JSONArray()
+        for (m in record.messages) arr.put(JSONObject().put("id", m.id).put("role", m.role).put("text", m.text).put("steps", JSONArray(m.steps)))
+        val body = JSONObject().put("id", record.id).put("title", name).put("renamed", true).put("updated", record.updated).put("messages", arr).toString()
+        file(id).writeText(body)
     }
 
     fun delete(id: String) {

@@ -1,7 +1,6 @@
 package com.felix.faze
 
 import android.content.Context
-import android.net.Uri
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -39,43 +38,5 @@ object ModelStore {
         }
         dir(context).deleteRecursively()
         if (!tmp.renameTo(dir(context))) throw IOException("couldn't save the model")
-    }
-
-    private fun keyword(context: Context) = File(context.filesDir, "porcupine/keyword.ppn")
-
-    /** A custom wake word file made on the Picovoice console, if one was imported. */
-    fun keywordFile(context: Context): File? = keyword(context).takeIf { it.isFile && it.length() > 0 }
-
-    fun importKeyword(context: Context, uri: Uri) {
-        val dest = keyword(context)
-        dest.parentFile?.mkdirs()
-        val tmp = File(dest.parentFile, "keyword.tmp")
-        var total = 0L
-        val input = context.contentResolver.openInputStream(uri) ?: throw IOException("couldn't open that file")
-        input.use { i ->
-            tmp.outputStream().use { o ->
-                val buf = ByteArray(16 * 1024)
-                while (true) {
-                    val n = i.read(buf)
-                    if (n < 0) break
-                    total += n
-                    if (total > 2 * 1024 * 1024) {
-                        tmp.delete()
-                        throw IOException("that file is too big for a wake word")
-                    }
-                    o.write(buf, 0, n)
-                }
-            }
-        }
-        if (total == 0L) {
-            tmp.delete()
-            throw IOException("that file is empty")
-        }
-        dest.delete()
-        if (!tmp.renameTo(dest)) throw IOException("couldn't save the wake word file")
-    }
-
-    fun removeKeyword(context: Context) {
-        keyword(context).delete()
     }
 }

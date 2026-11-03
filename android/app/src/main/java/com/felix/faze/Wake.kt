@@ -198,13 +198,18 @@ object Keys {
 
 enum class ChordAction { NONE, OPEN, CLOSE }
 
-data class ChordResult(val consume: Boolean, val action: ChordAction)
+/** [adjust] is +1 or -1 when the caller should now change the volume one step (the detector swallows every volume key itself). */
+data class ChordResult(val consume: Boolean, val action: ChordAction, val adjust: Int = 0)
 
 /**
- * Both volume keys held together opens the overlay; with the overlay open, volume up held alone closes it. A quick press of
- * either key is left alone (not consumed), so normal volume changes still work. Key times come in, so this needs no Android.
+ * Both volume keys held together opens the overlay; with the overlay open, volume up held alone closes it.
+ *
+ * Every volume key event is swallowed, so a chord never changes the volume or shows the volume slider. A single key still works:
+ * a quick tap steps the volume once when the key is released, and a key held past [singleDelayMs] steps it at that moment and
+ * then once per repeat, like the real buttons. The caller does the stepping (see [ChordResult.adjust] and [poll]). Key times come
+ * in, so this needs no Android.
  */
-class ChordDetector(private val openHoldMs: Long = 600, private val closeHoldMs: Long = 700) {
+class ChordDetector(private val openHoldMs: Long = 600, private val closeHoldMs: Long = 700, private val singleDelayMs: Long = 250) {
     var overlayOpen = false
     private var upAt = -1L
     private var downAt = -1L
@@ -213,33 +218,52 @@ class ChordDetector(private val openHoldMs: Long = 600, private val closeHoldMs:
     private var fired = false
     private var closeFired = false
     private var closeBlocked = false
+    private var firstKey = -1
+    private var firstAt = -1L
+    private var firstDecided = false
 
     fun anyHeld(): Boolean = upAt >= 0 || downAt >= 0
+
+    private fun dir(key: Int) = if (key == Keys.VOLUME_UP) 1 else -1
 
     fun onKey(keyCode: Int, down: Boolean, repeat: Int, now: Long): ChordResult {
         if (keyCode != Keys.VOLUME_UP && keyCode != Keys.VOLUME_DOWN) return ChordResult(false, ChordAction.NONE)
         val wasChord = chordLatched
+        val heldBefore = anyHeld()
+        var adjust = 0
         if (down) {
-            if (keyCode == Keys.VOLUME_UP) { if (repeat == 0 || upAt < 0) upAt = now }
-            else { if (repeat == 0 || downAt < 0) downAt = now }
+            val newPress = repeat == 0 || (keyCode == Keys.VOLUME_UP && upAt < 0) || (keyCode == Keys.VOLUME_DOWN && downAt < 0)
+            if (newPress) {
+                if (keyCode == Keys.VOLUME_UP) upAt = now else downAt = now
+                if (!heldBefore) {
+                    firstKey = keyCode
+                    firstAt = now
+                    firstDecided = false
+                }
+            } else if (!chordLatched && keyCode == firstKey && firstDecided && !(overlayOpen && keyCode == Keys.VOLUME_UP)) {
+                adjust = dir(keyCode) // a held key repeats like the real button
+            }
             if (upAt >= 0 && downAt >= 0 && !chordLatched) {
                 chordLatched = true
                 chordAt = maxOf(upAt, downAt)
                 fired = false
+                firstKey = -1 // the first key was the start of a chord, not a volume press
             }
         } else {
+            val closed = closeFired
             if (keyCode == Keys.VOLUME_UP) { upAt = -1; closeFired = false } else downAt = -1
-            if (chordLatched) fired = true // letting go of either key cancels a chord that has not opened anything yet
+            if (!wasChord && keyCode == firstKey && !firstDecided && !closed) adjust = dir(keyCode) // a quick tap
+            if (keyCode == firstKey) firstKey = -1
         }
         val action = check(now)
-        val consume = chordLatched || wasChord || (overlayOpen && keyCode == Keys.VOLUME_UP && down && repeat > 0)
         if (!anyHeld()) {
             chordLatched = false
             fired = false
             closeFired = false
             closeBlocked = false
+            firstKey = -1
         }
-        return ChordResult(consume, action)
+        return ChordResult(true, action, adjust)
     }
 
     /** Call while a key is held (on each key event and on a short timer): the hold time passing is what fires the action. */
@@ -254,5 +278,15 @@ class ChordDetector(private val openHoldMs: Long = 600, private val closeHoldMs:
             return ChordAction.CLOSE
         }
         return ChordAction.NONE
+    }
+
+    /** A single key held past the delay: returns +1/-1 once, the first volume step. (With the overlay open, volume up never steps on a hold: that hold means close.) */
+    fun poll(now: Long): Int {
+        if (firstKey < 0 || firstDecided || chordLatched) return 0
+        if (overlayOpen && firstKey == Keys.VOLUME_UP) return 0
+        val held = if (firstKey == Keys.VOLUME_UP) upAt >= 0 else downAt >= 0
+        if (!held || now - firstAt < singleDelayMs) return 0
+        firstDecided = true
+        return dir(firstKey)
     }
 }

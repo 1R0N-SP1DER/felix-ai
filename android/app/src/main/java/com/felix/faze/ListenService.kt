@@ -20,7 +20,7 @@ import java.util.concurrent.Executors
 
 /**
  * The always-on part: a foreground service of type "microphone" that waits for the wake phrase with a [WakeEngine] (offline
- * Vosk or Porcupine), then records one request and hands it to [FazeCore]. Android only lets a microphone service start while
+ * Vosk), then records one request and hands it to [FazeCore]. Android only lets a microphone service start while
  * the app is on screen, so it is started from the app, not at boot.
  */
 class ListenService : Service() {
@@ -95,7 +95,7 @@ class ListenService : Service() {
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_faze)
             .setContentTitle("Faze is listening")
-            .setContentText(if (core.settings.wakeEngine == "porcupine") "Wake word: Porcupine" else "Say \"${Wake.phrase(core.settings.wakePhrase)}\"")
+            .setContentText("Say \"${Wake.phrase(core.settings.wakePhrase)}\"")
             .setContentIntent(open)
             .addAction(0, "Turn off", stop)
             .setOngoing(true)
@@ -132,24 +132,15 @@ class ListenService : Service() {
         return null
     }
 
-    /** Builds the engine the person chose, or says why it can't start. */
+    /** Builds the wake engine, or says why it can't start. */
     private fun makeEngine(): WakeEngine? {
-        val s = core.settings
+        val dir = ModelStore.ready(this)
+        if (dir == null) {
+            core.reportStatus("download the wake word model first (Settings)")
+            return null
+        }
         return try {
-            if (s.wakeEngine == "porcupine") {
-                if (s.picovoiceKey.isEmpty()) {
-                    core.reportStatus("Porcupine needs your Picovoice AccessKey (Settings)")
-                    return null
-                }
-                PorcupineWake(this, s.picovoiceKey, ModelStore.keywordFile(this), s.porcupineKeyword, 0.7f)
-            } else {
-                val dir = ModelStore.ready(this)
-                if (dir == null) {
-                    core.reportStatus("download the wake word model first (Settings)")
-                    return null
-                }
-                VoskWake(dir, Wake.phrase(s.wakePhrase))
-            }
+            VoskWake(dir, Wake.phrase(core.settings.wakePhrase))
         } catch (e: Throwable) {
             core.reportStatus("wake word failed to start: ${e.message ?: e.javaClass.simpleName}")
             null

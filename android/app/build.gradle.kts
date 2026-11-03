@@ -65,8 +65,6 @@ dependencies {
     // offline wake word: the recognizer needs JNA as an aar (that is how the library documents it)
     implementation("net.java.dev.jna:jna:5.13.0@aar")
     implementation("com.alphacephei:vosk-android:0.3.47")
-    // Picovoice Porcupine: the second wake word engine
-    implementation("ai.picovoice:porcupine-android:3.0.3")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

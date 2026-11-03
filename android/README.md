@@ -46,15 +46,15 @@ personal debug builds only; do not publish anything signed with it.
 
 ## Patch 30: overlay, volume buttons, better wake word
 
-- **Overlay** (`Overlay.kt`): a panel at the bottom of the screen above any app, with the core, the live reply, a text box with a
+- **Overlay** (`Overlay.kt`): a panel at the bottom of the screen over a darkened, blurred view of any app, with the core, the live reply, a text box with a
   working keyboard, a mic button and the Allow/Deny approval card. Replaces the Tasker scene.
 - **Volume buttons** (`FazeAccessibilityService.kt`): hold both for 0.6 s to open it; with it open, hold volume up for 0.7 s to
   force-close it (stops recording, speech, the request and any pending approval). A quick volume press works as usual. The service
   only sees volume keys; it does not read the screen. Enable it (and "display over other apps") in one step with root:
   `su -c "sh $HOME/felix-ai/scripts/faze_enable_android.sh"`.
-- **Wake word**: two engines, chosen in Settings. *Offline (Vosk)* now needs a finished recognition with every word right and
-  confident, lasting about as long as the phrase, with look-alike decoys in the grammar; *Porcupine* uses a keyword model (built-in
-  words, or your own .ppn from the Picovoice console) and needs a free AccessKey that checks in online.
+- **Wake word**: offline Vosk. It needs a finished recognition with every word right and confident, lasting about as long as
+  the phrase, with look-alike decoys in the grammar, so coughs, sneezes and similar words are rejected. (Picovoice was tried in
+  patch 30 and dropped in patch 31: it is aimed at companies and is not free.)
 - **Quiet notification**: minimum importance, own icon, no status-bar icon.
 - **Microphone dot (root, off by default)**: `RootCommands.kt` holds the only three commands the app can run as root, all fixed
   `cmd device_config ... privacy camera_mic_icons_enabled`. While only waiting, the dot is hidden; while recording a request it is shown.

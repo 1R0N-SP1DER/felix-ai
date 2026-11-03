@@ -37,6 +37,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -52,6 +54,9 @@ private val Pill = RoundedCornerShape(28.dp)
 fun ChatScreen(core: FazeCore, onMenu: () -> Unit) {
     val context = LocalContext.current
     var input by remember { mutableStateOf("") }
+    var insertTick by remember { mutableStateOf(0) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(insertTick) { if (insertTick > 0) focus.requestFocus() }
     val listState = rememberLazyListState()
     val lastLength = core.messages.lastOrNull()?.text?.length ?: 0
 
@@ -76,7 +81,7 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit) {
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (core.messages.isEmpty()) {
-                Home(mode) { starter -> core.send(starter) }
+                HomeScreen(core, mode) { text -> input = text; insertTick++ }
             } else {
                 LazyColumn(
                     state = listState,
@@ -106,6 +111,7 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit) {
 
         Composer(
             value = input,
+            focus = focus,
             onValue = { input = it },
             recording = core.recording,
             busy = core.busy,
@@ -168,29 +174,6 @@ private fun TopBar(core: FazeCore, onMenu: () -> Unit) {
 }
 
 @Composable
-private fun Home(mode: CoreMode, onStarter: (String) -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        CoreView(mode, 150.dp)
-        Text("FAZE", color = Palette.Text, fontSize = 24.sp, fontWeight = FontWeight.Medium, letterSpacing = 5.sp, modifier = Modifier.padding(top = 12.dp))
-        Text("Ask anything. Build anything.", color = Palette.Dim, fontSize = 14.sp, modifier = Modifier.padding(top = 2.dp, bottom = 16.dp))
-        for (s in listOf("What's the weather today?", "Search the web for something new", "What can you do on my phone?")) {
-            Text(
-                s,
-                color = Palette.Text,
-                fontSize = 13.sp,
-                modifier = Modifier.padding(vertical = 4.dp).clip(RoundedCornerShape(16.dp)).border(1.dp, Palette.Line, RoundedCornerShape(16.dp))
-                    .clickable { onStarter(s) }.padding(horizontal = 14.dp, vertical = 7.dp),
-                textAlign = TextAlign.Center,
-            )
-        }
-    }
-}
-
-@Composable
 private fun Bubble(m: ChatMessage) {
     val mine = m.role == "user"
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
@@ -211,6 +194,7 @@ private fun Bubble(m: ChatMessage) {
             if (m.text.isEmpty()) "…" else m.text,
             color = Palette.Text,
             fontSize = 16.sp,
+            fontFamily = LocalReadFont.current,
             modifier = Modifier.widthIn(max = 330.dp)
                 .background(if (mine) Palette.Surface2 else Palette.Bg, if (mine) RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp) else RoundedCornerShape(16.dp))
                 .padding(horizontal = if (mine) 12.dp else 4.dp, vertical = 8.dp),
@@ -263,7 +247,7 @@ private fun LiveBar(mode: CoreMode, label: String, timing: String, onStop: () ->
 }
 
 @Composable
-private fun Composer(value: String, onValue: (String) -> Unit, recording: Boolean, busy: Boolean, onSend: () -> Unit, onMic: () -> Unit) {
+private fun Composer(value: String, focus: FocusRequester, onValue: (String) -> Unit, recording: Boolean, busy: Boolean, onSend: () -> Unit, onMic: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(12.dp).clip(Pill).background(Palette.Surface).border(1.dp, Palette.Line, Pill).padding(start = 16.dp, top = 6.dp, end = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -277,7 +261,7 @@ private fun Composer(value: String, onValue: (String) -> Unit, recording: Boolea
                 textStyle = TextStyle(color = Palette.Text, fontSize = 16.sp),
                 cursorBrush = SolidColor(Palette.Accent),
                 maxLines = 4,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus),
             )
         }
         val sending = busy || value.isNotBlank()
@@ -294,40 +278,4 @@ private fun RoundButton(text: String, fill: androidx.compose.ui.graphics.Color, 
         modifier = Modifier.size(42.dp).clip(CircleShape).background(fill).clickable { onClick() },
         contentAlignment = Alignment.Center,
     ) { Text(text, color = ink, fontSize = if (text.length > 1) 12.sp else 18.sp, fontWeight = FontWeight.Medium) }
-}
-
-@Composable
-fun ChatDrawer(core: FazeCore, onNew: () -> Unit, onOpen: (String) -> Unit, onSettings: () -> Unit) {
-    var query by remember { mutableStateOf("") }
-    val shown = remember(query, core.chats.size, core.chatId) { if (query.isBlank()) core.chats.toList() else core.search(query) }
-    ModalDrawerSheet(drawerContainerColor = Palette.Bg) {
-        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-            Text("FAZE", color = Palette.Text, fontSize = 20.sp, letterSpacing = 4.sp, fontWeight = FontWeight.Medium)
-            Text(
-                "+ New chat", color = Palette.AccentInk, fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(top = 14.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Palette.Accent).clickable { onNew() }.padding(12.dp),
-                textAlign = TextAlign.Center,
-            )
-            Box(modifier = Modifier.padding(top = 12.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Palette.Surface).border(1.dp, Palette.Line, RoundedCornerShape(12.dp)).padding(12.dp)) {
-                if (query.isEmpty()) Text("Search chats", color = Palette.Muted, fontSize = 14.sp)
-                BasicTextField(
-                    value = query, onValueChange = { query = it }, singleLine = true,
-                    textStyle = TextStyle(color = Palette.Text, fontSize = 14.sp), cursorBrush = SolidColor(Palette.Accent),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            LazyColumn(modifier = Modifier.weight(1f).padding(top = 8.dp)) {
-                items(shown, key = { it.id }) { chat ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (chat.id == core.chatId) Palette.Surface2 else Palette.Bg).clickable { onOpen(chat.id) }.padding(horizontal = 10.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(chat.title, color = Palette.Text, fontSize = 14.sp, maxLines = 1, modifier = Modifier.weight(1f))
-                        Text("✕", color = Palette.Muted, fontSize = 14.sp, modifier = Modifier.clickable { core.deleteChat(chat.id) }.padding(start = 10.dp))
-                    }
-                }
-            }
-            Text("Settings", color = Palette.Dim, fontSize = 15.sp, modifier = Modifier.fillMaxWidth().clickable { onSettings() }.padding(vertical = 12.dp))
-        }
-    }
 }

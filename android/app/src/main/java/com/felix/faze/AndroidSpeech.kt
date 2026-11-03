@@ -75,12 +75,16 @@ class Speaker(context: android.content.Context) : SpeechOut {
     private var tts: TextToSpeech? = null
     private var ready = false
     private val waiting = ArrayList<String>()
+    private var rate = 1.0f
+    private var pitch = 1.0f
 
     init {
         tts = TextToSpeech(context.applicationContext) { status ->
             synchronized(this) {
                 if (status == TextToSpeech.SUCCESS) {
                     tts?.setLanguage(Locale.getDefault())
+                    tts?.setSpeechRate(rate)
+                    tts?.setPitch(pitch)
                     ready = true
                     for (s in waiting) say(s)
                 }
@@ -105,6 +109,18 @@ class Speaker(context: android.content.Context) : SpeechOut {
         synchronized(this) {
             waiting.clear()
             tts?.stop()
+        }
+    }
+
+    /** Speed and pitch, 0.6 to 1.6 as on the web settings page. Applies to what is said next. */
+    fun setVoice(newRate: Float, newPitch: Float) {
+        synchronized(this) {
+            rate = newRate
+            pitch = newPitch
+            if (ready) {
+                tts?.setSpeechRate(rate)
+                tts?.setPitch(pitch)
+            }
         }
     }
 

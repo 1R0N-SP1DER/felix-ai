@@ -44,19 +44,34 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = text("wake_phrase")
         set(value) = put("wake_phrase", value)
 
-    /** "vosk" (offline, nothing leaves the phone) or "porcupine" (Picovoice; needs an AccessKey that checks in online). */
-    var wakeEngine: String
-        get() = text("wake_engine").ifEmpty { "vosk" }
-        set(value) = put("wake_engine", value)
+    /** The look, as on the web settings page: accent colour name, text size s/m/l, font system/serif/mono, motion and greeting switches. */
+    var accent: String
+        get() = text("accent").ifEmpty { "cyan" }
+        set(value) = put("accent", value)
 
-    var picovoiceKey: String
-        get() = text("picovoice_key")
-        set(value) = put("picovoice_key", value)
+    var textSize: String
+        get() = text("text_size").ifEmpty { "m" }
+        set(value) = put("text_size", value)
 
-    /** Name of one of Porcupine's built-in keywords, used when no custom keyword file was imported. */
-    var porcupineKeyword: String
-        get() = text("porcupine_keyword").ifEmpty { "JARVIS" }
-        set(value) = put("porcupine_keyword", value)
+    var fontChoice: String
+        get() = text("font_choice").ifEmpty { "system" }
+        set(value) = put("font_choice", value)
+
+    var motion: Boolean
+        get() = prefs.getBoolean("motion", true)
+        set(value) = prefs.edit().putBoolean("motion", value).apply()
+
+    var greeting: Boolean
+        get() = prefs.getBoolean("greeting", true)
+        set(value) = prefs.edit().putBoolean("greeting", value).apply()
+
+    var voiceRate: Float
+        get() = prefs.getFloat("voice_rate", 1.0f)
+        set(value) = prefs.edit().putFloat("voice_rate", value.coerceIn(0.6f, 1.6f)).apply()
+
+    var voicePitch: Float
+        get() = prefs.getFloat("voice_pitch", 1.0f)
+        set(value) = prefs.edit().putFloat("voice_pitch", value.coerceIn(0.6f, 1.6f)).apply()
 
     /** Root only: keep the green microphone dot off while only waiting for the wake word. */
     var hideMicDot: Boolean

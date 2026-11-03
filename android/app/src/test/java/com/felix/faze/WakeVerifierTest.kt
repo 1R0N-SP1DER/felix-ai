@@ -70,58 +70,89 @@ class WakeVerifierTest {
     private val UP = Keys.VOLUME_UP
     private val DOWN = Keys.VOLUME_DOWN
 
-    @Test fun bothKeysHeldOpensTheOverlayOnce() {
+    @Test fun everyVolumeKeyIsSwallowedSoTheSliderNeverShows() {
         val c = ChordDetector()
-        assertFalse(c.onKey(UP, true, 0, 1000).consume) // the first key is not swallowed
-        val second = c.onKey(DOWN, true, 0, 1050)
-        assertTrue(second.consume)
-        assertEquals(ChordAction.NONE, second.action)
+        assertTrue(c.onKey(UP, true, 0, 1000).consume)
+        assertTrue(c.onKey(DOWN, true, 0, 1050).consume)
+        assertTrue(c.onKey(DOWN, true, 1, 1100).consume)
+        assertTrue(c.onKey(UP, false, 0, 1200).consume)
+        assertFalse(c.onKey(4, true, 0, 0).consume) // other keys are not touched
+    }
+
+    @Test fun bothKeysHeldOpensTheOverlayOnceWithNoVolumeStep() {
+        val c = ChordDetector()
+        assertEquals(0, c.onKey(UP, true, 0, 1000).adjust)
+        assertEquals(0, c.poll(1100)) // not yet: the second key may still come
+        c.onKey(DOWN, true, 0, 1050)
+        assertEquals(0, c.poll(1400)) // a chord never steps the volume
         assertEquals(ChordAction.NONE, c.check(1500))
         assertEquals(ChordAction.OPEN, c.check(1700))
         assertEquals(ChordAction.NONE, c.check(1800)) // only once
-        assertEquals(ChordAction.NONE, c.onKey(UP, true, 3, 2000).action)
+        assertEquals(0, c.onKey(UP, false, 0, 2000).adjust)
+        assertEquals(0, c.onKey(DOWN, false, 0, 2010).adjust)
     }
 
-    @Test fun releasingEarlyDoesNothing() {
+    @Test fun aChordReleasedEarlyDoesNothingAndStepsNothing() {
         val c = ChordDetector()
         c.onKey(UP, true, 0, 1000)
         c.onKey(DOWN, true, 0, 1020)
-        assertTrue(c.onKey(UP, false, 0, 1300).consume) // the release belongs to the chord
-        assertEquals(ChordAction.NONE, c.check(2000))
-        c.onKey(DOWN, false, 0, 1350)
+        assertEquals(0, c.onKey(UP, false, 0, 1300).adjust)
+        assertEquals(ChordAction.NONE, c.check(2000)) // only one key is still down
+        assertEquals(0, c.onKey(DOWN, false, 0, 1350).adjust)
         assertFalse(c.anyHeld())
     }
 
-    @Test fun aSingleKeyIsNeverSwallowedWhileTheOverlayIsClosed() {
+    @Test fun aQuickTapStepsTheVolumeOnceOnRelease() {
         val c = ChordDetector()
-        assertFalse(c.onKey(UP, true, 0, 100).consume)
-        assertFalse(c.onKey(UP, true, 1, 700).consume)
-        assertEquals(ChordAction.NONE, c.check(5000))
-        assertFalse(c.onKey(UP, false, 0, 900).consume)
-        assertFalse(c.onKey(DOWN, true, 0, 1000).consume)
-        assertEquals(ChordAction.NONE, c.check(5000))
+        assertEquals(0, c.onKey(UP, true, 0, 100).adjust)
+        assertEquals(1, c.onKey(UP, false, 0, 180).adjust)
+        assertEquals(0, c.onKey(DOWN, true, 0, 1000).adjust)
+        assertEquals(-1, c.onKey(DOWN, false, 0, 1100).adjust)
     }
 
-    @Test fun otherKeysAreIgnored() {
-        assertFalse(ChordDetector().onKey(4, true, 0, 0).consume)
+    @Test fun aHeldKeyStepsAfterTheDelayThenOncePerRepeat() {
+        val c = ChordDetector()
+        c.onKey(UP, true, 0, 1000)
+        assertEquals(0, c.poll(1100))
+        assertEquals(1, c.poll(1260)) // the first step, after 250 ms
+        assertEquals(0, c.poll(1300)) // only once
+        assertEquals(1, c.onKey(UP, true, 1, 1500).adjust) // then a step per repeat event, like the real button
+        assertEquals(1, c.onKey(UP, true, 2, 1550).adjust)
+        assertEquals(0, c.onKey(UP, false, 0, 1600).adjust) // no extra step on release
     }
 
-    @Test fun volumeUpHeldClosesAnOpenOverlay() {
+    @Test fun volumeDownHeldStepsDownward() {
+        val c = ChordDetector()
+        c.onKey(DOWN, true, 0, 0)
+        assertEquals(-1, c.poll(300))
+        assertEquals(-1, c.onKey(DOWN, true, 1, 520).adjust)
+    }
+
+    @Test fun volumeUpHeldClosesAnOpenOverlayWithoutRaisingTheVolume() {
         val c = ChordDetector()
         c.overlayOpen = true
-        assertFalse(c.onKey(UP, true, 0, 1000).consume) // the first press still changes the volume
-        assertTrue(c.onKey(UP, true, 1, 1500).consume) // the held repeats do not
+        assertEquals(0, c.onKey(UP, true, 0, 1000).adjust)
+        assertEquals(0, c.poll(1300)) // no early step: this hold means close
+        assertEquals(0, c.onKey(UP, true, 1, 1500).adjust)
         assertEquals(ChordAction.NONE, c.check(1600))
         assertEquals(ChordAction.CLOSE, c.check(1750))
         assertEquals(ChordAction.NONE, c.check(1900))
+        assertEquals(0, c.onKey(UP, false, 0, 2000).adjust) // and no step when it is let go
     }
 
-    @Test fun aQuickVolumeUpTapKeepsTheOverlayOpen() {
+    @Test fun aQuickVolumeUpTapWhileOpenStillAdjustsTheVolume() {
         val c = ChordDetector()
         c.overlayOpen = true
         c.onKey(UP, true, 0, 1000)
-        assertFalse(c.onKey(UP, false, 0, 1200).consume)
+        assertEquals(1, c.onKey(UP, false, 0, 1200).adjust)
         assertEquals(ChordAction.NONE, c.check(3000))
+    }
+
+    @Test fun aLongerButNotClosingHoldWhileOpenStepsOnRelease() {
+        val c = ChordDetector()
+        c.overlayOpen = true
+        c.onKey(UP, true, 0, 1000)
+        assertEquals(1, c.onKey(UP, false, 0, 1500).adjust) // 500 ms: past a tap, short of close
     }
 
     @Test fun volumeDownHeldDoesNotCloseIt() {
@@ -139,6 +170,7 @@ class WakeVerifierTest {
         c.overlayOpen = true
         c.onKey(DOWN, false, 0, 1800) // let go of one, keep holding volume up
         assertEquals(ChordAction.NONE, c.check(4000))
+        assertEquals(0, c.poll(4000))
         c.onKey(UP, false, 0, 4100)
         // a fresh hold afterwards does close it
         c.onKey(UP, true, 0, 5000)
@@ -154,11 +186,12 @@ class WakeVerifierTest {
         assertEquals(ChordAction.OPEN, c.check(2700))
     }
 
-    @Test fun anotherChordWhileOpenIsSwallowedButDoesNotReopen() {
+    @Test fun anotherChordWhileOpenDoesNotReopen() {
         val c = ChordDetector()
         c.overlayOpen = true
         c.onKey(UP, true, 0, 0)
-        assertTrue(c.onKey(DOWN, true, 0, 10).consume)
+        c.onKey(DOWN, true, 0, 10)
         assertEquals(ChordAction.NONE, c.check(2000))
+        assertEquals(0, c.poll(2000))
     }
 }

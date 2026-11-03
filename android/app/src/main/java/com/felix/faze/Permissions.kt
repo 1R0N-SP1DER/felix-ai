@@ -26,6 +26,9 @@ object PermissionPolicy {
 
     fun tier(tool: String): Tier = registry[tool] ?: Tier.BLOCK
 
+    /** Every tool the app knows, with its tier (the sidebar's Tools list). */
+    fun all(): List<Pair<String, Tier>> = registry.toList()
+
     fun summary(tool: String, args: JSONObject): String = when (tool) {
         "read_clipboard" -> "Read what is on your clipboard and show it to the model"
         "write_clipboard" -> "Put this on your clipboard: " + args.optString("text", "").replace('\n', ' ').take(80)

@@ -49,6 +49,16 @@ class FazeCore(private val app: Application) : EngineListener {
     var chatId by mutableStateOf(newId())
         private set
 
+    // The look (Settings > General). Read by the screens, so a change shows at once.
+    var motion by mutableStateOf(settings.motion)
+        private set
+    var textSize by mutableStateOf(settings.textSize)
+        private set
+    var fontChoice by mutableStateOf(settings.fontChoice)
+        private set
+    var greetingOn by mutableStateOf(settings.greeting)
+        private set
+
     @Volatile
     var listenControl: ListenControl? = null
 
@@ -67,6 +77,8 @@ class FazeCore(private val app: Application) : EngineListener {
         val client = RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq")
         val tools = GatedTools(Tools(AndroidDevice(app), transport, settings), broker)
         engine = ChatEngine(Agent(client, tools), settings, speaker, { block -> main.post { block() } }, executor, messages, this)
+        speaker.setVoice(settings.voiceRate, settings.voicePitch)
+        Palette.setAccent(Accents.byName(settings.accent))
         refreshChats()
         main.post(object : Runnable {
             override fun run() {
@@ -122,6 +134,42 @@ class FazeCore(private val app: Application) : EngineListener {
     }
 
     fun resolveApproval(id: Long, allow: Boolean) = broker.resolve(id, allow)
+
+    /** Settings > Voice: speed and pitch take effect on the next sentence. */
+    fun setVoice(rate: Float, pitch: Float) {
+        settings.voiceRate = rate
+        settings.voicePitch = pitch
+        speaker.setVoice(settings.voiceRate, settings.voicePitch)
+    }
+
+    fun testVoice() {
+        speaker.stop()
+        speaker.speak("This is how I sound.")
+    }
+
+    fun setAccent(accent: Accent) {
+        settings.accent = accent.name
+        Palette.setAccent(accent)
+    }
+
+    fun useMotion(on: Boolean) { settings.motion = on; motion = on }
+
+    fun useTextSize(size: String) { settings.textSize = size; textSize = size }
+
+    fun useFont(font: String) { settings.fontChoice = font; fontChoice = font }
+
+    fun useGreeting(on: Boolean) { settings.greeting = on; greetingOn = on }
+
+    fun renameChat(id: String, title: String) {
+        executor.execute {
+            store.rename(id, title)
+            val list = store.list()
+            main.post {
+                chats.clear()
+                chats.addAll(list)
+            }
+        }
+    }
 
     private fun save() {
         val copy = messages.toList()

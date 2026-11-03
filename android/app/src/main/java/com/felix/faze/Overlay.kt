@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -89,8 +90,8 @@ class CoreDrawView(context: Context) : View(context) {
 }
 
 /**
- * The overlay that replaces the Tasker scene: a panel at the bottom of the screen, above whatever app is open. Touches outside
- * it still reach the app below. The keyboard works because the window only becomes focusable while the text box is in use.
+ * The overlay that replaces the Tasker scene: a panel at the bottom of the screen over a darkened, blurred view of whatever app is
+ * open. Tapping outside the panel closes it. The keyboard works because the window only becomes focusable while the text box is in use.
  */
 class OverlayWindow(private val context: Context, private val core: FazeCore) {
     private val wm = context.getSystemService(WindowManager::class.java)
@@ -216,18 +217,24 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         input.addView(sd)
         panel.addView(input, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
 
-        val frame = FrameLayout(context).apply { setPadding(dp(8), dp(8), dp(8), dp(8)) }
-        frame.addView(panel, FrameLayout.LayoutParams(-1, -2))
+        // The whole screen is the window: a dark scrim (and, where the phone supports it, blur) behind the panel. Tapping the scrim closes it.
+        val frame = FrameLayout(context).apply {
+            setBackgroundColor(0x99000000.toInt())
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setOnClickListener { close(false) }
+        }
+        panel.setOnClickListener { } // a tap on the panel itself is not a tap on the scrim
+        frame.addView(panel, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
 
         val p = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_BLUR_BEHIND,
             PixelFormat.TRANSLUCENT,
         ).apply {
-            gravity = Gravity.BOTTOM
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+            if (Build.VERSION.SDK_INT >= 31) blurBehindRadius = dp(18) // needs a phone whose compositor supports window blur; harmless otherwise
         }
         try {
             wm.addView(frame, p)

@@ -13,12 +13,16 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.Density
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
@@ -54,8 +58,19 @@ fun FazeRoot(vm: ChatViewModel = viewModel()) {
 
     BackHandler(enabled = settings) { settings = false }
 
+    // The look from Settings > General: text size scales everything (the page's --fs), the font is for chat text, motion gates animations.
+    val density = LocalDensity.current
+    val factor = when (core.textSize) { "s" -> 14.5f / 16f; "l" -> 18f / 16f; else -> 1f }
+    val readFont = when (core.fontChoice) { "serif" -> FontFamily.Serif; "mono" -> FontFamily.Monospace; else -> FontFamily.Default }
+    CompositionLocalProvider(
+        LocalDensity provides Density(density.density, density.fontScale * factor),
+        LocalMotion provides core.motion,
+        LocalReadFont provides readFont,
+    ) {
+
     ModalNavigationDrawer(
         drawerState = drawer,
+        scrimColor = Palette.Scrim,
         gesturesEnabled = !settings,
         drawerContent = {
             ChatDrawer(
@@ -63,10 +78,12 @@ fun FazeRoot(vm: ChatViewModel = viewModel()) {
                 onNew = { core.newChat(); scope.launch { drawer.close() } },
                 onOpen = { id -> core.openChat(id); scope.launch { drawer.close() } },
                 onSettings = { settings = true; scope.launch { drawer.close() } },
+                onClose = { scope.launch { drawer.close() } },
             )
         },
     ) {
         if (settings) SettingsScreen(core) { settings = false }
         else ChatScreen(core) { scope.launch { drawer.open() } }
+    }
     }
 }
