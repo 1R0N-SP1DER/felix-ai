@@ -58,6 +58,8 @@ class FazeCore(private val app: Application) : EngineListener {
         private set
     var greetingOn by mutableStateOf(settings.greeting)
         private set
+    var provider by mutableStateOf(settings.provider)
+        private set
 
     @Volatile
     var listenControl: ListenControl? = null
@@ -74,7 +76,14 @@ class FazeCore(private val app: Application) : EngineListener {
     private var sttMs = 0L
 
     init {
-        val client = RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq")
+        val client = ProviderChat(
+            mapOf(
+                "groq" to RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq"),
+                "gemini" to GeminiClient(transport, { settings.geminiKey }, { settings.thinkLevel }),
+                "openrouter" to RemoteClient(transport, OpenRouter.BASE, { settings.openrouterKey }, "OpenRouter"),
+            ),
+            { settings.provider }, { settings.modelFor(it) },
+        )
         val tools = GatedTools(Tools(AndroidDevice(app), transport, settings), broker)
         engine = ChatEngine(Agent(client, tools), settings, speaker, { block -> main.post { block() } }, executor, messages, this)
         speaker.setVoice(settings.voiceRate, settings.voicePitch)
@@ -162,6 +171,8 @@ class FazeCore(private val app: Application) : EngineListener {
         settings.accent = accent.name
         Palette.setAccent(accent)
     }
+
+    fun useProvider(id: String) { settings.provider = id; provider = settings.provider }
 
     fun useMotion(on: Boolean) { settings.motion = on; motion = on }
 

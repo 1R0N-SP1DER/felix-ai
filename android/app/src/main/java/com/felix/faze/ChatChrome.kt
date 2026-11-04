@@ -56,7 +56,7 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun TopBar(core: FazeCore, onMenu: () -> Unit, onModel: () -> Unit) {
     val context = LocalContext.current
-    val chips = ModelSheet.chips(core.settings.groqKey.isNotEmpty(), core.settings.wakeEnabled, core.modelReady)
+    val chips = ModelSheet.chips(core.provider, core.settings.hasKey(core.provider), core.settings.wakeEnabled, core.modelReady)
     Row(
         modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -69,7 +69,7 @@ fun TopBar(core: FazeCore, onMenu: () -> Unit, onModel: () -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text("◎", color = Palette.Accent, fontSize = 14.sp)
-            Text(ModelSheet.label("groq"), color = Palette.Dim, fontSize = 13.8.sp, letterSpacing = 0.3.sp)
+            Text(ModelSheet.label(core.provider), color = Palette.Dim, fontSize = 13.8.sp, letterSpacing = 0.3.sp)
             Text("▾", color = Palette.Dim.copy(alpha = 0.6f), fontSize = 10.sp)
         }
         Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End), verticalAlignment = Alignment.CenterVertically) {
@@ -157,7 +157,7 @@ fun Composer(
             Row(modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 ToolChip("📎", "Attach", soon = true) { soonToast(context) }
                 ToolChip("⚙", "Tools") { onTools() }
-                ToolChip("◎", ModelSheet.label("groq"), accentGlyph = true) { onModel() }
+                ToolChip("◎", ModelSheet.label(core.provider), accentGlyph = true) { onModel() }
             }
         }
     }
@@ -237,9 +237,10 @@ fun ToolsMenu(visible: Boolean, bottomPad: Dp, onDismiss: () -> Unit, onInsert: 
 @Composable
 fun ModelSheetView(core: FazeCore, visible: Boolean, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    var groqModel by remember { mutableStateOf(core.settings.model()) }
+    var groqModel by remember { mutableStateOf(core.settings.modelFor("groq")) }
     var think by remember { mutableStateOf(core.settings.thinkLevel) }
-    val rows = ModelSheet.rows(core.settings.groqKey.isNotEmpty(), groqModel)
+    val keys = ModelSheet.live.filter { core.settings.hasKey(it) }.toSet()
+    val rows = ModelSheet.rows(keys, ModelSheet.live.associateWith { if (it == "groq") groqModel else core.settings.modelFor(it) })
     AnimatedVisibility(visible = visible, enter = fadeIn(), exit = fadeOut()) {
         Box(modifier = Modifier.fillMaxSize().background(Palette.Scrim).clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onDismiss() })
     }
@@ -257,7 +258,7 @@ fun ModelSheetView(core: FazeCore, visible: Boolean, onDismiss: () -> Unit) {
                 Box(Modifier.align(Alignment.CenterHorizontally).size(width = 38.dp, height = 4.dp).clip(RoundedCornerShape(3.dp)).background(Palette.Line2))
                 SheetHeading("Model")
                 for (row in rows) {
-                    val on = row.id == "groq"
+                    val on = row.id == core.provider
                     Row(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(
                             modifier = Modifier
@@ -266,7 +267,7 @@ fun ModelSheetView(core: FazeCore, visible: Boolean, onDismiss: () -> Unit) {
                                 .background(if (on) Palette.GlowSoft else Palette.Faint)
                                 .border(1.dp, if (on) Palette.Accent else Palette.Line, RoundedCornerShape(14.dp))
                                 .let { if (row.available) it else it.alpha(0.5f) }
-                                .clickable { if (row.available) onDismiss() else soonToast(context) }
+                                .clickable { if (row.available) { core.useProvider(row.id); onDismiss() } else soonToast(context) }
                                 .padding(horizontal = 12.dp, vertical = 11.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -292,8 +293,8 @@ fun ModelSheetView(core: FazeCore, visible: Boolean, onDismiss: () -> Unit) {
                 Seg(ModelChoices.all.map { it.id to it.label }, groqModel, small = true) { groqModel = it; core.settings.modelName = it }
                 Hint(ModelChoices.all.firstOrNull { it.id == groqModel }?.note ?: "")
                 SheetHeading("Thinking")
-                SelectBox(think, ModelSheet.thinkLevels, enabled = ModelSheet.thinkEnabled("groq"), modifier = Modifier.fillMaxWidth()) { think = it; core.settings.thinkLevel = it }
-                Hint(ModelSheet.thinkHint("groq"))
+                SelectBox(think, ModelSheet.thinkLevels, enabled = ModelSheet.thinkEnabled(core.provider), modifier = Modifier.fillMaxWidth()) { think = it; core.settings.thinkLevel = it }
+                Hint(ModelSheet.thinkHint(core.provider))
             }
         }
     }

@@ -271,6 +271,9 @@ private fun AdvancedTab(core: FazeCore) {
     val s = core.settings
     var groq by remember { mutableStateOf(s.groqKey) }
     var tavily by remember { mutableStateOf(s.tavily) }
+    var gemini by remember { mutableStateOf(s.geminiKey) }
+    var openrouter by remember { mutableStateOf(s.openrouterKey) }
+    var orModel by remember { mutableStateOf(s.openrouterModel) }
     var user by remember { mutableStateOf(s.user) }
     var city by remember { mutableStateOf(s.city) }
     var hideDot by remember { mutableStateOf(s.hideMicDot) }
@@ -280,6 +283,9 @@ private fun AdvancedTab(core: FazeCore) {
 
     SettingsCard("FAZE") {
         SettingRow("Groq key") { FieldBox(groq, true, Modifier.widthIn(max = 190.dp)) { groq = it; s.groqKey = it } }
+        SettingRow("Gemini key") { FieldBox(gemini, true, Modifier.widthIn(max = 190.dp)) { gemini = it; s.geminiKey = it } }
+        SettingRow("OpenRouter key") { FieldBox(openrouter, true, Modifier.widthIn(max = 190.dp)) { openrouter = it; s.openrouterKey = it } }
+        SettingRow("OpenRouter model", "Some free models refuse some keys; try another id if you see 403") { FieldBox(orModel, false, Modifier.widthIn(max = 190.dp)) { orModel = it; s.openrouterModel = it } }
         SettingRow("Tavily key", "Web search") { FieldBox(tavily, true, Modifier.widthIn(max = 190.dp)) { tavily = it; s.tavily = it } }
         SettingRow("Your name") { FieldBox(user, false, Modifier.widthIn(max = 190.dp)) { user = it; s.user = it } }
         SettingRow("Default city", "For weather", last = true) { FieldBox(city, false, Modifier.widthIn(max = 190.dp)) { city = it; s.city = it } }

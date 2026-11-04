@@ -13,9 +13,11 @@ object ModelSheet {
 
     fun label(mode: String): String = names[mode] ?: mode
 
-    /** Every model of the web sheet in its order; only Groq runs in the app today. */
-    fun rows(hasGroqKey: Boolean, groqModel: String): List<ModelRow> = names.map { (id, name) ->
-        if (id == "groq") ModelRow(id, name, if (hasGroqKey) ModelChoices.label(groqModel) else "no key yet (Settings > Advanced)", if (hasGroqKey) "ok" else "bad", true)
+    val live = listOf("groq", "gemini", "openrouter")
+
+    /** Every model of the web sheet in its order; Groq, Gemini and OpenRouter run in the app. [keys] are the providers that have a key. */
+    fun rows(keys: Set<String>, models: Map<String, String>): List<ModelRow> = names.map { (id, name) ->
+        if (id in live) ModelRow(id, name, if (id in keys) ModelChoices.label(models[id] ?: "") else "no key yet (Settings > Advanced)", if (id in keys) "ok" else "bad", true)
         else ModelRow(id, name, NOT_YET, "", false)
     }
 
@@ -29,9 +31,9 @@ object ModelSheet {
     }
 
     /** The small status chips of the top bar. On a phone the web page shows only the warning and bad ones, so only those are made. */
-    fun chips(hasGroqKey: Boolean, wakeWanted: Boolean, wakeModelReady: Boolean): List<StatusChip> {
+    fun chips(provider: String, hasKey: Boolean, wakeWanted: Boolean, wakeModelReady: Boolean): List<StatusChip> {
         val out = ArrayList<StatusChip>()
-        if (!hasGroqKey) out.add(StatusChip("groq no key", "bad"))
+        if (!hasKey) out.add(StatusChip("$provider no key", "bad"))
         if (wakeWanted && !wakeModelReady) out.add(StatusChip("wake model needed", "warn"))
         return out
     }

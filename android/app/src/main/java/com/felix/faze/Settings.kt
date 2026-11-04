@@ -44,6 +44,39 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = text("wake_phrase")
         set(value) = put("wake_phrase", value)
 
+    /** Which online model answers: groq, gemini or openrouter. */
+    var provider: String
+        get() = text("provider").let { if (it == "gemini" || it == "openrouter") it else "groq" }
+        set(value) = put("provider", value)
+
+    var geminiKey: String
+        get() = text("gemini_key")
+        set(value) = put("gemini_key", value)
+
+    var openrouterKey: String
+        get() = text("openrouter_key")
+        set(value) = put("openrouter_key", value)
+
+    var geminiModel: String
+        get() = text("gemini_model").ifEmpty { GeminiApi.DEFAULT_MODEL }
+        set(value) = put("gemini_model", value)
+
+    var openrouterModel: String
+        get() = text("openrouter_model").ifEmpty { OpenRouter.DEFAULT_MODEL }
+        set(value) = put("openrouter_model", value)
+
+    fun modelFor(provider: String): String = when (provider) {
+        "gemini" -> geminiModel
+        "openrouter" -> openrouterModel
+        else -> modelName.ifBlank { Groq.DEFAULT_MODEL }
+    }
+
+    fun hasKey(provider: String): Boolean = when (provider) {
+        "gemini" -> geminiKey.isNotEmpty()
+        "openrouter" -> openrouterKey.isNotEmpty()
+        else -> groqKey.isNotEmpty()
+    }
+
     /** The look, as on the web settings page: accent colour name, text size s/m/l, font system/serif/mono, motion and greeting switches. */
     var accent: String
         get() = text("accent").ifEmpty { "cyan" }
@@ -92,7 +125,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
 
     override fun weatherLocation(): String = city
 
-    override fun model(): String = modelName.ifBlank { Groq.DEFAULT_MODEL }
+    override fun model(): String = modelFor(provider)
 
     override fun userName(): String = user.ifBlank { "Felix" }
 
