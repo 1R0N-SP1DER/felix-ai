@@ -92,8 +92,6 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit, onSettings: () -> Unit) {
                 }
             }
 
-            core.approval?.let { ApprovalCard(it, onAllow = { core.resolveApproval(it.id, true) }, onDeny = { core.resolveApproval(it.id, false) }) }
-
             LiveBarView(core, mode)
 
             Composer(
@@ -125,28 +123,7 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit, onSettings: () -> Unit) {
         PlusMenu(core, plusOpen, menuBottom, { plusOpen = false }, onThinking = { modelOpen = true }, onNew = { core.newChat() }, onSettings = onSettings)
         ToolsMenu(toolsOpen, menuBottom, { toolsOpen = false }) { text -> input = text; insertTick++ }
         ModelSheetView(core, modelOpen) { modelOpen = false }
-    }
-}
-
-/** A tool that needs a yes before it runs. Nothing happens until one of the two buttons is pressed (or it times out: no). */
-@Composable
-private fun ApprovalCard(request: ApprovalRequest, onAllow: () -> Unit, onDeny: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).clip(RoundedCornerShape(14.dp)).background(Palette.Surface)
-            .border(1.dp, Palette.Warn.copy(alpha = 0.5f), RoundedCornerShape(14.dp)).padding(12.dp),
-    ) {
-        Text("Approval needed", color = Palette.Warn, fontSize = 12.sp)
-        Text(request.summary, color = Palette.Text, fontSize = 14.sp, modifier = Modifier.padding(top = 2.dp, bottom = 10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                "Allow", color = Palette.AccentInk, fontWeight = FontWeight.Medium,
-                modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(Palette.Accent).clickable { onAllow() }.padding(horizontal = 18.dp, vertical = 8.dp),
-            )
-            Text(
-                "Deny", color = Palette.Text,
-                modifier = Modifier.clip(RoundedCornerShape(10.dp)).border(1.dp, Palette.Line, RoundedCornerShape(10.dp)).clickable { onDeny() }.padding(horizontal = 18.dp, vertical = 8.dp),
-            )
-        }
+        core.approval?.let { ApprovalSheet(it, onAllow = { core.resolveApproval(it.id, true) }, onDeny = { core.resolveApproval(it.id, false) }) }
     }
 }
 
