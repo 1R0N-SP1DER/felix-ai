@@ -329,7 +329,7 @@ private fun AdvancedTab(core: FazeCore) {
         SettingRow("Groq key") { FieldBox(groq, true, Modifier.widthIn(max = 190.dp)) { groq = it; s.groqKey = it } }
         SettingRow("Gemini key") { FieldBox(gemini, true, Modifier.widthIn(max = 190.dp)) { gemini = it; s.geminiKey = it } }
         SettingRow("OpenRouter key") { FieldBox(openrouter, true, Modifier.widthIn(max = 190.dp)) { openrouter = it; s.openrouterKey = it } }
-        SettingRow("OpenRouter model", "Some free models refuse some keys; try another id if you see 403") { FieldBox(orModel, false, Modifier.widthIn(max = 190.dp)) { orModel = it; s.openrouterModel = it } }
+        SettingRow("OpenRouter model", "Leave blank to pick a free one automatically") { FieldBox(orModel, false, Modifier.widthIn(max = 190.dp)) { orModel = it; s.openrouterModel = it } }
         SettingRow("Tavily key", "Web search") { FieldBox(tavily, true, Modifier.widthIn(max = 190.dp)) { tavily = it; s.tavily = it } }
         SettingRow("Your name") { FieldBox(user, false, Modifier.widthIn(max = 190.dp)) { user = it; s.user = it } }
         SettingRow("Default city", "For weather", last = true) { FieldBox(city, false, Modifier.widthIn(max = 190.dp)) { city = it; s.city = it } }

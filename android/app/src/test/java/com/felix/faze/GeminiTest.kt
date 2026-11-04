@@ -112,22 +112,4 @@ class GeminiTest {
         try { GeminiClient(Net(429, """{"error":{"message":"quota"}}"""), { "k" }).chat("m", msgs(user("x")), null, {}, { false }); fail() } catch (e: RemoteError) { assertEquals("rate_limit", e.kind) }
         try { GeminiClient(Net(401, "{}"), { "k" }).chat("m", msgs(user("x")), null, {}, { false }); fail() } catch (e: RemoteError) { assertEquals("auth", e.kind) }
     }
-
-    @Test fun theRouterUsesTheSelectedProviderAndItsModel() {
-        val seen = ArrayList<String>()
-        fun fake(name: String) = object : ChatApi {
-            override fun chat(model: String, messages: JSONArray, tools: JSONArray?, onToken: (String) -> Unit, cancelled: () -> Boolean): ChatResult {
-                seen.add("$name:$model"); return ChatResult("x", emptyList(), false)
-            }
-        }
-        var provider = "groq"
-        val router = ProviderChat(mapOf("groq" to fake("groq"), "gemini" to fake("gemini")), { provider }, { "m-$it" })
-        router.chat("ignored", msgs(user("a")), null, {}, { false })
-        provider = "gemini"
-        router.chat("ignored", msgs(user("a")), null, {}, { false })
-        assertEquals(listOf("groq:m-groq", "gemini:m-gemini"), seen)
-        provider = "openrouter"
-        try { router.chat("x", msgs(user("a")), null, {}, { false }); fail() } catch (e: RemoteError) { assertEquals("model", e.kind) }
-        assertNull(null)
-    }
 }

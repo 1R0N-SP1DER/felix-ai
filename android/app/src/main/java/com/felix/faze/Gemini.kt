@@ -5,7 +5,6 @@ import org.json.JSONObject
 
 object OpenRouter {
     const val BASE = "https://openrouter.ai/api/v1"
-    const val DEFAULT_MODEL = "openai/gpt-oss-120b:free"
 }
 
 object GeminiApi {
@@ -125,18 +124,9 @@ class GeminiClient(private val transport: Transport, private val key: () -> Stri
         val apiKey = key().trim()
         if (apiKey.isEmpty()) throw RemoteError("auth", "Gemini has no key (add it under Keys)")
         val body = GeminiWire.body(messages, tools, GeminiWire.thinkingFor(thinking())).toString().toByteArray(Charsets.UTF_8)
-        val res = transport.post("${GeminiApi.BASE}/$model:generateContent", mapOf("x-goog-api-key" to apiKey), body, "application/json", 60000)
+        val res = transport.post("${GeminiApi.BASE}/$model:generateContent", mapOf("x-goog-api-key" to apiKey), body, "application/json", 30000)
         if (cancelled()) throw Cancelled()
         if (res.status != 200) throw classify(res.status, res.body, res.headers)
         return GeminiWire.parse(res.body)
-    }
-}
-
-/** Sends each request to whichever provider is selected right now, with that provider's model. */
-class ProviderChat(private val chats: Map<String, ChatApi>, private val provider: () -> String, private val model: (String) -> String) : ChatApi {
-    override fun chat(model: String, messages: JSONArray, tools: JSONArray?, onToken: (String) -> Unit, cancelled: () -> Boolean): ChatResult {
-        val p = provider()
-        val api = chats[p] ?: throw RemoteError("model", "$p is not available in the app yet")
-        return api.chat(this.model(p), messages, tools, onToken, cancelled)
     }
 }

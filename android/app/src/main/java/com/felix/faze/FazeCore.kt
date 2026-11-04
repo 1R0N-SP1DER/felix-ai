@@ -77,13 +77,18 @@ class FazeCore(private val app: Application) : EngineListener {
     private var sttMs = 0L
 
     init {
-        val client = ProviderChat(
+        val client = ResilientChat(
             mapOf(
                 "groq" to RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq"),
                 "gemini" to GeminiClient(transport, { settings.geminiKey }, { settings.thinkLevel }),
-                "openrouter" to RemoteClient(transport, OpenRouter.BASE, { settings.openrouterKey }, "OpenRouter"),
+                "openrouter" to OpenRouterChat(
+                    RemoteClient(transport, OpenRouter.BASE, { settings.openrouterKey }, "OpenRouter"),
+                    { transport.get("${OpenRouter.BASE}/models", emptyMap(), 15000).body },
+                    { settings.openrouterModel = it },
+                ),
             ),
-            { settings.provider }, { settings.modelFor(it) },
+            { Fallbacks.plan(settings.provider, listOf("groq", "gemini", "openrouter").filter { settings.hasKey(it) }.toSet()) { settings.modelFor(it) } },
+            { text -> main.post { status = text } },
         )
         val tools = GatedTools(Tools(AndroidDevice(app), transport, settings, memory), broker)
         engine = ChatEngine(Agent(client, tools), object : EngineConfig by settings {
@@ -137,6 +142,7 @@ class FazeCore(private val app: Application) : EngineListener {
 
     fun send(text: String) {
         timing = ""
+        status = ""
         engine.send(text)
     }
 

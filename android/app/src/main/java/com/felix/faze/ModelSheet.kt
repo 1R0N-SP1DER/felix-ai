@@ -17,7 +17,7 @@ object ModelSheet {
 
     /** Every model of the web sheet in its order; Groq, Gemini and OpenRouter run in the app. [keys] are the providers that have a key. */
     fun rows(keys: Set<String>, models: Map<String, String>): List<ModelRow> = names.map { (id, name) ->
-        if (id in live) ModelRow(id, name, if (id in keys) ModelChoices.label(models[id] ?: "") else "no key yet (Settings > Advanced)", if (id in keys) "ok" else "bad", true)
+        if (id in live) ModelRow(id, name, if (id in keys) (models[id].orEmpty().let { m -> if (m.isEmpty()) "free model, picked for you" else ModelChoices.label(m) }) else "no key yet (Settings > Advanced)", if (id in keys) "ok" else "bad", true)
         else ModelRow(id, name, NOT_YET, "", false)
     }
 

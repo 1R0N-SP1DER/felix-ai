@@ -27,7 +27,7 @@ class Providers(unittest.TestCase):
 
     def test_all_three_providers_are_wired_into_the_core(self):
         core = read(KT, "FazeCore.kt")
-        for name in ['"groq" to RemoteClient', '"gemini" to GeminiClient', '"openrouter" to RemoteClient']:
+        for name in ['"groq" to RemoteClient', '"gemini" to GeminiClient', '"openrouter" to OpenRouterChat']:
             self.assertIn(name, core)
         self.assertIn("GatedTools(Tools(", core)  # the permission gate still sits in front of every provider
 

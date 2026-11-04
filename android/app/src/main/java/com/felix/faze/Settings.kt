@@ -67,7 +67,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         set(value) = put("gemini_model", value)
 
     var openrouterModel: String
-        get() = text("openrouter_model").ifEmpty { OpenRouter.DEFAULT_MODEL }
+        get() = text("openrouter_model") // blank: a free model is picked automatically
         set(value) = put("openrouter_model", value)
 
     fun modelFor(provider: String): String = when (provider) {
