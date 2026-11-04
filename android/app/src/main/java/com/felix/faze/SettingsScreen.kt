@@ -101,7 +101,7 @@ fun SettingsScreen(core: FazeCore, onBack: () -> Unit) {
             when (tab) {
                 "general" -> GeneralTab(core)
                 "voice" -> VoiceTab(core)
-                "agent" -> AgentTab()
+                "agent" -> AgentTab(core)
                 else -> AdvancedTab(core)
             }
         }
@@ -243,7 +243,7 @@ private fun VoiceSlider(value: Float, onChange: (Float) -> Unit) {
 // ---------------------------------------------------------------------------------------------------------------- Agent
 
 @Composable
-private fun AgentTab() {
+private fun AgentTab(core: FazeCore) {
     SettingsCard("Approval mode") {
         Seg(listOf("ask" to "Ask", "yolo" to "Yolo", "off" to "Off"), "ask", soonValues = setOf("yolo", "off")) {}
         Hint("Ask: tools that read or change what you copied wait for your yes. In the app, the clipboard tools always ask first.")
@@ -260,6 +260,50 @@ private fun AgentTab() {
     SettingsCard("Saved tasks") {
         Hint("Nothing saved yet.")
         WideButton("Clear all tasks", soon = true) {}
+    }
+    MemoryCard(core)
+}
+
+/** The notes Faze remembers: read them, add one, delete one, or clear all. The model can only add one with your approval. */
+@Composable
+private fun MemoryCard(core: FazeCore) {
+    var items by remember { mutableStateOf(core.memory.list()) }
+    var on by remember { mutableStateOf(core.settings.useMemory) }
+    var draft by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
+    var confirm by remember { mutableStateOf(false) }
+    SettingsCard("Memory") {
+        SettingRow("Use memory", "Faze reads these notes at the start of every chat", last = true) { FazeSwitch(on, { on = it; core.settings.useMemory = it }) }
+        if (items.isEmpty()) Hint("Nothing remembered yet. Ask Faze to remember something, then approve it.")
+        for (e in items) {
+            Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(e.text, color = Palette.Text, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                Text("✕", color = Palette.Muted, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { core.memory.remove(e.id); items = core.memory.list() }.padding(horizontal = 10.dp, vertical = 6.dp))
+            }
+        }
+        Row(modifier = Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FieldBox(draft, false, Modifier.weight(1f)) { draft = it }
+            Text(
+                "Add", color = Palette.AccentInk, fontWeight = FontWeight.Bold,
+                modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(accentGradient()).clickable {
+                    val r = core.memory.add(draft)
+                    note = r.message
+                    if (r.ok) draft = ""
+                    items = core.memory.list()
+                }.padding(horizontal = 16.dp, vertical = 9.dp),
+            )
+        }
+        if (note.isNotEmpty()) Hint(note)
+        if (items.isNotEmpty()) WideButton("Clear all memory") { confirm = true }
+    }
+    if (confirm) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text("Clear all memory?") },
+            text = { Text("This deletes all ${items.size} notes. It can't be undone.", color = Palette.Dim) },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { core.memory.clear(); items = core.memory.list(); confirm = false }) { Text("Clear", color = Palette.Bad) } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { confirm = false }) { Text("Cancel") } },
+        )
     }
 }
 

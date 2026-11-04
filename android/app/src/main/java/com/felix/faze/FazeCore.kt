@@ -71,6 +71,7 @@ class FazeCore(private val app: Application) : EngineListener {
     private val recorder = Recorder()
     private val stt = Stt(transport, { settings.groqKey })
     private val store = ChatStore(File(app.filesDir, "chats"))
+    val memory = MemoryStore(File(app.filesDir, "memory.json"))
     private val broker = ApprovalBroker({ block -> main.post { block() } }, 60) { approval = it }
     private val engine: ChatEngine
     private var sttMs = 0L
@@ -84,8 +85,10 @@ class FazeCore(private val app: Application) : EngineListener {
             ),
             { settings.provider }, { settings.modelFor(it) },
         )
-        val tools = GatedTools(Tools(AndroidDevice(app), transport, settings), broker)
-        engine = ChatEngine(Agent(client, tools), settings, speaker, { block -> main.post { block() } }, executor, messages, this)
+        val tools = GatedTools(Tools(AndroidDevice(app), transport, settings, memory), broker)
+        engine = ChatEngine(Agent(client, tools), object : EngineConfig by settings {
+            override fun memoryBlock(): String = if (settings.useMemory) memory.promptBlock(settings.user) else ""
+        }, speaker, { block -> main.post { block() } }, executor, messages, this)
         speaker.setVoice(settings.voiceRate, settings.voicePitch)
         Palette.setAccent(Accents.byName(settings.accent))
         refreshChats()

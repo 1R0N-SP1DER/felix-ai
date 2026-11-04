@@ -44,6 +44,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = text("wake_phrase")
         set(value) = put("wake_phrase", value)
 
+    /** Whether the saved notes are shown to the model (Settings > Agent > Memory). */
+    var useMemory: Boolean
+        get() = prefs.getBoolean("use_memory", true)
+        set(value) = prefs.edit().putBoolean("use_memory", value).apply()
+
     /** Which online model answers: groq, gemini or openrouter. */
     var provider: String
         get() = text("provider").let { if (it == "gemini" || it == "openrouter") it else "groq" }

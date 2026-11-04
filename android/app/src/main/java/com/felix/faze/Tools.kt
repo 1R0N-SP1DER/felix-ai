@@ -50,6 +50,7 @@ class Tools(
     private val device: DeviceApi,
     private val transport: Transport,
     private val settings: ToolSettings,
+    private val memory: MemoryStore? = null,
 ) : ToolRunner {
 
     private fun tool(name: String, description: String, vararg params: Param): JSONObject {
@@ -73,6 +74,7 @@ class Tools(
         out.put(tool("read_clipboard", "Call this whenever the user asks about clipboard contents. Returns clipboard text. No arguments."))
         out.put(tool("write_clipboard", "Call this whenever the user asks to copy, save, or put text into clipboard. Saves text.",
             Param("text", "string", "the exact text to copy to the clipboard")))
+        if (memory != null) out.put(tool("remember", "Save ONE short fact about the user for future chats (a lasting preference, name, plan or habit). Call it only when the user asks you to remember something or clearly states something lasting about themselves. Never save secrets, passwords, keys or numbers.", Param("fact", "string", "The fact, as one short sentence")))
         out.put(tool("vibrate", "Call this whenever the user asks to vibrate the phone or get attention physically. No arguments."))
         out.put(tool("search_web", "Call this for current, real-world information like news or live facts. Performs a web search. Never answer from memory.",
             Param("query", "string", "what to search for")))
@@ -95,6 +97,10 @@ class Tools(
     override fun execute(name: String, args: JSONObject): ToolResult {
         return try {
             when (name) {
+                "remember" -> {
+                    val r = memory?.add(args.optString("fact", "")) ?: MemoryResult(false, "memory is not available")
+                    if (r.ok) ok(r.message) else fail(r.message)
+                }
                 "get_current_datetime" -> ok(device.now())
                 "get_battery_status" -> ok(device.battery())
                 "get_wifi_status" -> ok(device.wifi())

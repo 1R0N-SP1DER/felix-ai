@@ -22,6 +22,7 @@ object PermissionPolicy {
         "open_app" to Tier.SAFE,
         "list_apps" to Tier.SAFE,
         "get_weather" to Tier.SAFE,
+        "remember" to Tier.CONFIRM,
     )
 
     fun tier(tool: String): Tier = registry[tool] ?: Tier.BLOCK
@@ -32,6 +33,7 @@ object PermissionPolicy {
     fun summary(tool: String, args: JSONObject): String = when (tool) {
         "read_clipboard" -> "Read what is on your clipboard and show it to the model"
         "write_clipboard" -> "Put this on your clipboard: " + args.optString("text", "").replace('\n', ' ').take(80)
+        "remember" -> "Remember this: " + args.optString("fact", "").replace('\n', ' ').take(120)
         else -> tool
     }
 }

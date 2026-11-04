@@ -14,6 +14,9 @@ interface EngineConfig {
     fun model(): String
     fun userName(): String
     fun speak(): Boolean
+
+    /** Saved notes about the person, added to the system prompt (empty when memory is off or empty). */
+    fun memoryBlock(): String = ""
 }
 
 interface EngineListener {
@@ -93,7 +96,7 @@ class ChatEngine(
         val sentences = SentenceStream()
         val shown = StringBuilder()
         val steps = ArrayList<String>()
-        val system = Persona.system(config.userName()) + Persona.toolNote(agent.toolNames())
+        val system = Persona.system(config.userName()) + config.memoryBlock() + Persona.toolNote(agent.toolNames())
         val events = AgentEvents(
             onToken = { piece ->
                 shown.append(piece)
