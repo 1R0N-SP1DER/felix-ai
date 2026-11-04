@@ -157,7 +157,7 @@ fun Composer(
             Row(modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 ToolChip("📎", "Attach", soon = true) { soonToast(context) }
                 ToolChip("⚙", "Tools") { onTools() }
-                ToolChip("◎", ModelSheet.label(core.provider), accentGlyph = true) { onModel() }
+                ToolChip("◎", ModelSheet.label(AppSettings(context).provider), accentGlyph = true) { onModel() }
             }
         }
     }

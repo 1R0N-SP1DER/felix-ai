@@ -37,7 +37,9 @@ class VolumeKeyService(unittest.TestCase):
         self.assertIn("android.permission.SYSTEM_ALERT_WINDOW", self.manifest)
         overlay = read(KT, "Overlay.kt")
         self.assertIn("TYPE_APPLICATION_OVERLAY", overlay)
-        self.assertIn("FLAG_NOT_TOUCH_MODAL", overlay)  # touches outside the panel still reach the app below
+        self.assertIn("FLAG_BLUR_BEHIND", overlay)  # darkened, blurred background (patch 31)
+        self.assertIn("blurBehindRadius", overlay)
+        self.assertIn("0x99000000", overlay)  # the dark scrim works even where blur is unsupported
         self.assertIn("FLAG_NOT_FOCUSABLE", overlay)
 
     def test_only_volume_keys_are_looked_at(self):
@@ -91,8 +93,13 @@ class WakeEnginesAndGradle(unittest.TestCase):
     def setUp(self):
         self.gradle = read(APP, "build.gradle.kts")
 
-    def test_porcupine_is_pinned(self):
-        self.assertRegex(self.gradle, r'ai\.picovoice:porcupine-android:\d+\.\d+\.\d+"')
+    def test_picovoice_is_gone(self):
+        # Picovoice was dropped in patch 31: no dependency, no code, no settings
+        self.assertNotIn("picovoice", self.gradle.lower())
+        for base, _d, files in os.walk(os.path.join(APP, "src")):
+            for f in files:
+                if f.endswith((".kt", ".xml")):
+                    self.assertNotIn("porcupine", read(base, f).lower(), f)
 
     def test_accesskey_is_not_in_the_sources(self):
         # a Picovoice AccessKey is a long base64 string; none may be committed
