@@ -76,6 +76,21 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         else -> modelName.ifBlank { Groq.DEFAULT_MODEL }
     }
 
+    /** Chooses the model of one provider (Groq, Gemini or OpenRouter) from the picker. */
+    fun setModelFor(provider: String, id: String) {
+        when (provider) {
+            "gemini" -> geminiModel = id
+            "openrouter" -> openrouterModel = id
+            else -> modelName = id
+        }
+    }
+
+    fun keyFor(provider: String): String = when (provider) {
+        "gemini" -> geminiKey
+        "openrouter" -> openrouterKey
+        else -> groqKey
+    }
+
     fun hasKey(provider: String): Boolean = when (provider) {
         "gemini" -> geminiKey.isNotEmpty()
         "openrouter" -> openrouterKey.isNotEmpty()

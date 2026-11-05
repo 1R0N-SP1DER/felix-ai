@@ -237,10 +237,12 @@ fun ToolsMenu(visible: Boolean, bottomPad: Dp, onDismiss: () -> Unit, onInsert: 
 @Composable
 fun ModelSheetView(core: FazeCore, visible: Boolean, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    var groqModel by remember { mutableStateOf(core.settings.modelFor("groq")) }
+    var expanded by remember { mutableStateOf<String?>(null) }
+    var query by remember { mutableStateOf("") }
+    core.modelRev // reading it redraws the sheet when a model is picked
     var think by remember { mutableStateOf(core.settings.thinkLevel) }
     val keys = ModelSheet.live.filter { core.settings.hasKey(it) }.toSet()
-    val rows = ModelSheet.rows(keys, ModelSheet.live.associateWith { if (it == "groq") groqModel else core.settings.modelFor(it) })
+    val rows = ModelSheet.rows(keys, ModelSheet.live.associateWith { core.settings.modelFor(it) })
     AnimatedVisibility(visible = visible, enter = fadeIn(), exit = fadeOut()) {
         Box(modifier = Modifier.fillMaxSize().background(Palette.Scrim).clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onDismiss() })
     }
@@ -281,17 +283,22 @@ fun ModelSheetView(core: FazeCore, visible: Boolean, onDismiss: () -> Unit) {
                             if (!row.available) SoonPill()
                         }
                         if (row.id != "auto") {
+                            val open = expanded == row.id
                             Box(
-                                modifier = Modifier.size(42.dp).clip(CircleShape).border(1.dp, Palette.Line, CircleShape).background(Palette.Faint).alpha(0.5f).clickable { soonToast(context) },
+                                modifier = Modifier.size(42.dp).clip(CircleShape).border(1.dp, if (open) Palette.Accent else Palette.Line, CircleShape).background(Palette.Faint)
+                                    .let { if (row.available) it else it.alpha(0.5f) }
+                                    .clickable {
+                                        if (!row.available) soonToast(context)
+                                        else if (open) expanded = null
+                                        else { expanded = row.id; query = ""; core.loadModels(row.id) }
+                                    },
                                 contentAlignment = Alignment.Center,
-                            ) { Text("▾", color = Palette.Muted, fontSize = 15.sp) }
+                            ) { Text(if (open) "▴" else "▾", color = if (open) Palette.Accent else Palette.Muted, fontSize = 15.sp) }
                         }
                     }
+                    if (expanded == row.id) ModelPicker(core, row.id, query, { query = it }) { id -> core.pickModel(row.id, id); expanded = null; onDismiss() }
                 }
                 Hint("Tap a model to stay on it until you turn it off. Tap the ✓ or arrow to pick how long instead.")
-                SheetHeading("Groq model")
-                Seg(ModelChoices.all.map { it.id to it.label }, groqModel, small = true) { groqModel = it; core.settings.modelName = it }
-                Hint(ModelChoices.all.firstOrNull { it.id == groqModel }?.note ?: "")
                 SheetHeading("Thinking")
                 SelectBox(think, ModelSheet.thinkLevels, enabled = ModelSheet.thinkEnabled(core.provider), modifier = Modifier.fillMaxWidth()) { think = it; core.settings.thinkLevel = it }
                 Hint(ModelSheet.thinkHint(core.provider))
@@ -303,4 +310,43 @@ fun ModelSheetView(core: FazeCore, visible: Boolean, onDismiss: () -> Unit) {
 @Composable
 private fun SheetHeading(text: String) {
     Text(text.uppercase(), color = Palette.Muted, fontSize = 11.2.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.57.sp, modifier = Modifier.padding(top = 24.dp, bottom = 8.dp))
+}
+
+/** The models one provider says this key can use, with a filter box. Picking one makes it the answering model. */
+@Composable
+private fun ModelPicker(core: FazeCore, provider: String, query: String, onQuery: (String) -> Unit, onPick: (String) -> Unit) {
+    val all = core.modelLists[provider]
+    val current = core.settings.modelFor(provider)
+    val shape = RoundedCornerShape(14.dp)
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(shape).background(Palette.Faint).border(1.dp, Palette.Line, shape).padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(Palette.Faint).border(1.dp, Palette.Line, RoundedCornerShape(10.dp)).padding(horizontal = 10.dp, vertical = 7.dp)) {
+                if (query.isEmpty()) Text("Filter models", color = Palette.Muted, fontSize = 14.sp)
+                BasicTextField(value = query, onValueChange = onQuery, singleLine = true, textStyle = TextStyle(color = Palette.Text, fontSize = 14.sp), cursorBrush = SolidColor(Palette.Accent), modifier = Modifier.fillMaxWidth())
+            }
+            Text("Refresh", color = Palette.Accent, fontSize = 13.sp, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { core.loadModels(provider, true) }.padding(6.dp))
+        }
+        when {
+            core.modelLoading == provider -> Text("Loading the models your key can use…", color = Palette.Muted, fontSize = 13.sp)
+            all == null -> Text(core.modelError.ifEmpty { "No list yet." }, color = if (core.modelError.isEmpty()) Palette.Muted else Palette.Bad, fontSize = 13.sp)
+            else -> {
+                val shown = ModelLists.filter(all, query)
+                Column(modifier = Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState())) {
+                    for (o in shown) {
+                        val on = o.id == current
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { onPick(o.id) }.padding(horizontal = 8.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(o.label, color = if (on) Palette.Accent else Palette.Text, fontSize = 14.5.sp, modifier = Modifier.weight(1f))
+                            if (o.note.isNotEmpty()) Text(o.note, color = Palette.Muted, fontSize = 11.5.sp)
+                            if (on) Text("✓", color = Palette.Accent)
+                        }
+                    }
+                    if (shown.isEmpty()) Text("Nothing matches.", color = Palette.Muted, fontSize = 13.sp, modifier = Modifier.padding(8.dp))
+                    if (all.size > shown.size && query.isEmpty()) Text("Showing ${shown.size} of ${all.size}. Type to narrow it down.", color = Palette.Muted, fontSize = 11.5.sp, modifier = Modifier.padding(8.dp))
+                }
+            }
+        }
+    }
 }

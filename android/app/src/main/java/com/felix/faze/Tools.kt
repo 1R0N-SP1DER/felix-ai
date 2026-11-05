@@ -74,7 +74,8 @@ class Tools(
         out.put(tool("read_clipboard", "Call this whenever the user asks about clipboard contents. Returns clipboard text. No arguments."))
         out.put(tool("write_clipboard", "Call this whenever the user asks to copy, save, or put text into clipboard. Saves text.",
             Param("text", "string", "the exact text to copy to the clipboard")))
-        if (memory != null) out.put(tool("remember", "Save ONE short fact about the user for future chats (a lasting preference, name, plan or habit). Call it only when the user asks you to remember something or clearly states something lasting about themselves. Never save secrets, passwords, keys or numbers.", Param("fact", "string", "The fact, as one short sentence")))
+        if (memory != null) out.put(tool("remember", "Save ONE short fact about the user for future chats (a lasting preference, name, plan or habit). Call it only when the user asks you to remember something or clearly states something lasting about themselves. Never save secrets, passwords, keys or numbers.", Param("fact", "string", "The fact, as one short sentence"), Param("category", "string", "Where it belongs, such as me, work/faze or people/sister. Use me for facts about the user. A new name creates a new category.")))
+        if (memory != null) out.put(tool("recall", "Read the saved notes of one memory category (and its sub-categories), or list the categories with 'index'. Call it before answering questions about a category you were not shown.", Param("category", "string", "A category path such as work/faze, or index")))
         out.put(tool("vibrate", "Call this whenever the user asks to vibrate the phone or get attention physically. No arguments."))
         out.put(tool("search_web", "Call this for current, real-world information like news or live facts. Performs a web search. Never answer from memory.",
             Param("query", "string", "what to search for")))
@@ -98,9 +99,10 @@ class Tools(
         return try {
             when (name) {
                 "remember" -> {
-                    val r = memory?.add(args.optString("fact", "")) ?: MemoryResult(false, "memory is not available")
+                    val r = memory?.add(args.optString("fact", ""), args.optString("category", "")) ?: MemoryResult(false, "memory is not available")
                     if (r.ok) ok(r.message) else fail(r.message)
                 }
+                "recall" -> if (memory == null) fail("memory is not available") else ok(memory.recall(args.optString("category", "")))
                 "get_current_datetime" -> ok(device.now())
                 "get_battery_status" -> ok(device.battery())
                 "get_wifi_status" -> ok(device.wifi())

@@ -31,6 +31,12 @@ class Memory(unittest.TestCase):
         self.assertIn('File(app.filesDir, "memory.json")', read(KT, "FazeCore.kt"))
         self.assertFalse(re.search(r"memory.*(getExternalFilesDir|Environment\.)", read(KT, "Memory.kt")))
 
+    def test_prompt_stays_small_and_other_categories_load_on_demand(self):
+        mem = read(KT, "Memory.kt")
+        self.assertIn("call recall(category)", mem)
+        self.assertIn('"recall" to Tier.SAFE', read(KT, "Permissions.kt"))
+        self.assertIn("MAX_DEPTH = 3", mem)
+
     def test_settings_has_the_memory_card(self):
         s = read(KT, "SettingsScreen.kt")
         self.assertIn('SettingsCard("Memory")', s)

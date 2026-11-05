@@ -270,29 +270,38 @@ private fun MemoryCard(core: FazeCore) {
     var items by remember { mutableStateOf(core.memory.list()) }
     var on by remember { mutableStateOf(core.settings.useMemory) }
     var draft by remember { mutableStateOf("") }
+    var draftCat by remember { mutableStateOf("me") }
     var note by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf(false) }
     SettingsCard("Memory") {
         SettingRow("Use memory", "Faze reads these notes at the start of every chat", last = true) { FazeSwitch(on, { on = it; core.settings.useMemory = it }) }
         if (items.isEmpty()) Hint("Nothing remembered yet. Ask Faze to remember something, then approve it.")
-        for (e in items) {
-            Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(e.text, color = Palette.Text, fontSize = 15.sp, modifier = Modifier.weight(1f))
-                Text("✕", color = Palette.Muted, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { core.memory.remove(e.id); items = core.memory.list() }.padding(horizontal = 10.dp, vertical = 6.dp))
+        for ((cat, list) in items.groupBy { it.category }.toSortedMap()) {
+            Text(cat.uppercase(), color = Palette.Accent, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.2.sp, modifier = Modifier.padding(top = 14.dp, start = (cat.count { it == '/' } * 12).dp))
+            for (e in list) {
+                Row(modifier = Modifier.fillMaxWidth().padding(top = 6.dp, start = (cat.count { it == '/' } * 12).dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(e.text, color = Palette.Text, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                    Text("✕", color = Palette.Muted, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { core.memory.remove(e.id); items = core.memory.list() }.padding(horizontal = 10.dp, vertical = 6.dp))
+                }
             }
         }
-        Row(modifier = Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Category", color = Palette.Muted, fontSize = 13.sp)
+            FieldBox(draftCat, false, Modifier.weight(1f)) { draftCat = it }
+        }
+        Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FieldBox(draft, false, Modifier.weight(1f)) { draft = it }
             Text(
                 "Add", color = Palette.AccentInk, fontWeight = FontWeight.Bold,
                 modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(accentGradient()).clickable {
-                    val r = core.memory.add(draft)
+                    val r = core.memory.add(draft, draftCat)
                     note = r.message
                     if (r.ok) draft = ""
                     items = core.memory.list()
                 }.padding(horizontal = 16.dp, vertical = 9.dp),
             )
         }
+        Hint("Only the \"me\" notes and a list of categories are sent with each chat. Faze reads other categories when it needs them, which saves tokens. It can create categories and sub-categories such as work/faze when you approve a note.")
         if (note.isNotEmpty()) Hint(note)
         if (items.isNotEmpty()) WideButton("Clear all memory") { confirm = true }
     }

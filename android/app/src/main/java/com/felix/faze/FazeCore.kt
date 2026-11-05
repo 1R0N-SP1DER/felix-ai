@@ -181,6 +181,37 @@ class FazeCore(private val app: Application) : EngineListener {
         Palette.setAccent(accent)
     }
 
+    // The model picker: each provider's own list, fetched when asked for and kept until refreshed.
+    val modelLists = androidx.compose.runtime.mutableStateMapOf<String, List<ModelOption>>()
+    var modelLoading by mutableStateOf("")
+        private set
+    var modelError by mutableStateOf("")
+        private set
+    var modelRev by mutableStateOf(0) // bumps when a model is picked, so screens showing it redraw
+        private set
+
+    fun loadModels(provider: String, force: Boolean = false) {
+        if (modelLoading.isNotEmpty() || (!force && modelLists.containsKey(provider))) return
+        modelLoading = provider
+        modelError = ""
+        Thread {
+            try {
+                val list = ModelCatalog(transport) { settings.keyFor(it) }.fetch(provider)
+                main.post { modelLists[provider] = list; modelLoading = "" }
+            } catch (e: RemoteError) {
+                main.post { modelError = e.message ?: "couldn't load the list"; modelLoading = "" }
+            } catch (e: Exception) {
+                main.post { modelError = "couldn't load the list: ${e.javaClass.simpleName}"; modelLoading = "" }
+            }
+        }.start()
+    }
+
+    fun pickModel(provider: String, id: String) {
+        settings.setModelFor(provider, id)
+        useProvider(provider)
+        modelRev++
+    }
+
     fun useProvider(id: String) { settings.provider = id; provider = settings.provider }
 
     fun useMotion(on: Boolean) { settings.motion = on; motion = on }
