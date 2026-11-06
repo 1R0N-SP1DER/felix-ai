@@ -307,6 +307,19 @@ private fun MemoryCard(core: FazeCore) {
     var draftCat by remember { mutableStateOf("me") }
     var note by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val main = remember { Handler(Looper.getMainLooper()) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) Thread {
+            val message = try {
+                val bytes = context.contentResolver.openInputStream(uri)?.use { readLimited(it, 2 * 1024 * 1024) }
+                if (bytes == null) "That file is too big or couldn't be read." else core.memory.importJson(String(bytes, Charsets.UTF_8)).summary()
+            } catch (e: Exception) {
+                "Import failed: ${e.message ?: e.javaClass.simpleName}"
+            }
+            main.post { note = message; items = core.memory.list() }
+        }.start()
+    }
     SettingsCard("Memory") {
         SettingRow("Use memory", "Faze reads these notes at the start of every chat", last = true) { FazeSwitch(on, { on = it; core.settings.useMemory = it }) }
         if (items.isEmpty()) Hint("Nothing remembered yet. Ask Faze to remember something, then approve it.")
@@ -337,6 +350,7 @@ private fun MemoryCard(core: FazeCore) {
         }
         Hint("Only the \"me\" notes and a list of categories are sent with each chat. Faze reads other categories when it needs them, which saves tokens. It can create categories and sub-categories such as work/faze when you approve a note.")
         if (note.isNotEmpty()) Hint(note)
+        WideButton("Import from the Termux version") { picker.launch(arrayOf("application/json", "text/plain", "*/*")) }
         if (items.isNotEmpty()) WideButton("Clear all memory") { confirm = true }
     }
     if (confirm) {

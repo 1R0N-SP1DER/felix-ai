@@ -8,6 +8,32 @@ data class MemoryEntry(val id: Long, val text: String, val created: Long, val ca
 
 data class MemoryResult(val ok: Boolean, val message: String)
 
+/** What an import did, in words for the person: how many came in, and why the others did not. */
+data class ImportResult(val added: Int, val duplicates: Int, val shortened: Int, val secrets: Int, val invalid: Int, val full: Int) {
+    fun summary(): String {
+        val parts = ArrayList<String>()
+        if (duplicates > 0) parts.add("$duplicates already there")
+        if (shortened > 0) parts.add("$shortened shortened to fit")
+        if (secrets > 0) parts.add("$secrets left out because they looked like secrets")
+        if (invalid > 0) parts.add("$invalid unreadable")
+        if (full > 0) parts.add("$full not added because memory is full")
+        return "Imported $added note${if (added == 1) "" else "s"}" + (if (parts.isEmpty()) "" else " (" + parts.joinToString(", ") + ")")
+    }
+}
+
+/** Reads at most [max] bytes (null if the stream has more), so a wrong file can't fill the phone's memory. */
+fun readLimited(input: java.io.InputStream, max: Int): ByteArray? {
+    val out = java.io.ByteArrayOutputStream()
+    val buf = ByteArray(16 * 1024)
+    while (true) {
+        val n = input.read(buf)
+        if (n < 0) break
+        if (out.size() + n > max) return null
+        out.write(buf, 0, n)
+    }
+    return out.toByteArray()
+}
+
 /**
  * What Faze remembers about you: short notes you can read and delete, kept in one small file in the app's private folder and
  * shown to the model at the start of each chat. Notes are added only with your approval, and nothing that looks like a key,
@@ -75,6 +101,36 @@ class MemoryStore(private val file: File, private val now: () -> Long = { System
         val id = (items.maxOfOrNull { it.id } ?: 0L) + 1
         write(items + MemoryEntry(id, text, now(), cat))
         return MemoryResult(true, if (items.none { it.category == cat }) "remembered, in a new category: $cat" else "remembered in $cat")
+    }
+
+    /**
+     * Brings in notes from the Termux version ({"notes":[{"text","category"}]}). Each note goes through the same checks as a new
+     * one (no secrets, a clean category; a bad category goes to "imported"), a too-long note is shortened rather than lost, and
+     * the file is written once at the end.
+     */
+    @Synchronized
+    fun importJson(json: String): ImportResult {
+        val notes = try { JSONObject(json).getJSONArray("notes") } catch (e: Exception) { return ImportResult(0, 0, 0, 0, 1, 0) }
+        val items = ArrayList(read())
+        var nextId = (items.maxOfOrNull { it.id } ?: 0L) + 1
+        var added = 0; var dup = 0; var cut = 0; var secrets = 0; var bad = 0; var full = 0
+        for (i in 0 until notes.length()) {
+            val o = notes.optJSONObject(i)
+            var text = o?.optString("text", "")?.trim()?.replace(Regex("\\s+"), " ") ?: ""
+            if (text.length < MIN_LENGTH) { bad++; continue }
+            if (secretLike.any { it.containsMatchIn(text) }) { secrets++; continue }
+            val cat = cleanCategory(o!!.optString("category", "")) ?: "imported"
+            if (text.length > MAX_LENGTH) {
+                text = text.take(MAX_LENGTH - 1).substringBeforeLast(' ', text.take(MAX_LENGTH - 1)).trimEnd(',', ';', ' ') + "…"
+                cut++
+            }
+            if (items.any { it.category == cat && it.text.equals(text, ignoreCase = true) }) { dup++; continue }
+            if (items.size >= MAX_ENTRIES) { full++; continue }
+            items.add(MemoryEntry(nextId++, text, now(), cat))
+            added++
+        }
+        if (added > 0) write(items)
+        return ImportResult(added, dup, cut, secrets, bad, full)
     }
 
     /** Every category that has notes, with how many (just that level, not its sub-categories), sorted by path. */
