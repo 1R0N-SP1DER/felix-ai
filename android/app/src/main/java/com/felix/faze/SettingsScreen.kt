@@ -253,15 +253,49 @@ private fun AgentTab(core: FazeCore) {
         Hint("Lets Gemini see your screen, tap, swipe, type and listen through the mic. Needs higher-level tools. Touches show as circles while it works.")
         SettingRow("Allow higher-level tools", "Network, shell, files outside the sandbox. Also /elevated", last = true, soon = true) { FazeSwitch(false, {}, enabled = false) }
     }
-    SettingsCard("Saved tools") {
-        Hint("Nothing saved yet.")
-        WideButton("Clear all tools", soon = true) {}
-    }
+    SavedToolsCard(core)
     SettingsCard("Saved tasks") {
         Hint("Nothing saved yet.")
         WideButton("Clear all tasks", soon = true) {}
     }
     MemoryCard(core)
+}
+
+/** The tools Faze made and you approved: see what each does and its code, delete one, or clear them all. */
+@Composable
+private fun SavedToolsCard(core: FazeCore) {
+    var items by remember { mutableStateOf(core.toolStore.list()) }
+    var shown by remember { mutableStateOf<String?>(null) }
+    var confirm by remember { mutableStateOf(false) }
+    SettingsCard("Saved tools") {
+        if (items.isEmpty()) Hint("Nothing saved yet. Ask Faze for something it can't do, and approve the tool it writes.")
+        for (t in items) {
+            Row(modifier = Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(t.name, color = Palette.Accent, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, fontSize = 14.sp)
+                    Text(t.description, color = Palette.Dim, fontSize = 13.sp)
+                    Text(if (t.domains.isEmpty()) "reaches no websites" else "reaches " + t.domains.joinToString(", "), color = Palette.Muted, fontSize = 12.sp)
+                }
+                Text("Code", color = Palette.Dim, fontSize = 13.sp, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { shown = if (shown == t.name) null else t.name }.padding(horizontal = 10.dp, vertical = 6.dp))
+                Text("✕", color = Palette.Muted, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { core.toolStore.remove(t.name); items = core.toolStore.list() }.padding(horizontal = 10.dp, vertical = 6.dp))
+            }
+            if (shown == t.name) {
+                Box(modifier = Modifier.fillMaxWidth().padding(top = 6.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xB8030610)).border(1.dp, Palette.Line, RoundedCornerShape(12.dp)).padding(10.dp)) {
+                    Text(t.code, color = Palette.Text, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, fontSize = 12.5.sp)
+                }
+            }
+        }
+        if (items.isNotEmpty()) WideButton("Clear all tools") { confirm = true }
+    }
+    if (confirm) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text("Delete all saved tools?") },
+            text = { Text("This removes all ${items.size} tools. It can't be undone.", color = Palette.Dim) },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { core.toolStore.clear(); items = core.toolStore.list(); confirm = false }) { Text("Delete", color = Palette.Bad) } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { confirm = false }) { Text("Cancel") } },
+        )
+    }
 }
 
 /** The notes Faze remembers: read them, add one, delete one, or clear all. The model can only add one with your approval. */

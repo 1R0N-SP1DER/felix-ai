@@ -11,6 +11,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -58,6 +62,12 @@ fun ApprovalSheet(request: ApprovalRequest, onAllow: () -> Unit, onDeny: () -> U
             Text(info.what, color = Palette.Text)
             Text("HOW IT WORKS", color = Palette.Muted, fontSize = 11.2.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.57.sp, modifier = Modifier.padding(top = 8.dp))
             Text(info.how, color = Palette.Dim)
+            if (request.detail.isNotBlank()) {
+                Text("THE CODE", color = Palette.Muted, fontSize = 11.2.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.57.sp, modifier = Modifier.padding(top = 8.dp))
+                Box(modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xB8030610)).border(1.dp, Palette.Line, RoundedCornerShape(12.dp)).verticalScroll(rememberScrollState()).padding(10.dp)) {
+                    Text(request.detail, color = Palette.Text, fontFamily = FontFamily.Monospace, fontSize = 12.5.sp)
+                }
+            }
             Row(modifier = Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     "Deny", color = Palette.Dim, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center,

@@ -65,6 +65,8 @@ dependencies {
     // offline wake word: the recognizer needs JNA as an aar (that is how the library documents it)
     implementation("net.java.dev.jna:jna:5.13.0@aar")
     implementation("com.alphacephei:vosk-android:0.3.47")
+    // runs the JavaScript of tools the assistant makes, in a sandbox with no way out to Java
+    implementation("org.mozilla:rhino:1.7.15")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

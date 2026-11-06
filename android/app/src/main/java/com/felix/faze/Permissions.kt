@@ -24,6 +24,7 @@ object PermissionPolicy {
         "get_weather" to Tier.SAFE,
         "remember" to Tier.CONFIRM,
         "recall" to Tier.SAFE,
+        "create_tool" to Tier.CONFIRM,
     )
 
     fun tier(tool: String): Tier = registry[tool] ?: Tier.BLOCK
@@ -35,34 +36,54 @@ object PermissionPolicy {
         "read_clipboard" -> "Read what is on your clipboard and show it to the model"
         "write_clipboard" -> "Put this on your clipboard: " + args.optString("text", "").replace('\n', ' ').take(80)
         "remember" -> "Remember this" + (args.optString("category", "").trim().let { if (it.isEmpty()) "" else " [$it]" }) + ": " + args.optString("fact", "").replace('\n', ' ').take(120)
+        "create_tool" -> "Create the tool ${args.optString("name")}: ${args.optString("description").replace('\n', ' ').take(120)}"
         else -> tool
+    }
+
+    /** Extra text for the approval dialog: for a new tool, its parameters, the sites it may reach, and the code itself. */
+    fun detail(tool: String, args: JSONObject): String = when (tool) {
+        "create_tool" -> "Parameters: ${args.optString("parameters").ifBlank { "none" }}\nMay reach: ${args.optString("domains").ifBlank { "no websites" }}\n\n${args.optString("code")}"
+        else -> ""
     }
 }
 
 /** Asks the person. Blocks the calling (background) thread until they answer. Any failure counts as no. */
 interface Approver {
     fun approve(tool: String, summary: String): Boolean
+
+    /** Same question with extra text to show (the code of a new tool). Plain approvers can ignore the extra text. */
+    fun approve(tool: String, summary: String, detail: String): Boolean = approve(tool, summary)
 }
 
 /** Wraps a [ToolRunner]: safe tools run, confirm tools wait for the person, everything else is refused. */
-class GatedTools(private val inner: ToolRunner, private val approver: Approver) : ToolRunner {
+class GatedTools(private val inner: ToolRunner, private val approver: Approver, private val extraTier: (String) -> Tier? = { null }) : ToolRunner {
     override fun schema(): JSONArray = inner.schema()
 
-    override fun execute(name: String, args: JSONObject): ToolResult = when (PermissionPolicy.tier(name)) {
+    override fun precheck(name: String, args: JSONObject): String? = inner.precheck(name, args)
+
+    /** Built-in tools have fixed tiers; a tool the person approved earlier (see [extraTier]) may run; anything else is refused. */
+    private fun tierOf(name: String): Tier = PermissionPolicy.tier(name).let { if (it == Tier.BLOCK) extraTier(name) ?: it else it }
+
+    override fun execute(name: String, args: JSONObject): ToolResult = when (tierOf(name)) {
         Tier.SAFE -> inner.execute(name, args)
         Tier.BLOCK -> ToolResult(false, "$name is not allowed.")
         Tier.CONFIRM -> {
-            val allowed = try {
-                approver.approve(name, PermissionPolicy.summary(name, args))
-            } catch (e: Exception) {
-                false
+            val refusal = inner.precheck(name, args)
+            if (refusal != null) {
+                ToolResult(false, refusal) // fix it and try again; nothing was shown to the person
+            } else {
+                val allowed = try {
+                    approver.approve(name, PermissionPolicy.summary(name, args), PermissionPolicy.detail(name, args))
+                } catch (e: Exception) {
+                    false
+                }
+                if (allowed) inner.execute(name, args) else ToolResult(false, "The user declined $name. Do not try it again.")
             }
-            if (allowed) inner.execute(name, args) else ToolResult(false, "The user declined $name. Do not try it again.")
         }
     }
 }
 
-data class ApprovalRequest(val id: Long, val tool: String, val summary: String)
+data class ApprovalRequest(val id: Long, val tool: String, val summary: String, val detail: String = "")
 
 /** Connects [GatedTools] (worker thread) to the approval card (screen). One request at a time; no answer in time means no. */
 class ApprovalBroker(private val ui: (() -> Unit) -> Unit, private val timeoutSeconds: Long = 60, private val onChange: (ApprovalRequest?) -> Unit) : Approver {
@@ -70,12 +91,14 @@ class ApprovalBroker(private val ui: (() -> Unit) -> Unit, private val timeoutSe
     private var nextId = 1L
     private var pending: Pair<ApprovalRequest, CompletableFuture<Boolean>>? = null
 
-    override fun approve(tool: String, summary: String): Boolean {
+    override fun approve(tool: String, summary: String): Boolean = approve(tool, summary, "")
+
+    override fun approve(tool: String, summary: String, detail: String): Boolean {
         val request: ApprovalRequest
         val future = CompletableFuture<Boolean>()
         synchronized(lock) {
             pending?.second?.complete(false) // a second request while one waits: the older one is refused
-            request = ApprovalRequest(nextId++, tool, summary)
+            request = ApprovalRequest(nextId++, tool, summary, detail)
             pending = Pair(request, future)
         }
         ui { onChange(request) }

@@ -18,7 +18,7 @@ class ApprovalPolicyParity(unittest.TestCase):
         kt = read(ANDROID, "src", "main", "java", "com", "felix", "faze", "Permissions.kt")
         kotlin = dict((m.group(1), m.group(2)) for m in re.finditer(r'"(\w+)" to Tier\.(\w+)', kt))
         self.assertGreaterEqual(len(kotlin), 12)
-        android_only = {"remember": "confirm", "recall": "safe"}  # tools that exist only in the app (memory notes)
+        android_only = {"remember": "confirm", "recall": "safe", "create_tool": "confirm"}  # tools that exist only in the app (memory notes)
         for name, tier in kotlin.items():
             if name in android_only:
                 self.assertEqual(android_only[name], tier.lower(), name)

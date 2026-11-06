@@ -11,6 +11,9 @@ class ToolFailure(message: String) : Exception(message)
 interface ToolRunner {
     fun schema(): JSONArray
     fun execute(name: String, args: JSONObject): ToolResult
+
+    /** Checked before the person is asked to approve: a reason to refuse right away (so no approval is wasted), or null. */
+    fun precheck(name: String, args: JSONObject): String? = null
 }
 
 interface ToolSettings {
@@ -51,6 +54,7 @@ class Tools(
     private val transport: Transport,
     private val settings: ToolSettings,
     private val memory: MemoryStore? = null,
+    private val userTools: UserTools? = null,
 ) : ToolRunner {
 
     private fun tool(name: String, description: String, vararg params: Param): JSONObject {
@@ -76,6 +80,13 @@ class Tools(
             Param("text", "string", "the exact text to copy to the clipboard")))
         if (memory != null) out.put(tool("remember", "Save ONE short fact about the user for future chats (a lasting preference, name, plan or habit). Call it only when the user asks you to remember something or clearly states something lasting about themselves. Never save secrets, passwords, keys or numbers.", Param("fact", "string", "The fact, as one short sentence"), Param("category", "string", "Where it belongs, such as me, work/faze or people/sister. Use me for facts about the user. A new name creates a new category.")))
         if (memory != null) out.put(tool("recall", "Read the saved notes of one memory category (and its sub-categories), or list the categories with 'index'. Call it before answering questions about a category you were not shown.", Param("category", "string", "A category path such as work/faze, or index")))
+        if (userTools != null) {
+            out.put(tool("create_tool", "Make a new reusable tool when the user asks for something none of your tools can do and a short JavaScript function could (for example: fetch data from a public web API and reshape it). The code must define function run(args) returning a string or value. It runs in a locked sandbox: plain JavaScript only, plus http_get(url) (https, only the sites you list in domains) and now(). No files, no phone access, no libraries, no async. The user reads the code and must approve it.",
+                Param("name", "string", "lower_case_name, 3 to 31 characters"), Param("description", "string", "what the tool does, one sentence"),
+                Param("parameters", "string", "comma separated, like city:string, days:number (may be empty)"), Param("code", "string", "the JavaScript, defining function run(args)"),
+                Param("domains", "string", "comma separated sites http_get may reach, like api.open-meteo.com (empty if none)")))
+            for (s in userTools.schemas()) out.put(s)
+        }
         out.put(tool("vibrate", "Call this whenever the user asks to vibrate the phone or get attention physically. No arguments."))
         out.put(tool("search_web", "Call this for current, real-world information like news or live facts. Performs a web search. Never answer from memory.",
             Param("query", "string", "what to search for")))
@@ -95,6 +106,12 @@ class Tools(
         return (0 until s.length()).map { s.getJSONObject(it).getJSONObject("function").getString("name") }
     }
 
+    override fun precheck(name: String, args: JSONObject): String? = when {
+        name != "create_tool" -> null
+        userTools == null -> "tools can't be made here"
+        else -> userTools.precheck(args)
+    }
+
     override fun execute(name: String, args: JSONObject): ToolResult {
         return try {
             when (name) {
@@ -103,6 +120,7 @@ class Tools(
                     if (r.ok) ok(r.message) else fail(r.message)
                 }
                 "recall" -> if (memory == null) fail("memory is not available") else ok(memory.recall(args.optString("category", "")))
+                "create_tool" -> userTools?.create(args) ?: fail("tools can't be made here")
                 "get_current_datetime" -> ok(device.now())
                 "get_battery_status" -> ok(device.battery())
                 "get_wifi_status" -> ok(device.wifi())
@@ -134,7 +152,7 @@ class Tools(
                     val query = args.optString("query", "").trim()
                     if (query.isEmpty()) fail("what should I search for?") else ok(Search.tavily(transport, settings.tavilyKey(), query))
                 }
-                else -> fail("unknown tool: $name")
+                else -> if (userTools != null && userTools.has(name)) userTools.run(name, args) else fail("unknown tool: $name")
             }
         } catch (e: ToolFailure) {
             fail(e.message ?: "$name failed")

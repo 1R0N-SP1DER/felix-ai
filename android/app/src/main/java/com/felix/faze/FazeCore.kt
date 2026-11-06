@@ -72,6 +72,7 @@ class FazeCore(private val app: Application) : EngineListener {
     private val stt = Stt(transport, { settings.groqKey })
     private val store = ChatStore(File(app.filesDir, "chats"))
     val memory = MemoryStore(File(app.filesDir, "memory.json"))
+    val toolStore = ToolStore(File(app.filesDir, "tools.json"))
     private val broker = ApprovalBroker({ block -> main.post { block() } }, 60) { approval = it }
     private val engine: ChatEngine
     private var sttMs = 0L
@@ -90,7 +91,12 @@ class FazeCore(private val app: Application) : EngineListener {
             { Fallbacks.plan(settings.provider, listOf("groq", "gemini", "openrouter").filter { settings.hasKey(it) }.toSet()) { settings.modelFor(it) } },
             { text -> main.post { status = text } },
         )
-        val tools = GatedTools(Tools(AndroidDevice(app), transport, settings, memory), broker)
+        val userTools = UserTools(
+            toolStore,
+            JsSandbox({ url -> val r = transport.get(url, emptyMap(), 10000); if (r.status != 200) throw RuntimeException("HTTP ${r.status}"); r.body.take(200_000) }),
+            { PermissionPolicy.all().map { it.first }.toSet() },
+        )
+        val tools = GatedTools(Tools(AndroidDevice(app), transport, settings, memory, userTools), broker) { name -> if (userTools.has(name)) Tier.SAFE else null }
         engine = ChatEngine(Agent(client, tools), object : EngineConfig by settings {
             override fun memoryBlock(): String = if (settings.useMemory) memory.promptBlock(settings.user) else ""
         }, speaker, { block -> main.post { block() } }, executor, messages, this)
