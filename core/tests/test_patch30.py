@@ -75,14 +75,20 @@ class FixedRootCommands(unittest.TestCase):
             self.assertIn(" privacy camera_mic_icons_enabled", c)
             self.assertNotRegex(c, r"[;&|`$<>]")
 
-    def test_su_is_started_in_one_place_and_checks_the_list(self):
+    def test_su_is_started_in_two_places(self):
+        # WakeEngines: the fixed commands, checked against the list. Powers.kt: a tool the person approved, for the 'root'
+        # and 'screenshot' powers only (patch 42), through one helper.
         users = []
-        for f in os.listdir(KT):
-            if f.endswith(".kt") and re.search(r'ProcessBuilder\("su"|exec\(arrayOf\("su"', read(KT, f)):
+        for f in sorted(os.listdir(KT)):
+            if f.endswith(".kt") and re.search(r'ProcessBuilder\("su"|exec\(arrayOf\("su"|listOf\("su"', read(KT, f)):
                 users.append(f)
-        self.assertEqual(["WakeEngines.kt"], users)
+        self.assertEqual(["Powers.kt", "WakeEngines.kt"], users)
         engines = read(KT, "WakeEngines.kt")
         self.assertLess(engines.index("RootCommands.isAllowed(command)"), engines.index('ProcessBuilder("su"'))
+        powers = read(KT, "Powers.kt")
+        self.assertEqual(1, powers.count('listOf("su", "-c"'))
+        sandbox = read(KT, "Sandbox.kt")
+        self.assertIn("needed in powers", sandbox)  # root() only exists for a tool that declared the root power
 
     def test_the_dot_option_is_off_by_default(self):
         settings = read(KT, "Settings.kt")

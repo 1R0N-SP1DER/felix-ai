@@ -22,9 +22,15 @@ class Sandbox(unittest.TestCase):
         self.assertIn("optimizationLevel = -1", src)
         self.assertIn("observeInstructionCount", src)
 
-    def test_the_only_ways_out_are_the_three_host_functions(self):
-        puts = re.findall(r'putProperty\(scope, "(\w+)"', read(KT, "Sandbox.kt"))
+    def test_the_only_ways_out_are_the_three_host_functions_plus_declared_powers(self):
+        sandbox = read(KT, "Sandbox.kt")
+        puts = re.findall(r'putProperty\(scope, "(\w+)"', sandbox)
         self.assertEqual(["http_get", "now", "log", "__args"], puts)
+        # patch 42: every other function comes from the Powers table and is defined only when its power was declared
+        self.assertEqual(1, len(re.findall(r'scope\.put\(', sandbox)))
+        self.assertIn("if (granted) scope.put(fname", sandbox)
+        names = re.findall(r'"(\w+)" to "(\w*)"', sandbox[sandbox.index("val functions"):sandbox.index("/** The declared powers")])
+        self.assertEqual(["http_post", "shell", "root", "read_file", "write_file", "list_dir", "screenshot", "start_intent", "sleep"], [n for n, _ in names])
 
     def test_creating_a_tool_is_gated_and_shows_the_code(self):
         self.assertIn('"create_tool" to Tier.CONFIRM', read(KT, "Permissions.kt"))
