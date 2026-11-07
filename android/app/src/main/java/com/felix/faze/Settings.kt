@@ -49,6 +49,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getBoolean("use_memory", true)
         set(value) = prefs.edit().putBoolean("use_memory", value).apply()
 
+    /** Whether saved tools may use the powers they declared (network, shell, root, files, screenshot, intent). Settings > Agent > Allow higher-level tools. */
+    var allowPowered: Boolean
+        get() = prefs.getBoolean("allow_powered", true)
+        set(value) = prefs.edit().putBoolean("allow_powered", value).apply()
+
     /** Which online model answers: groq, gemini or openrouter. */
     var provider: String
         get() = text("provider").let { if (it == "gemini" || it == "openrouter") it else "groq" }

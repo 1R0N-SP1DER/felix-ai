@@ -244,6 +244,7 @@ private fun VoiceSlider(value: Float, onChange: (Float) -> Unit) {
 
 @Composable
 private fun AgentTab(core: FazeCore) {
+    var powered by remember { mutableStateOf(core.settings.allowPowered) }
     SettingsCard("Approval mode") {
         Seg(listOf("ask" to "Ask", "yolo" to "Yolo", "off" to "Off"), "ask", soonValues = setOf("yolo", "off")) {}
         Hint("Ask: tools that read or change what you copied wait for your yes. In the app, the clipboard tools always ask first.")
@@ -251,7 +252,14 @@ private fun AgentTab(core: FazeCore) {
     SettingsCard("Phone control") {
         Seg(listOf("off" to "Off", "ask" to "Ask", "on" to "On"), "off", soonValues = setOf("ask", "on")) {}
         Hint("Lets Gemini see your screen, tap, swipe, type and listen through the mic. Needs higher-level tools. Touches show as circles while it works.")
-        SettingRow("Allow higher-level tools", "Network, shell, files outside the sandbox. Also /elevated", last = true, soon = true) { FazeSwitch(false, {}, enabled = false) }
+        SettingRow("Allow higher-level tools", "Network, shell, files outside the sandbox. Also /elevated") { FazeSwitch(powered, { powered = it; core.settings.allowPowered = it }) }
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        val filesOk = if (Build.VERSION.SDK_INT >= 30) android.os.Environment.isExternalStorageManager() else true
+        SettingRow("Access to all files", if (filesOk) "Allowed" else "Not allowed yet (tools with the files power can only reach Faze's own folder)", last = true) {
+            Text("Allow", color = Palette.Accent, modifier = Modifier.clickable {
+                if (Build.VERSION.SDK_INT >= 30) ctx.startActivity(Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:" + ctx.packageName)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }.padding(8.dp))
+        }
     }
     SavedToolsCard(core)
     SettingsCard("Saved tasks") {

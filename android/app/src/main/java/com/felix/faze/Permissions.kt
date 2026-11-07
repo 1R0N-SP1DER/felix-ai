@@ -32,17 +32,19 @@ object PermissionPolicy {
     /** Every tool the app knows, with its tier (the sidebar's Tools list). */
     fun all(): List<Pair<String, Tier>> = registry.toList()
 
+    private fun powersOf(args: JSONObject): String = args.optString("powers").split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct().joinToString(", ")
+
     fun summary(tool: String, args: JSONObject): String = when (tool) {
         "read_clipboard" -> "Read what is on your clipboard and show it to the model"
         "write_clipboard" -> "Put this on your clipboard: " + args.optString("text", "").replace('\n', ' ').take(80)
         "remember" -> "Remember this" + (args.optString("category", "").trim().let { if (it.isEmpty()) "" else " [$it]" }) + ": " + args.optString("fact", "").replace('\n', ' ').take(120)
-        "create_tool" -> "Create the tool ${args.optString("name")}: ${args.optString("description").replace('\n', ' ').take(120)}"
+        "create_tool" -> "Create the tool ${args.optString("name")}${powersOf(args).let { if (it.isEmpty()) "" else " (powers: $it)" }}: ${args.optString("description").replace('\n', ' ').take(120)}"
         else -> tool
     }
 
     /** Extra text for the approval dialog: for a new tool, its parameters, the sites it may reach, and the code itself. */
     fun detail(tool: String, args: JSONObject): String = when (tool) {
-        "create_tool" -> "Parameters: ${args.optString("parameters").ifBlank { "none" }}\nMay reach: ${args.optString("domains").ifBlank { "no websites" }}\n\n${args.optString("code")}"
+        "create_tool" -> "Parameters: ${args.optString("parameters").ifBlank { "none" }}\nMay reach: ${args.optString("domains").ifBlank { "no websites" }}\nPowers: ${powersOf(args).ifEmpty { "none (locked sandbox)" }}\n\n${args.optString("code")}"
         else -> ""
     }
 }

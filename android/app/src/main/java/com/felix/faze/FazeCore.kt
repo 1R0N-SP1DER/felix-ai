@@ -93,8 +93,9 @@ class FazeCore(private val app: Application) : EngineListener {
         )
         val userTools = UserTools(
             toolStore,
-            JsSandbox({ url -> val r = transport.get(url, emptyMap(), 10000); if (r.status != 200) throw RuntimeException("HTTP ${r.status}"); r.body.take(200_000) }),
+            JsSandbox({ url -> val r = transport.get(url, emptyMap(), 10000); if (r.status != 200) throw RuntimeException("HTTP ${r.status}"); r.body.take(200_000) }, power = AndroidPowers(app)),
             { PermissionPolicy.all().map { it.first }.toSet() },
+            { settings.allowPowered },
         )
         val tools = GatedTools(Tools(AndroidDevice(app), transport, settings, memory, userTools), broker) { name -> if (userTools.has(name)) Tier.SAFE else null }
         engine = ChatEngine(Agent(client, tools), object : EngineConfig by settings {
