@@ -104,7 +104,7 @@ class PowersTest {
     private fun store() = ToolStore(File.createTempFile("tools", "dir").let { it.delete(); File(it, "tools.json") })
 
     private fun make(allowed: () -> Boolean = { true }, host: FakeHost = FakeHost()): Pair<UserTools, FakeHost> =
-        UserTools(store(), JsSandbox({ "" }, power = host), { reserved }, allowed) to host
+        UserTools(store(), JsSandbox({ "" }, power = host), allowed) { reserved } to host
 
     private fun args(code: String, powers: String, domains: String = "") =
         JSONObject().put("name", "list_files").put("description", "Lists the files in a folder").put("parameters", "path:string").put("code", code).put("domains", domains).put("powers", powers)
