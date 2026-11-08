@@ -246,6 +246,7 @@ private fun VoiceSlider(value: Float, onChange: (Float) -> Unit) {
 private fun AgentTab(core: FazeCore) {
     var powered by remember { mutableStateOf(core.settings.allowPowered) }
     var liveVoice by remember { mutableStateOf(core.settings.liveVoice) }
+    var fillers by remember { mutableStateOf(core.settings.voiceFillers) }
     var liveModel by remember { mutableStateOf(core.settings.liveModel) }
     SettingsCard("Approval mode") {
         Seg(listOf("ask" to "Ask", "yolo" to "Yolo", "off" to "Off"), "ask", soonValues = setOf("yolo", "off")) {}
@@ -261,6 +262,13 @@ private fun AgentTab(core: FazeCore) {
             Text("Allow", color = Palette.Accent, modifier = Modifier.clickable {
                 if (Build.VERSION.SDK_INT >= 30) ctx.startActivity(Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:" + ctx.packageName)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }.padding(8.dp))
+        }
+    }
+    SettingsCard("Voice chat") {
+        SettingRow("Filler phrases", "A short phrase like \"let me look that up\" while a slow answer is on its way") { FazeSwitch(fillers, { fillers = it; core.settings.voiceFillers = it }) }
+        Hint("Talk and it answers out loud. Groq Whisper does the listening. With headphones you can talk over it; without them the mic waits until it has finished. Keep the app open.")
+        SettingRow("Voice chat", core.voiceState.ifEmpty { "Off" }, last = true) {
+            Text(if (core.voiceOn) "Stop" else "Start", color = Palette.Accent, modifier = Modifier.clickable { if (core.voiceOn) core.stopVoiceChat() else core.startVoiceChat() }.padding(8.dp))
         }
     }
     SettingsCard("Live voice") {
