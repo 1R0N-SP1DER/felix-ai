@@ -69,6 +69,15 @@ class LiveUi(unittest.TestCase):
         c = read(KT, "FazeCore.kt")
         self.assertIn("fun toggleMute()", c)
 
+    def test_slim_composer_and_opaque_live_screen(self):
+        chrome = read(KT, "ChatChrome.kt")
+        composer = chrome[chrome.index("fun Composer("):chrome.index("private fun ActionSquare")]
+        self.assertNotIn("ToolChip(", composer)
+        self.assertNotIn("onTools", composer)
+        self.assertNotIn("onModel", composer)
+        self.assertNotIn("ToolsMenu(", read(KT, "ChatScreen.kt"))
+        self.assertIn(".background(Palette.Bg)", read(KT, "LiveScreen.kt"))
+
 
 if __name__ == "__main__":
     unittest.main()

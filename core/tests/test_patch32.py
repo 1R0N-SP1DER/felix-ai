@@ -54,9 +54,10 @@ class ChromeMatchesTheWebUI(unittest.TestCase):
     def test_composer_words(self):
         self.assertIn('placeholder="Ask FAZE anything..."', self.html)
         self.assertIn("Ask FAZE anything...", self.chrome)
-        for label in ["Attach", "Tools"]:
-            self.assertIn("<b>%s</b>" % label, self.html)
-            self.assertIn('"%s"' % label, self.chrome)
+        # the phone's box is slimmer than the web one: no Attach / Tools / model row under the buttons
+        composer = self.chrome[self.chrome.index("fun Composer("):self.chrome.index("private fun ActionSquare")]
+        for chip in ['ToolChip(', '"Attach"', '"Tools"']:
+            self.assertNotIn(chip, composer)
 
     def test_plus_menu_items(self):
         for item in ["Voice mode", "Thinking", "Activity log", "New chat", "Settings"]:

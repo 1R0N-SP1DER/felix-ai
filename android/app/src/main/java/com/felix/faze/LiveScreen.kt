@@ -45,8 +45,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * The full-screen live conversation (live mode or voice chat): the morphing core in the middle, what it is doing under it, and the bar
- * along the bottom: camera and screen share (planned, dimmed), the listening bar that moves with your voice, mute, and close.
+ * The full-screen live conversation (live mode or voice chat), like a call: the bar along the bottom takes the place of the message box,
+ * and the stage above it is where FAZE will show what it is making (illustrations, diagrams, code); until then the morphing core
+ * and what it is doing fill it. The bar holds: camera and screen share (planned, dimmed), the listening bar that moves with your voice, mute, and close.
  */
 @Composable
 fun LiveScreen(core: FazeCore) {
@@ -63,6 +64,7 @@ fun LiveScreen(core: FazeCore) {
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .background(Palette.Bg) // solid, so the chat and its message box never show through
             .background(Brush.verticalGradient(0f to Palette.Bg, 0.55f to Palette.Bg1, 1f to Palette.Accent.copy(alpha = 0.26f)))
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
     ) {
