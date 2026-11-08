@@ -33,6 +33,19 @@ object GeminiWire {
     /** A call's id carries Gemini's thought signature after a colon ("call_0:abc"), so it can be sent back with the call. */
     private fun signatureOf(id: String): String? = id.substringAfter(':', "").ifEmpty { null }
 
+    /** The app's OpenAI-style tool list as Gemini function declarations (also used by live mode). */
+    fun declarations(tools: JSONArray): JSONArray {
+        val decls = JSONArray()
+        for (k in 0 until tools.length()) {
+            val fn = tools.getJSONObject(k).getJSONObject("function")
+            decls.put(
+                JSONObject().put("name", fn.getString("name")).put("description", fn.optString("description", ""))
+                    .put("parameters", clean(fn.optJSONObject("parameters") ?: JSONObject().put("type", "object").put("properties", JSONObject()))),
+            )
+        }
+        return decls
+    }
+
     fun body(messages: JSONArray, tools: JSONArray?, thinking: String): JSONObject {
         val contents = JSONArray()
         val system = StringBuilder()
@@ -80,17 +93,7 @@ object GeminiWire {
         }
         val body = JSONObject().put("contents", contents)
         if (system.isNotEmpty()) body.put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system.toString()))))
-        if (tools != null && tools.length() > 0) {
-            val decls = JSONArray()
-            for (k in 0 until tools.length()) {
-                val fn = tools.getJSONObject(k).getJSONObject("function")
-                decls.put(
-                    JSONObject().put("name", fn.getString("name")).put("description", fn.optString("description", ""))
-                        .put("parameters", clean(fn.optJSONObject("parameters") ?: JSONObject().put("type", "object").put("properties", JSONObject()))),
-                )
-            }
-            body.put("tools", JSONArray().put(JSONObject().put("functionDeclarations", decls)))
-        }
+        if (tools != null && tools.length() > 0) body.put("tools", JSONArray().put(JSONObject().put("functionDeclarations", declarations(tools))))
         if (thinking.isNotEmpty()) body.put("generationConfig", JSONObject().put("thinkingConfig", JSONObject().put("thinkingLevel", thinking)))
         return body
     }

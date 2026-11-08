@@ -75,6 +75,14 @@ class FazeCore(private val app: Application) : EngineListener {
     val toolStore = ToolStore(File(app.filesDir, "tools.json"))
     private val broker = ApprovalBroker({ block -> main.post { block() } }, 60) { approval = it }
     private val engine: ChatEngine
+    private lateinit var gatedTools: ToolRunner
+
+    /** Live mode (a spoken conversation with Gemini Live): whether it is on, and its one-line state for Settings. */
+    var liveOn by mutableStateOf(false)
+    var liveState by mutableStateOf("")
+    @Volatile private var live: LiveSession? = null
+    private val liveStarter = Executors.newSingleThreadExecutor()
+    private val liveWorker = Executors.newSingleThreadExecutor() // tool calls: one may wait up to a minute for an approval
     private var sttMs = 0L
 
     init {
@@ -98,6 +106,7 @@ class FazeCore(private val app: Application) : EngineListener {
             { PermissionPolicy.all().map { it.first }.toSet() },
         )
         val tools = GatedTools(Tools(AndroidDevice(app), transport, settings, memory, userTools), broker) { name -> if (userTools.has(name)) Tier.SAFE else null }
+        gatedTools = tools
         engine = ChatEngine(Agent(client, tools), object : EngineConfig by settings {
             override fun memoryBlock(): String = if (settings.useMemory) memory.promptBlock(settings.user) else ""
         }, speaker, { block -> main.post { block() } }, executor, messages, this)
@@ -321,6 +330,40 @@ class FazeCore(private val app: Application) : EngineListener {
         val pcm = recorder.stop()
         listenControl?.resume()
         handlePcm(pcm)
+    }
+
+    private fun liveEnded() {
+        liveOn = false
+        live = null
+        listenControl?.resume()
+    }
+
+    /** Starts live mode. The wake-word listener is paused meanwhile (one microphone). The outcome shows in [liveState]. */
+    fun startLive() {
+        if (live != null) return
+        if (settings.geminiKey.isEmpty()) { liveState = "Live mode needs a Gemini key"; return }
+        liveOn = true
+        liveState = "Connecting…"
+        liveStarter.execute {
+            listenControl?.pause()
+            val schema = gatedTools.schema()
+            val names = (0 until schema.length()).map { schema.getJSONObject(it).getJSONObject("function").getString("name") }
+            val session = LiveSession(
+                OkHttpLiveConnector(), settings.geminiKey, settings.liveModel, settings.liveVoice, true,
+                LiveSession.instruction(settings.user, if (settings.useMemory) memory.promptBlock(settings.user) else "", names),
+                gatedTools, AndroidLiveMic(app), AndroidLiveSpeaker(), liveWorker,
+                { text -> main.post { liveState = text } }, { _, _ -> },
+                { main.post { liveEnded() } },
+                { !headphonesConnected(app) },
+            )
+            live = session
+            if (session.start() != null) main.post { liveEnded() }
+        }
+    }
+
+    fun stopLive() {
+        val s = live ?: return
+        liveStarter.execute { s.stop() }
     }
 
     /** Stop recording and throw the audio away (the overlay was closed, or the person backed out). */

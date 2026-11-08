@@ -54,6 +54,15 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getBoolean("allow_powered", true)
         set(value) = prefs.edit().putBoolean("allow_powered", value).apply()
 
+    /** The Gemini Live model and the voice it speaks with (Settings > Agent > Live voice). */
+    var liveModel: String
+        get() = text("live_model").ifEmpty { LiveProtocol.DEFAULT_MODEL }
+        set(value) = put("live_model", value)
+
+    var liveVoice: String
+        get() = text("live_voice").let { if (it in LiveProtocol.VOICES) it else LiveProtocol.DEFAULT_VOICE }
+        set(value) = put("live_voice", value)
+
     /** Which online model answers: groq, gemini or openrouter. */
     var provider: String
         get() = text("provider").let { if (it == "gemini" || it == "openrouter") it else "groq" }
