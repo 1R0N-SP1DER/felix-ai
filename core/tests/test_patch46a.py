@@ -30,7 +30,7 @@ class LiveVoice(unittest.TestCase):
         # the same retry rule and the same four setup attempts
         self.assertIn("unknown name|invalid json|invalid argument|cannot find field|unsupported|not supported", k)
         self.assertIn('"generation" to true, "flat" to true, "generation" to false, "flat" to false', k)
-        self.assertIn('DEFAULT_MODEL = "gemini-3.8-live"', k)
+        self.assertIn('DEFAULT_MODEL = "gemini-3.1-flash-live-preview"', k)  # a model with a free tier
 
     def test_the_key_is_scrubbed_from_errors(self):
         c = read(KT, "LiveClient.kt")
@@ -75,6 +75,15 @@ class LiveVoice(unittest.TestCase):
     def test_websocket_dependency_and_ipv4_first(self):
         self.assertIn('com.squareup.okhttp3:okhttp:4.12.0', read(APP, "build.gradle.kts"))
         self.assertIn("sortedBy { it is Inet6Address }", read(KT, "LiveAndroid.kt"))
+
+    def test_the_live_model_can_be_picked_and_the_default_has_a_free_tier(self):
+        k = read(KT, "LiveProtocol.kt")
+        self.assertIn('DEFAULT_MODEL to "3.1 Live"', k)
+        self.assertIn('"gemini-2.5-flash-native-audio-preview-12-2025" to "2.5 Audio"', k)
+        self.assertIn('"gemini-3.8-live" to "3.8 Live"', k)
+        s = read(KT, "SettingsScreen.kt")
+        self.assertIn("Seg(LiveProtocol.MODELS, liveModel", s)
+        self.assertIn("core.settings.liveModel = it", s)
 
     def test_settings_card_and_voices(self):
         s = read(KT, "SettingsScreen.kt")

@@ -246,6 +246,7 @@ private fun VoiceSlider(value: Float, onChange: (Float) -> Unit) {
 private fun AgentTab(core: FazeCore) {
     var powered by remember { mutableStateOf(core.settings.allowPowered) }
     var liveVoice by remember { mutableStateOf(core.settings.liveVoice) }
+    var liveModel by remember { mutableStateOf(core.settings.liveModel) }
     SettingsCard("Approval mode") {
         Seg(listOf("ask" to "Ask", "yolo" to "Yolo", "off" to "Off"), "ask", soonValues = setOf("yolo", "off")) {}
         Hint("Ask: tools that read or change what you copied wait for your yes. In the app, the clipboard tools always ask first.")
@@ -263,6 +264,8 @@ private fun AgentTab(core: FazeCore) {
         }
     }
     SettingsCard("Live voice") {
+        Seg(LiveProtocol.MODELS, liveModel, small = true) { liveModel = it; core.settings.liveModel = it }
+        Hint("3.1 Live and 2.5 Audio have a free tier. 3.8 Live may need a paid Google plan (a quota error means the model has no free quota for your key).")
         Seg(LiveProtocol.VOICES.map { it to it }, liveVoice, small = true) { liveVoice = it; core.settings.liveVoice = it }
         Hint("A spoken conversation with Gemini Live. With headphones you can talk over it; without them the mic is muted while it speaks. Keep the app open: Android silences the mic of a background app.")
         SettingRow("Live mode", core.liveState.ifEmpty { "Off" }, last = true) {

@@ -30,7 +30,15 @@ object LiveProtocol {
     const val URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key="
     const val INPUT_RATE = 16000
     const val OUTPUT_RATE = 24000
-    const val DEFAULT_MODEL = "gemini-3.8-live"
+    /** The default is a model with a free tier (per Google's pricing page); gemini-3.8-live has none listed and answered "quota exceeded". */
+    const val DEFAULT_MODEL = "gemini-3.1-flash-live-preview"
+
+    /** Model id and the short label for the picker. */
+    val MODELS = listOf(
+        DEFAULT_MODEL to "3.1 Live",
+        "gemini-2.5-flash-native-audio-preview-12-2025" to "2.5 Audio",
+        "gemini-3.8-live" to "3.8 Live",
+    )
     const val DEFAULT_VOICE = "Kore"
     val VOICES = listOf("Kore", "Puck", "Charon", "Aoede", "Fenrir", "Zephyr")
 

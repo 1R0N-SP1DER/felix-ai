@@ -349,6 +349,12 @@ class LiveTest {
         assertEquals("Live mode could not start: the microphone permission is not granted", r.states.last())
     }
 
+    @Test fun theDefaultLiveModelIsInThePickerAndFirst() {
+        assertEquals(LiveProtocol.DEFAULT_MODEL, LiveProtocol.MODELS.first().first)
+        assertEquals(LiveProtocol.MODELS.size, LiveProtocol.MODELS.map { it.first }.toSet().size)
+        assertTrue(LiveProtocol.MODELS.none { it.second.length > 10 })
+    }
+
     @Test fun theInstructionAddsHowSpeechDiffers() {
         val i = LiveSession.instruction("Felix", "", listOf("battery"))
         assertTrue(i.contains("talking out loud"))
