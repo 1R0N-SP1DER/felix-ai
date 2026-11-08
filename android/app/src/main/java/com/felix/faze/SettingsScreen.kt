@@ -245,6 +245,7 @@ private fun VoiceSlider(value: Float, onChange: (Float) -> Unit) {
 @Composable
 private fun AgentTab(core: FazeCore) {
     var powered by remember { mutableStateOf(core.settings.allowPowered) }
+    var liveVoice by remember { mutableStateOf(core.settings.liveVoice) }
     SettingsCard("Approval mode") {
         Seg(listOf("ask" to "Ask", "yolo" to "Yolo", "off" to "Off"), "ask", soonValues = setOf("yolo", "off")) {}
         Hint("Ask: tools that read or change what you copied wait for your yes. In the app, the clipboard tools always ask first.")
@@ -259,6 +260,13 @@ private fun AgentTab(core: FazeCore) {
             Text("Allow", color = Palette.Accent, modifier = Modifier.clickable {
                 if (Build.VERSION.SDK_INT >= 30) ctx.startActivity(Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:" + ctx.packageName)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }.padding(8.dp))
+        }
+    }
+    SettingsCard("Live voice") {
+        Seg(LiveProtocol.VOICES.map { it to it }, liveVoice, small = true) { liveVoice = it; core.settings.liveVoice = it }
+        Hint("A spoken conversation with Gemini Live. With headphones you can talk over it; without them the mic is muted while it speaks. Keep the app open: Android silences the mic of a background app.")
+        SettingRow("Live mode", core.liveState.ifEmpty { "Off" }, last = true) {
+            Text(if (core.liveOn) "Stop" else "Start", color = Palette.Accent, modifier = Modifier.clickable { if (core.liveOn) core.stopLive() else core.startLive() }.padding(8.dp))
         }
     }
     SavedToolsCard(core)

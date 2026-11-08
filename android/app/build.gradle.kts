@@ -67,6 +67,7 @@ dependencies {
     implementation("com.alphacephei:vosk-android:0.3.47")
     // runs the JavaScript of tools the assistant makes, in a sandbox with no way out to Java
     implementation("org.mozilla:rhino:1.7.15")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
