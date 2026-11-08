@@ -20,7 +20,7 @@ class AndroidPowers(private val context: Context) : PowerHost {
     /** Runs a program and returns its exit code and output. Output is read on a helper thread so a stuck process can be stopped on time. */
     private fun exec(argv: List<String>, timeoutMs: Long, mergeErrors: Boolean): Pair<Int, ByteArray> {
         val pb = ProcessBuilder(argv)
-        if (mergeErrors) pb.redirectErrorStream(true) else pb.redirectError(ProcessBuilder.Redirect.DISCARD)
+        if (mergeErrors) pb.redirectErrorStream(true) else pb.redirectError(File("/dev/null"))
         pb.environment().remove("LD_PRELOAD")
         pb.environment().remove("LD_LIBRARY_PATH")
         val p = pb.start()

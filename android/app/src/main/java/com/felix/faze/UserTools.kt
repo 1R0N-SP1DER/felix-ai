@@ -101,7 +101,7 @@ class ToolStore(private val file: File, private val now: () -> Long = { System.c
 }
 
 /** Ties the store and the sandbox to the tool list the model sees. */
-class UserTools(private val store: ToolStore, private val sandbox: JsSandbox, private val reserved: () -> Set<String>, private val poweredAllowed: () -> Boolean = { true }) {
+class UserTools(private val store: ToolStore, private val sandbox: JsSandbox, private val poweredAllowed: () -> Boolean = { true }, private val reserved: () -> Set<String>) {
     companion object { const val POWERS_OFF = "higher-level tools are turned off (Settings > Agent > Allow higher-level tools)" }
 
     fun has(name: String): Boolean = store.has(name)
