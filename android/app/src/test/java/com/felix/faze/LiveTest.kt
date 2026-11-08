@@ -223,6 +223,8 @@ class LiveTest {
         val played = ArrayList<Int>()
         var flushed = 0
         var stopped = 0
+        var busy = false
+        override fun isBusy() = busy
         override fun play(pcm: ByteArray) { played.add(pcm.size) }
         override fun flush() { flushed++ }
         override fun stop() { stopped++ }
@@ -347,6 +349,30 @@ class LiveTest {
         assertFalse(r.session.isRunning())
         assertTrue(r.script.sockets[0].closed)
         assertEquals("Live mode could not start: the microphone permission is not granted", r.states.last())
+    }
+
+    @Test fun mutingStopsTheMicFromBeingSent() {
+        val r = rig()
+        assertNull(r.session.start())
+        val before = r.script.sockets[0].sent.size
+        r.session.muted = true
+        r.mic.onChunk!!(byteArrayOf(1))
+        assertEquals(before, r.script.sockets[0].sent.size)
+        r.session.muted = false
+        r.mic.onChunk!!(byteArrayOf(1))
+        assertEquals(before + 1, r.script.sockets[0].sent.size)
+    }
+
+    @Test fun speakingCoversTheModelAndWhatTheSpeakerIsStillPlaying() {
+        val r = rig()
+        assertNull(r.session.start())
+        assertFalse(r.session.isSpeaking())
+        push(r, audioMsg)
+        assertTrue(r.session.isSpeaking())
+        push(r, """{"serverContent":{"turnComplete":true}}""")
+        assertFalse(r.session.isSpeaking())
+        r.speaker.busy = true
+        assertTrue(r.session.isSpeaking())
     }
 
     @Test fun theDefaultLiveModelIsInThePickerAndFirst() {

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -105,18 +106,21 @@ private fun blendOver(top: Color, bottom: Color): Color {
 }
 
 /**
- * The message box of the web UI (#composer): a rounded glass card with the "+" button, the text area, mic and send. While it has
- * focus or text the card "opens" and shows the Attach / Tools / model row under the text.
+ * The message box (the look of #composer, with the buttons redone): text on top; under it "+" on the left and, on the right, the mic with
+ * its menu arrow and one action button that changes with the box: the Live button while it is empty, the send button (a rounded square)
+ * once there is text, and a stop square while a reply is being written. While the box has focus or text it "opens" and shows the
+ * Attach / Tools / model row.
  */
 @Composable
 fun Composer(
     value: String, focus: FocusRequester, onValue: (String) -> Unit, recording: Boolean, busy: Boolean,
-    onSend: () -> Unit, onMic: () -> Unit, onPlus: () -> Unit, onTools: () -> Unit, onModel: () -> Unit, onHeight: (Dp) -> Unit,
+    onSend: () -> Unit, onMic: () -> Unit, onMicMenu: () -> Unit, onLive: () -> Unit,
+    onPlus: () -> Unit, onTools: () -> Unit, onModel: () -> Unit, onHeight: (Dp) -> Unit,
 ) {
     val context = LocalContext.current
     var focused by remember { mutableStateOf(false) }
     val open = focused || value.isNotEmpty()
-    val shape = RoundedCornerShape(24.dp)
+    val shape = RoundedCornerShape(28.dp)
     val border = if (open) blendOver(Palette.Accent.copy(alpha = 0.45f), Palette.Line2.copy(alpha = 1f)) else Palette.Line
     val density = androidx.compose.ui.platform.LocalDensity.current
     Column(
@@ -128,38 +132,61 @@ fun Composer(
             .background(Palette.Glass)
             .border(1.dp, border, shape),
     ) {
-        Row(modifier = Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Box(
-                modifier = Modifier.size(38.dp).clip(CircleShape).border(1.dp, Palette.Line, CircleShape).clickable { onPlus() },
-                contentAlignment = Alignment.Center,
-            ) { Text("+", color = Palette.Dim, fontSize = 22.sp) }
-            Box(modifier = Modifier.weight(1f).padding(horizontal = 4.dp, vertical = 8.dp)) {
-                if (value.isEmpty()) Text("Ask FAZE anything...", color = Palette.Muted, fontSize = 16.sp)
-                BasicTextField(
-                    value = value,
-                    onValueChange = onValue,
-                    textStyle = TextStyle(color = Palette.Text, fontSize = 16.sp, lineHeight = 24.sp),
-                    cursorBrush = SolidColor(Palette.Accent),
-                    maxLines = 5,
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 140.dp).focusRequester(focus).onFocusChanged { focused = it.isFocused },
-                )
+        Box(modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 6.dp)) {
+            if (value.isEmpty()) Text("Ask FAZE anything...", color = Palette.Muted, fontSize = 17.sp)
+            BasicTextField(
+                value = value,
+                onValueChange = onValue,
+                textStyle = TextStyle(color = Palette.Text, fontSize = 17.sp, lineHeight = 24.sp),
+                cursorBrush = SolidColor(Palette.Accent),
+                maxLines = 5,
+                modifier = Modifier.fillMaxWidth().heightIn(max = 140.dp).focusRequester(focus).onFocusChanged { focused = it.isFocused },
+            )
+        }
+        Row(modifier = Modifier.fillMaxWidth().padding(start = 10.dp, end = 12.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(modifier = Modifier.size(44.dp).clip(CircleShape).clickable { onPlus() }, contentAlignment = Alignment.Center) { FazeIcon(Ico.PLUS, Palette.Dim, 24.dp) }
+            Spacer(Modifier.weight(1f))
+            if (recording) Text("Done", color = Palette.Warn, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(end = 2.dp))
+            Box(modifier = Modifier.size(44.dp).clip(CircleShape).clickable { onMic() }, contentAlignment = Alignment.Center) {
+                FazeIcon(Ico.MIC, if (recording) Palette.Warn else Palette.Text, 24.dp)
             }
-            Box(
-                modifier = Modifier.size(38.dp).clip(CircleShape).border(1.dp, if (recording) Palette.Warn else Palette.Line, CircleShape).clickable { onMic() },
-                contentAlignment = Alignment.Center,
-            ) { Text(if (recording) "Done" else "🎤", color = if (recording) Palette.Warn else Palette.Dim, fontSize = if (recording) 11.sp else 16.sp) }
-            Box(
-                modifier = Modifier.size(38.dp).clip(CircleShape).background(accentGradient()).clickable { onSend() },
-                contentAlignment = Alignment.Center,
-            ) { Text(if (busy) "■" else "↑", color = Palette.AccentInk, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold) }
+            Box(modifier = Modifier.size(width = 28.dp, height = 44.dp).clip(CircleShape).clickable { onMicMenu() }, contentAlignment = Alignment.Center) {
+                FazeIcon(Ico.CHEVRON, Palette.Muted, 16.dp)
+            }
+            Spacer(Modifier.size(6.dp))
+            when {
+                busy -> ActionSquare(Ico.STOP) { onSend() }
+                value.isNotBlank() -> ActionSquare(Ico.ARROW_UP) { onSend() }
+                else -> Box(modifier = Modifier.size(44.dp).clip(CircleShape).clickable { onLive() }, contentAlignment = Alignment.Center) {
+                    FazeIcon(Ico.WAVE, Palette.Text, 26.dp)
+                }
+            }
         }
         AnimatedVisibility(visible = open, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
-            Row(modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 ToolChip("📎", "Attach", soon = true) { soonToast(context) }
                 ToolChip("⚙", "Tools") { onTools() }
                 ToolChip("◎", ModelSheet.label(AppSettings(context).provider), accentGlyph = true) { onModel() }
             }
         }
+    }
+}
+
+/** The send / stop button: a rounded square in the accent colors. */
+@Composable
+private fun ActionSquare(icon: Ico, onClick: () -> Unit) {
+    val square = RoundedCornerShape(14.dp)
+    Box(modifier = Modifier.size(46.dp).clip(square).background(accentGradient()).clickable { onClick() }, contentAlignment = Alignment.Center) {
+        FazeIcon(icon, Palette.AccentInk, 24.dp)
+    }
+}
+
+/** The menu behind the arrow next to the mic: the two spoken conversations. */
+@Composable
+fun MicMenu(visible: Boolean, bottomPad: Dp, onDismiss: () -> Unit, onVoiceChat: () -> Unit, onLive: () -> Unit) {
+    PopMenu(visible, Alignment.BottomEnd, bottomPad, onDismiss, 230.dp) {
+        MenuItem("Voice chat", "Whisper") { onDismiss(); onVoiceChat() }
+        MenuItem("Live voice", "Gemini") { onDismiss(); onLive() }
     }
 }
 

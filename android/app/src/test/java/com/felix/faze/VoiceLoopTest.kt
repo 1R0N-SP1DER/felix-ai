@@ -196,6 +196,27 @@ class VoiceLoopTest {
         assertEquals(1, r.host.asked.size)
     }
 
+    // ---- mute
+
+    @Test fun aMutedMicCapturesNothingButTheLoopCarriesOn() {
+        val r = rig()
+        r.loop.muted = true
+        talk(r.mic)
+        assertTrue(r.host.wavs.isEmpty())
+        r.loop.muted = false
+        talk(r.mic)
+        assertEquals(1, r.host.asked.size)
+    }
+
+    @Test fun fillerPhrasesStillComeWhileMuted() {
+        val r = rig()
+        talk(r.mic)
+        r.host.busy = true
+        r.loop.muted = true
+        feed(r.mic, false, 8)
+        assertEquals(1, r.host.said.size)
+    }
+
     // ---- starting and stopping
 
     @Test fun stoppingWhileTranscribingDropsTheResult() {

@@ -1,12 +1,14 @@
 package com.felix.faze
 
 import android.app.Application
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import java.io.File
 import java.util.concurrent.Executors
 
@@ -76,6 +78,16 @@ class FazeCore(private val app: Application) : EngineListener {
     private val broker = ApprovalBroker({ block -> main.post { block() } }, 60) { approval = it }
     private val engine: ChatEngine
     private lateinit var gatedTools: ToolRunner
+    private lateinit var liveTools: ToolRunner
+
+    /** The listening bar and the bubble: the mic level while listening, the output level while it speaks (0..1). */
+    var micLevel by mutableStateOf(0f)
+    var outLevel by mutableStateOf(0f)
+    var micMuted by mutableStateOf(false)
+
+    /** Whether the app is on screen. When it is not and a conversation is going, the floating bubble shows. */
+    @Volatile var appVisible = true
+    @Volatile private var serviceUp = false
 
     /** Voice chat (you talk, Whisper listens, the chat answers aloud): whether it is on, and its one-line state for Settings. */
     var voiceOn by mutableStateOf(false)
@@ -115,7 +127,10 @@ class FazeCore(private val app: Application) : EngineListener {
         )
         val tools = GatedTools(Tools(AndroidDevice(app), transport, settings, memory, userTools), broker) { name -> if (userTools.has(name)) Tier.SAFE else null }
         gatedTools = tools
-        engine = ChatEngine(Agent(client, tools), object : EngineConfig by settings {
+        // A tool that takes over the screen waits for the assistant to finish speaking, unless the bubble keeps the conversation going outside the app.
+        val speakingNow = { speaker.isSpeaking() || (live?.isSpeaking() ?: false) }
+        liveTools = SpeechAwareTools(tools, { true }, speakingNow, { bubbleReady() })
+        engine = ChatEngine(Agent(client, SpeechAwareTools(tools, { voiceActive }, speakingNow, { bubbleReady() })), object : EngineConfig by settings {
             override fun memoryBlock(): String = if (settings.useMemory) memory.promptBlock(settings.user) else ""
             override fun speak(): Boolean = settings.speakReplies || voiceActive
         }, speaker, { block -> main.post { block() } }, executor, messages, this)
@@ -341,11 +356,49 @@ class FazeCore(private val app: Application) : EngineListener {
         handlePcm(pcm)
     }
 
+    /** The conversation can carry on outside the app: the service is up and the bubble may be drawn. */
+    private fun bubbleReady(): Boolean = serviceUp && android.provider.Settings.canDrawOverlays(app)
+
+    /** A microphone foreground service keeps the conversation alive when the app is left. It has to be started while the app is on screen. */
+    private fun startLiveService() {
+        try {
+            ContextCompat.startForegroundService(app, Intent(app, LiveService::class.java))
+            serviceUp = true
+        } catch (e: Exception) {
+            serviceUp = false
+            status = "It can't keep going outside the app: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    private fun stopLiveServiceIfIdle() {
+        if (!liveOn && !voiceOn && serviceUp) {
+            app.stopService(Intent(app, LiveService::class.java))
+            serviceUp = false
+        }
+    }
+
+    /** Mute: the mic stays open (the bar shows it) but nothing is heard. */
+    fun toggleMute() {
+        micMuted = !micMuted
+        live?.muted = micMuted
+        voiceLoop?.muted = micMuted
+        if (micMuted) micLevel = 0f
+    }
+
+    /** The close button of the live screen: hangs up whichever conversation is going. */
+    fun closeLiveScreen() {
+        stopLive()
+        stopVoiceChat()
+    }
+
     private fun voiceEnded() {
         voiceOn = false
         voiceActive = false
         voiceLoop = null
+        micLevel = 0f
+        outLevel = 0f
         listenControl?.resume()
+        stopLiveServiceIfIdle()
     }
 
     /** What the person said goes to the chat as soon as it is free (a reply that was just talked over may still be winding down). */
@@ -359,7 +412,9 @@ class FazeCore(private val app: Application) : EngineListener {
         if (settings.groqKey.isEmpty()) { voiceState = "Voice chat needs a Groq key (Whisper listens)"; return }
         voiceOn = true
         voiceActive = true
+        micMuted = false
         voiceState = "Starting…"
+        startLiveService()
         liveStarter.execute {
             listenControl?.pause()
             val host = object : VoiceHost {
@@ -370,13 +425,18 @@ class FazeCore(private val app: Application) : EngineListener {
                 override fun speaking(): Boolean = speaker.isSpeaking()
                 override fun replyStarted(): Boolean = messages.lastOrNull()?.let { it.role == "assistant" && it.text.isNotEmpty() } ?: false
                 override fun say(phrase: String) { speaker.speak(phrase) }
-                override fun status(text: String) { main.post { voiceState = text } }
+                override fun status(text: String) {
+                    main.post {
+                        voiceState = text
+                        if (text.startsWith("Voice chat could not") || text.startsWith("Could not transcribe")) this@FazeCore.status = text
+                    }
+                }
                 override fun bargeIn(): Boolean = headphonesConnected(app)
             }
             val fast = ModelFiller(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq"), settings.fillerModel, { settings.groqKey.isNotEmpty() }, fillerWorker)
             val loop = VoiceLoop(host, voiceWorker, fast, fillerWorker, fillersOn = { settings.voiceFillers })
             voiceLoop = loop
-            val failed = loop.start(AndroidLiveMic(app))
+            val failed = loop.start(AndroidLiveMic(app) { l -> main.post { micLevel = if (micMuted) 0f else l } })
             if (failed != null) main.post { voiceState = "Voice chat could not start: $failed"; voiceEnded() }
         }
     }
@@ -389,7 +449,10 @@ class FazeCore(private val app: Application) : EngineListener {
     private fun liveEnded() {
         liveOn = false
         live = null
+        micLevel = 0f
+        outLevel = 0f
         listenControl?.resume()
+        stopLiveServiceIfIdle()
     }
 
     /** Starts live mode. The wake-word listener is paused meanwhile (one microphone). The outcome shows in [liveState]. */
@@ -397,16 +460,23 @@ class FazeCore(private val app: Application) : EngineListener {
         if (live != null) return
         if (settings.geminiKey.isEmpty()) { liveState = "Live mode needs a Gemini key"; return }
         liveOn = true
+        micMuted = false
         liveState = "Connecting…"
+        startLiveService()
         liveStarter.execute {
             listenControl?.pause()
-            val schema = gatedTools.schema()
+            val schema = liveTools.schema()
             val names = (0 until schema.length()).map { schema.getJSONObject(it).getJSONObject("function").getString("name") }
             val session = LiveSession(
                 OkHttpLiveConnector(), settings.geminiKey, settings.liveModel, settings.liveVoice, true,
                 LiveSession.instruction(settings.user, if (settings.useMemory) memory.promptBlock(settings.user) else "", names),
-                gatedTools, AndroidLiveMic(app), AndroidLiveSpeaker(), liveWorker,
-                { text -> main.post { liveState = text } }, { _, _ -> },
+                liveTools, AndroidLiveMic(app) { l -> main.post { micLevel = if (micMuted) 0f else l } }, AndroidLiveSpeaker { l -> main.post { outLevel = l } }, liveWorker,
+                { text ->
+                    main.post {
+                        liveState = text
+                        if (text.startsWith("Live mode could not") || text.startsWith("Live mode ended")) status = text
+                    }
+                }, { _, _ -> },
                 { main.post { liveEnded() } },
                 { !headphonesConnected(app) },
             )

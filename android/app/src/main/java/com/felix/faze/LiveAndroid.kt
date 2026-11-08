@@ -26,7 +26,7 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 
 /** The real microphone for live mode: 16 kHz mono PCM in 100 ms chunks, with the phone's echo canceller and noise suppressor when it has them. */
-class AndroidLiveMic(private val context: Context) : LiveAudioIn {
+class AndroidLiveMic(private val context: Context, private val onLevel: (Float) -> Unit = {}) : LiveAudioIn {
     @Volatile private var recorder: AudioRecord? = null
     @Volatile private var active = false
     private var echo: AcousticEchoCanceler? = null
@@ -55,7 +55,7 @@ class AndroidLiveMic(private val context: Context) : LiveAudioIn {
             val buf = ByteArray(chunk)
             while (active) {
                 val n = rec.read(buf, 0, buf.size)
-                if (n > 0) onChunk(buf.copyOf(n)) else if (n < 0) break
+                if (n > 0) { val chunkBytes = buf.copyOf(n); onLevel(MicLevel.of(chunkBytes)); onChunk(chunkBytes) } else if (n < 0) break
             }
         }.also { it.name = "live-mic"; it.isDaemon = true }.start()
         return null
@@ -76,8 +76,9 @@ class AndroidLiveMic(private val context: Context) : LiveAudioIn {
 }
 
 /** The real speaker for live mode: 24 kHz mono PCM written by one thread, so the websocket thread never waits on the speaker. */
-class AndroidLiveSpeaker : LiveAudioOut {
+class AndroidLiveSpeaker(private val onLevel: (Float) -> Unit = {}) : LiveAudioOut {
     private val queue = LinkedBlockingQueue<ByteArray>()
+    @Volatile private var lastWriteNs = 0L
     @Volatile private var track: AudioTrack? = null
     @Volatile private var alive = true
 
@@ -98,12 +99,16 @@ class AndroidLiveSpeaker : LiveAudioOut {
             Thread {
                 while (alive) {
                     val data = try { queue.take() } catch (e: InterruptedException) { break }
+                    onLevel(MicLevel.of(data))
                     try { t.write(data, 0, data.size) } catch (_: Exception) {}
+                    lastWriteNs = System.nanoTime()
                 }
             }.also { it.name = "live-speaker"; it.isDaemon = true }.start()
             return t
         }
     }
+
+    override fun isBusy(): Boolean = queue.isNotEmpty() || (lastWriteNs != 0L && System.nanoTime() - lastWriteNs < 600_000_000L)
 
     override fun play(pcm: ByteArray) {
         ensure()
