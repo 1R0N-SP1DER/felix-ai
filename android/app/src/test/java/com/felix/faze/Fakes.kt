@@ -128,6 +128,7 @@ class FakeDevice : DeviceApi {
     override fun readClipboard() = hit("clip-read", "hello")
     override fun writeClipboard(text: String) = hit("clip-write:$text", "Copied to the clipboard.")
     override fun vibrate() = hit("vibrate", "Vibrated.")
+    override fun readScreen() = hit("screen", "Screen 1080x2400, app in front: com.example.app")
 }
 
 class FakeSettings(var tavily: String = "tvly-test", var city: String = "") : ToolSettings {

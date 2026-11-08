@@ -21,7 +21,7 @@ class ToolsTest {
     fun theSchemaListsEveryToolWithItsParameters() {
         assertEquals(
             listOf("get_current_datetime", "get_battery_status", "set_volume", "get_wifi_status", "read_clipboard", "write_clipboard", "vibrate",
-                "search_web", "open_url", "open_app", "list_apps", "get_weather"),
+                "search_web", "open_url", "open_app", "list_apps", "get_weather", "read_screen"),
             tools.names(),
         )
         val schema = tools.schema()
@@ -42,6 +42,12 @@ class ToolsTest {
         assertEquals("hello", run("read_clipboard").text)
         assertEquals("Vibrated.", run("vibrate").text)
         assertTrue(run("get_current_datetime").text.startsWith("Wednesday"))
+    }
+
+    @Test
+    fun readScreenAsksThePhone() {
+        assertEquals("Screen 1080x2400, app in front: com.example.app", run("read_screen").text)
+        assertTrue(device.log.contains("screen"))
     }
 
     @Test

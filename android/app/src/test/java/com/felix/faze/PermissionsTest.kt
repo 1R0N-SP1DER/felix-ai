@@ -33,6 +33,15 @@ class PermissionsTest {
         assertEquals(10, tools.executed.size)
     }
 
+    @Test fun readingTheScreenWaitsForAnAnswer() {
+        val ask = Ask(true)
+        assertTrue(gate(ask).execute("read_screen", JSONObject()).ok)
+        assertEquals(listOf("read_screen"), ask.asked.map { it.first })
+        val no = Ask(false)
+        assertFalse(gate(no).execute("read_screen", JSONObject()).ok)
+        assertEquals(Tier.CONFIRM, PermissionPolicy.tier("read_screen"))
+    }
+
     @Test fun clipboardToolsWaitForAnAnswer() {
         val ask = Ask(true)
         assertTrue(gate(ask).execute("read_clipboard", JSONObject()).ok)

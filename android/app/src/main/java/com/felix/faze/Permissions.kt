@@ -21,6 +21,7 @@ object PermissionPolicy {
         "open_url" to Tier.SAFE,
         "open_app" to Tier.SAFE,
         "list_apps" to Tier.SAFE,
+        "read_screen" to Tier.CONFIRM,
         "get_weather" to Tier.SAFE,
         "remember" to Tier.CONFIRM,
         "recall" to Tier.SAFE,
@@ -36,6 +37,7 @@ object PermissionPolicy {
 
     fun summary(tool: String, args: JSONObject): String = when (tool) {
         "read_clipboard" -> "Read what is on your clipboard and show it to the model"
+        "read_screen" -> "Read what is on your screen and show it to the model"
         "write_clipboard" -> "Put this on your clipboard: " + args.optString("text", "").replace('\n', ' ').take(80)
         "remember" -> "Remember this" + (args.optString("category", "").trim().let { if (it.isEmpty()) "" else " [$it]" }) + ": " + args.optString("fact", "").replace('\n', ' ').take(120)
         "create_tool" -> "Create the tool ${args.optString("name")}${powersOf(args).let { if (it.isEmpty()) "" else " (powers: $it)" }}: ${args.optString("description").replace('\n', ' ').take(120)}"
