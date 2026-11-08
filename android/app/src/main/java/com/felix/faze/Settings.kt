@@ -54,6 +54,15 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getBoolean("allow_powered", true)
         set(value) = prefs.edit().putBoolean("allow_powered", value).apply()
 
+    /** Voice chat: whether a short phrase covers a slow answer, and the small fast Groq model that writes it. */
+    var voiceFillers: Boolean
+        get() = prefs.getBoolean("voice_fillers", true)
+        set(value) = prefs.edit().putBoolean("voice_fillers", value).apply()
+
+    var fillerModel: String
+        get() = text("filler_model").ifEmpty { ModelFiller.DEFAULT_MODEL }
+        set(value) = put("filler_model", value)
+
     /** The Gemini Live model and the voice it speaks with (Settings > Agent > Live voice). */
     var liveModel: String
         get() = text("live_model").ifEmpty { LiveProtocol.DEFAULT_MODEL }

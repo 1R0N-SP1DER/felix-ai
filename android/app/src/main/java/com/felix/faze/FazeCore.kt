@@ -77,6 +77,14 @@ class FazeCore(private val app: Application) : EngineListener {
     private val engine: ChatEngine
     private lateinit var gatedTools: ToolRunner
 
+    /** Voice chat (you talk, Whisper listens, the chat answers aloud): whether it is on, and its one-line state for Settings. */
+    var voiceOn by mutableStateOf(false)
+    var voiceState by mutableStateOf("")
+    @Volatile private var voiceLoop: VoiceLoop? = null
+    @Volatile private var voiceActive = false // replies are spoken while voice chat is on, whatever "Speak replies aloud" says
+    private val voiceWorker = Executors.newSingleThreadExecutor()
+    private val fillerWorker = Executors.newCachedThreadPool()
+
     /** Live mode (a spoken conversation with Gemini Live): whether it is on, and its one-line state for Settings. */
     var liveOn by mutableStateOf(false)
     var liveState by mutableStateOf("")
@@ -109,6 +117,7 @@ class FazeCore(private val app: Application) : EngineListener {
         gatedTools = tools
         engine = ChatEngine(Agent(client, tools), object : EngineConfig by settings {
             override fun memoryBlock(): String = if (settings.useMemory) memory.promptBlock(settings.user) else ""
+            override fun speak(): Boolean = settings.speakReplies || voiceActive
         }, speaker, { block -> main.post { block() } }, executor, messages, this)
         speaker.setVoice(settings.voiceRate, settings.voicePitch)
         Palette.setAccent(Accents.byName(settings.accent))
@@ -330,6 +339,51 @@ class FazeCore(private val app: Application) : EngineListener {
         val pcm = recorder.stop()
         listenControl?.resume()
         handlePcm(pcm)
+    }
+
+    private fun voiceEnded() {
+        voiceOn = false
+        voiceActive = false
+        voiceLoop = null
+        listenControl?.resume()
+    }
+
+    /** What the person said goes to the chat as soon as it is free (a reply that was just talked over may still be winding down). */
+    private fun sendWhenFree(text: String, tries: Int = 30) {
+        if (!engine.isBusy()) send(text) else if (tries > 0) main.postDelayed({ sendWhenFree(text, tries - 1) }, 100)
+    }
+
+    /** Starts voice chat. The wake-word listener is paused meanwhile (one microphone). The outcome shows in [voiceState]. */
+    fun startVoiceChat() {
+        if (voiceLoop != null) return
+        if (settings.groqKey.isEmpty()) { voiceState = "Voice chat needs a Groq key (Whisper listens)"; return }
+        voiceOn = true
+        voiceActive = true
+        voiceState = "Starting…"
+        liveStarter.execute {
+            listenControl?.pause()
+            val host = object : VoiceHost {
+                override fun transcribe(wav: ByteArray): String = stt.transcribe(wav)
+                override fun ask(text: String) { main.post { sendWhenFree(text) } }
+                override fun interrupt() { main.post { engine.stop() } }
+                override fun engineBusy(): Boolean = busy
+                override fun speaking(): Boolean = speaker.isSpeaking()
+                override fun replyStarted(): Boolean = messages.lastOrNull()?.let { it.role == "assistant" && it.text.isNotEmpty() } ?: false
+                override fun say(phrase: String) { speaker.speak(phrase) }
+                override fun status(text: String) { main.post { voiceState = text } }
+                override fun bargeIn(): Boolean = headphonesConnected(app)
+            }
+            val fast = ModelFiller(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq"), settings.fillerModel, { settings.groqKey.isNotEmpty() }, fillerWorker)
+            val loop = VoiceLoop(host, voiceWorker, fast, fillerWorker, fillersOn = { settings.voiceFillers })
+            voiceLoop = loop
+            val failed = loop.start(AndroidLiveMic(app))
+            if (failed != null) main.post { voiceState = "Voice chat could not start: $failed"; voiceEnded() }
+        }
+    }
+
+    fun stopVoiceChat() {
+        val l = voiceLoop ?: return
+        liveStarter.execute { l.stop(); main.post { voiceEnded() } }
     }
 
     private fun liveEnded() {
