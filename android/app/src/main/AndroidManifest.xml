@@ -43,6 +43,11 @@
             android:foregroundServiceType="microphone" />
 
         <service
+            android:name=".LiveService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <service
             android:name=".FazeAccessibilityService"
             android:exported="true"
             android:label="Faze volume buttons"

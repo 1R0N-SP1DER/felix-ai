@@ -30,7 +30,7 @@ class LiveVoice(unittest.TestCase):
         # the same retry rule and the same four setup attempts
         self.assertIn("unknown name|invalid json|invalid argument|cannot find field|unsupported|not supported", k)
         self.assertIn('"generation" to true, "flat" to true, "generation" to false, "flat" to false', k)
-        self.assertIn('DEFAULT_MODEL = "gemini-3.1-flash-live-preview"', k)  # a model with a free tier
+        self.assertIn('DEFAULT_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"', k)  # the one that works on a free key
 
     def test_the_key_is_scrubbed_from_errors(self):
         c = read(KT, "LiveClient.kt")
@@ -48,13 +48,15 @@ class LiveVoice(unittest.TestCase):
     def test_tool_calls_go_through_the_same_gate_as_chat(self):
         core = read(KT, "FazeCore.kt")
         self.assertIn("gatedTools = tools", core)
-        self.assertRegex(core, r"LiveSession\(\s*OkHttpLiveConnector\(\)[^)]*\n[^\n]*\n\s*gatedTools,")
+        self.assertRegex(core, r"LiveSession\(\s*OkHttpLiveConnector\(\)[^)]*\n[^\n]*\n\s*liveTools,")
         self.assertIn("tools.execute(c.name, c.args)", read(KT, "LiveSession.kt"))
 
     def test_wake_word_listener_is_paused_while_live(self):
         core = read(KT, "FazeCore.kt")
-        self.assertIn("listenControl?.pause()", core[core.index("fun startLive"):])
-        self.assertIn("listenControl?.resume()", core[core.index("private fun liveEnded"):core.index("fun startLive")])
+        live = core[core.index("fun startLive()"):]
+        live = live[:live.index("\n    fun ", 10)]
+        self.assertIn("listenControl?.pause()", live)
+        self.assertIn("listenControl?.resume()", core[core.index("private fun liveEnded"):][:600])
 
     def test_no_echo_loop_without_headphones(self):
         s = read(KT, "LiveSession.kt")
@@ -78,8 +80,8 @@ class LiveVoice(unittest.TestCase):
 
     def test_the_live_model_can_be_picked_and_the_default_has_a_free_tier(self):
         k = read(KT, "LiveProtocol.kt")
-        self.assertIn('DEFAULT_MODEL to "3.1 Live"', k)
-        self.assertIn('"gemini-2.5-flash-native-audio-preview-12-2025" to "2.5 Audio"', k)
+        self.assertIn('DEFAULT_MODEL to "2.5 Audio"', k)
+        self.assertIn('"gemini-3.1-flash-live-preview" to "3.1 Live"', k)
         self.assertIn('"gemini-3.8-live" to "3.8 Live"', k)
         s = read(KT, "SettingsScreen.kt")
         self.assertIn("Seg(LiveProtocol.MODELS, liveModel", s)
@@ -88,8 +90,8 @@ class LiveVoice(unittest.TestCase):
     def test_settings_card_and_voices(self):
         s = read(KT, "SettingsScreen.kt")
         self.assertIn('SettingsCard("Live voice")', s)
-        self.assertIn("core.startLive()", s)
-        self.assertIn("core.stopLive()", s)
+        self.assertIn("core.startLive()", read(KT, "ChatScreen.kt"))  # started from the chat, not from Settings
+        self.assertNotIn("core.startLive()", s)
         st = read(KT, "Settings.kt")
         self.assertIn('text("live_model").ifEmpty { LiveProtocol.DEFAULT_MODEL }', st)
         self.assertIn("LiveProtocol.VOICES", st)

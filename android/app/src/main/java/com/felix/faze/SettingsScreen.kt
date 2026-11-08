@@ -266,19 +266,13 @@ private fun AgentTab(core: FazeCore) {
     }
     SettingsCard("Voice chat") {
         SettingRow("Filler phrases", "A short phrase like \"let me look that up\" while a slow answer is on its way") { FazeSwitch(fillers, { fillers = it; core.settings.voiceFillers = it }) }
-        Hint("Talk and it answers out loud. Groq Whisper does the listening. With headphones you can talk over it; without them the mic waits until it has finished. Keep the app open.")
-        SettingRow("Voice chat", core.voiceState.ifEmpty { "Off" }, last = true) {
-            Text(if (core.voiceOn) "Stop" else "Start", color = Palette.Accent, modifier = Modifier.clickable { if (core.voiceOn) core.stopVoiceChat() else core.startVoiceChat() }.padding(8.dp))
-        }
+        Hint("Start it from the arrow next to the mic in the chat. Talk and it answers out loud; Groq Whisper does the listening. With headphones you can talk over it; without them the mic waits until it has finished. It keeps going outside the app in a floating bubble (needs the overlay permission).")
     }
     SettingsCard("Live voice") {
         Seg(LiveProtocol.MODELS, liveModel, small = true) { liveModel = it; core.settings.liveModel = it }
-        Hint("3.1 Live and 2.5 Audio have a free tier. 3.8 Live may need a paid Google plan (a quota error means the model has no free quota for your key).")
+        Hint("Start it with the waveform button in the chat. 2.5 Audio is the one that works on a free key; 3.1 and 3.8 can answer \"quota exceeded\".")
         Seg(LiveProtocol.VOICES.map { it to it }, liveVoice, small = true) { liveVoice = it; core.settings.liveVoice = it }
-        Hint("A spoken conversation with Gemini Live. With headphones you can talk over it; without them the mic is muted while it speaks. Keep the app open: Android silences the mic of a background app.")
-        SettingRow("Live mode", core.liveState.ifEmpty { "Off" }, last = true) {
-            Text(if (core.liveOn) "Stop" else "Start", color = Palette.Accent, modifier = Modifier.clickable { if (core.liveOn) core.stopLive() else core.startLive() }.padding(8.dp))
-        }
+        Hint("A spoken conversation with Gemini Live. With headphones you can talk over it; without them the mic is muted while it speaks.")
     }
     SavedToolsCard(core)
     SettingsCard("Saved tasks") {

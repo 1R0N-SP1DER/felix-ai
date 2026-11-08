@@ -16,6 +16,9 @@ interface LiveAudioOut {
     /** Silence now and drop what is queued (the person talked over it). */
     fun flush()
     fun stop()
+
+    /** Whether sound is still queued or playing (the model may be done sending but the phone is still talking). */
+    fun isBusy(): Boolean = false
 }
 
 /**
@@ -44,7 +47,13 @@ class LiveSession(
     @Volatile private var running = false
     @Volatile private var speaking = false
 
+    /** The mic stays open (the screen shows it) but nothing is sent while muted. */
+    @Volatile var muted = false
+
     fun isRunning(): Boolean = running
+
+    /** Whether the model is talking or the phone is still playing it. */
+    fun isSpeaking(): Boolean = speaking || speaker.isBusy()
 
     /** Blocks while connecting. Null when live mode is on, otherwise why it is not. */
     fun start(): String? {
@@ -61,7 +70,7 @@ class LiveSession(
             return failed
         }
         running = true
-        val micFailed = mic.start { chunk -> if (running && !(speaking && halfDuplex())) c.sendAudio(chunk) }
+        val micFailed = mic.start { chunk -> if (running && !muted && !(speaking && halfDuplex())) c.sendAudio(chunk) }
         if (micFailed != null) {
             stop()
             status("Live mode could not start: $micFailed")

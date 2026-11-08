@@ -72,6 +72,18 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit, onSettings: () -> Unit) {
         if (granted) core.startRecording()
     }
 
+    // Voice chat and live voice need the microphone too: ask once, then carry on with what was tapped.
+    var afterPermission by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val spokenPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) afterPermission?.invoke() else core.reportStatus("Allow the microphone to talk with Faze")
+        afterPermission = null
+    }
+    val withMic = { action: () -> Unit ->
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) action()
+        else { afterPermission = action; spokenPermission.launch(Manifest.permission.RECORD_AUDIO) }
+    }
+    var micMenuOpen by remember { mutableStateOf(false) }
+
     val mode = core.coreMode()
 
     Box(modifier = Modifier.fillMaxSize().background(Palette.Bg)) {
@@ -112,7 +124,9 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit, onSettings: () -> Unit) {
                     else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) core.startRecording()
                     else micPermission.launch(Manifest.permission.RECORD_AUDIO)
                 },
-                onPlus = { plusOpen = !plusOpen; toolsOpen = false },
+                onMicMenu = { micMenuOpen = !micMenuOpen; plusOpen = false; toolsOpen = false },
+                onLive = { withMic { core.startLive() } },
+                onPlus = { plusOpen = !plusOpen; toolsOpen = false; micMenuOpen = false },
                 onTools = { toolsOpen = !toolsOpen; plusOpen = false },
                 onModel = { modelOpen = true },
                 onHeight = { composerHeight = it },
@@ -121,6 +135,7 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit, onSettings: () -> Unit) {
 
         val menuBottom = composerHeight + 34.dp
         PlusMenu(core, plusOpen, menuBottom, { plusOpen = false }, onThinking = { modelOpen = true }, onNew = { core.newChat() }, onSettings = onSettings)
+        MicMenu(micMenuOpen, menuBottom, { micMenuOpen = false }, onVoiceChat = { withMic { core.startVoiceChat() } }, onLive = { withMic { core.startLive() } })
         ToolsMenu(toolsOpen, menuBottom, { toolsOpen = false }) { text -> input = text; insertTick++ }
         ModelSheetView(core, modelOpen) { modelOpen = false }
         core.approval?.let { ApprovalSheet(it, onAllow = { core.resolveApproval(it.id, true) }, onDeny = { core.resolveApproval(it.id, false) }) }

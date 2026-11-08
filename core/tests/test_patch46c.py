@@ -59,14 +59,14 @@ class VoiceChat(unittest.TestCase):
 
     def test_no_echo_loop_without_headphones(self):
         loop = read(KT, "VoiceLoop.kt")
-        self.assertIn("if (host.bargeIn()) capture(pcm, true)", loop)
+        self.assertIn("if (host.bargeIn() && !muted) capture(pcm, true)", loop)
         self.assertIn("override fun bargeIn(): Boolean = headphonesConnected(app)", read(KT, "FazeCore.kt"))
 
     def test_settings_card(self):
         s = read(KT, "SettingsScreen.kt")
         self.assertIn('SettingsCard("Voice chat")', s)
-        self.assertIn("core.startVoiceChat()", s)
-        self.assertIn("core.stopVoiceChat()", s)
+        self.assertIn("core.startVoiceChat()", read(KT, "ChatScreen.kt"))  # started from the mic menu in the chat
+        self.assertNotIn("core.startVoiceChat()", s)
         self.assertIn("core.settings.voiceFillers = it", s)
         self.assertLess(s.index('SettingsCard("Voice chat")'), s.index('SettingsCard("Live voice")'))
 

@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
@@ -37,8 +38,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStop() {
+        super.onStop()
+        (application as FazeApp).core.appVisible = false // a live conversation now shows the floating bubble
+    }
+
     override fun onStart() {
         super.onStart()
+        (application as FazeApp).core.appVisible = true
         // The app is on screen, which is the one moment Android lets a microphone service start: bring listening back.
         val core = (application as FazeApp).core
         if (core.settings.wakeEnabled && !core.listening &&
@@ -68,6 +75,7 @@ fun FazeRoot(vm: ChatViewModel = viewModel()) {
         LocalReadFont provides readFont,
     ) {
 
+    Box(modifier = Modifier.fillMaxSize()) {
     ModalNavigationDrawer(
         drawerState = drawer,
         scrimColor = Palette.Scrim,
@@ -84,6 +92,8 @@ fun FazeRoot(vm: ChatViewModel = viewModel()) {
     ) {
         if (settings) SettingsScreen(core) { settings = false }
         else ChatScreen(core, onMenu = { scope.launch { drawer.open() } }, onSettings = { settings = true })
+    }
+    if (core.liveOn || core.voiceOn) LiveScreen(core)
     }
     }
 }

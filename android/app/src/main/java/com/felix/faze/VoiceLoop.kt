@@ -130,6 +130,9 @@ class VoiceLoop(
     @Volatile private var phrase: String? = null
     private var turn = 0
 
+    /** While muted nothing is captured; the loop itself (waiting, filler phrases) carries on. */
+    @Volatile var muted = false
+
     fun isRunning(): Boolean = running
 
     /** Null when listening has begun, otherwise why not. */
@@ -158,7 +161,7 @@ class VoiceLoop(
             nowMs += pcm.size / 2 * 1000L / Recorder.RATE
             when (stage) {
                 Stage.TRANSCRIBING -> Unit
-                Stage.LISTENING -> capture(pcm, false)
+                Stage.LISTENING -> if (!muted) capture(pcm, false)
                 Stage.THINKING -> think(pcm)
             }
         }
@@ -246,7 +249,7 @@ class VoiceLoop(
             sawActive = true
             idle = 0
             fillers()
-            if (host.bargeIn()) capture(pcm, true)
+            if (host.bargeIn() && !muted) capture(pcm, true)
         } else if (sawActive || nowMs - askedAt > ASK_GRACE_MS) {
             if (++idle >= IDLE_FRAMES) {
                 stage = Stage.LISTENING
