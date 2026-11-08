@@ -108,14 +108,14 @@ private fun blendOver(top: Color, bottom: Color): Color {
 /**
  * The message box (the look of #composer, with the buttons redone): text on top; under it "+" on the left and, on the right, the mic with
  * its menu arrow and one action button that changes with the box: the Live button while it is empty, the send button (a rounded square)
- * once there is text, and a stop square while a reply is being written. While the box has focus or text it "opens" and shows the
- * Attach / Tools / model row.
+ * once there is text, and a stop square while a reply is being written. Nothing sits under the buttons: the model is picked in the
+ * top bar, and Attach and Tools are not in the box.
  */
 @Composable
 fun Composer(
     value: String, focus: FocusRequester, onValue: (String) -> Unit, recording: Boolean, busy: Boolean,
     onSend: () -> Unit, onMic: () -> Unit, onMicMenu: () -> Unit, onLive: () -> Unit,
-    onPlus: () -> Unit, onTools: () -> Unit, onModel: () -> Unit, onHeight: (Dp) -> Unit,
+    onPlus: () -> Unit, onHeight: (Dp) -> Unit,
 ) {
     val context = LocalContext.current
     var focused by remember { mutableStateOf(false) }
@@ -160,13 +160,6 @@ fun Composer(
                 else -> Box(modifier = Modifier.size(44.dp).clip(CircleShape).clickable { onLive() }, contentAlignment = Alignment.Center) {
                     FazeIcon(Ico.WAVE, Palette.Text, 26.dp)
                 }
-            }
-        }
-        AnimatedVisibility(visible = open, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
-            Row(modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                ToolChip("📎", "Attach", soon = true) { soonToast(context) }
-                ToolChip("⚙", "Tools") { onTools() }
-                ToolChip("◎", ModelSheet.label(AppSettings(context).provider), accentGlyph = true) { onModel() }
             }
         }
     }

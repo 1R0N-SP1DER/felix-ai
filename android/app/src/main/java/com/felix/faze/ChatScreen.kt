@@ -127,8 +127,6 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit, onSettings: () -> Unit) {
                 onMicMenu = { micMenuOpen = !micMenuOpen; plusOpen = false; toolsOpen = false },
                 onLive = { withMic { core.startLive() } },
                 onPlus = { plusOpen = !plusOpen; toolsOpen = false; micMenuOpen = false },
-                onTools = { toolsOpen = !toolsOpen; plusOpen = false },
-                onModel = { modelOpen = true },
                 onHeight = { composerHeight = it },
             )
         }
@@ -136,7 +134,6 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit, onSettings: () -> Unit) {
         val menuBottom = composerHeight + 34.dp
         PlusMenu(core, plusOpen, menuBottom, { plusOpen = false }, onThinking = { modelOpen = true }, onNew = { core.newChat() }, onSettings = onSettings)
         MicMenu(micMenuOpen, menuBottom, { micMenuOpen = false }, onVoiceChat = { withMic { core.startVoiceChat() } }, onLive = { withMic { core.startLive() } })
-        ToolsMenu(toolsOpen, menuBottom, { toolsOpen = false }) { text -> input = text; insertTick++ }
         ModelSheetView(core, modelOpen) { modelOpen = false }
         core.approval?.let { ApprovalSheet(it, onAllow = { core.resolveApproval(it.id, true) }, onDeny = { core.resolveApproval(it.id, false) }) }
     }
