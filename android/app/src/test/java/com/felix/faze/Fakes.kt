@@ -131,6 +131,11 @@ class FakeDevice : DeviceApi {
     override fun readScreen() = hit("screen", "Screen 1080x2400, app in front: com.example.app")
 }
 
+class FakeEyes(var answer: String = "A photo of a cat.") : Eyes {
+    val asked = ArrayList<String>()
+    override fun look(question: String): String { asked.add(question); return answer }
+}
+
 class FakeSettings(var tavily: String = "tvly-test", var city: String = "") : ToolSettings {
     override fun tavilyKey() = tavily
     override fun weatherLocation() = city
