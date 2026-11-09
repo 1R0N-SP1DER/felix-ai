@@ -33,6 +33,45 @@ class PermissionsTest {
         assertEquals(10, tools.executed.size)
     }
 
+    private class Clock(var now: Long = 0L) : () -> Long { override fun invoke() = now }
+
+    @Test fun oneYesCoversControllingTheScreenForTwoMinutes() {
+        val ask = Ask(true)
+        val clock = Clock()
+        val g = GatedTools(tools, ask, clock)
+        assertTrue(g.execute("tap", JSONObject()).ok)
+        clock.now = 119_000
+        assertTrue(g.execute("swipe", JSONObject()).ok)
+        assertTrue(g.execute("type_text", JSONObject()).ok)
+        assertEquals(listOf("tap"), ask.asked.map { it.first })
+        clock.now = 121_000
+        assertTrue(g.execute("press_key", JSONObject()).ok)
+        assertEquals(listOf("tap", "press_key"), ask.asked.map { it.first })
+    }
+
+    @Test fun aNoGivesNoLeaseAndStopTakesTheLeaseBack() {
+        val ask = Ask(false)
+        val g = GatedTools(tools, ask, Clock())
+        assertFalse(g.execute("tap", JSONObject()).ok)
+        assertFalse(g.execute("tap", JSONObject()).ok)
+        assertEquals(2, ask.asked.size)
+        ask.answer = true
+        assertTrue(g.execute("tap", JSONObject()).ok)
+        g.revokeControl()
+        assertTrue(g.execute("tap", JSONObject()).ok)
+        assertEquals(4, ask.asked.size)
+    }
+
+    @Test fun theLeaseCoversOnlyControlToolsNotTheRest() {
+        val ask = Ask(true)
+        val g = GatedTools(tools, ask, Clock())
+        g.execute("tap", JSONObject())
+        g.execute("read_clipboard", JSONObject())
+        g.execute("look_at_screen", JSONObject())
+        assertEquals(listOf("tap", "read_clipboard", "look_at_screen"), ask.asked.map { it.first })
+        assertTrue(PermissionPolicy.summary("tap", JSONObject().put("x", 5).put("y", 6)).contains("tap at 5,6"))
+    }
+
     @Test fun readingTheScreenWaitsForAnAnswer() {
         val ask = Ask(true)
         assertTrue(gate(ask).execute("read_screen", JSONObject()).ok)

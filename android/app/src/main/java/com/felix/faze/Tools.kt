@@ -59,6 +59,7 @@ class Tools(
     private val memory: MemoryStore? = null,
     private val userTools: UserTools? = null,
     private val eyes: Eyes? = null,
+    private val hands: Hands? = null,
 ) : ToolRunner {
 
     private fun tool(name: String, description: String, vararg params: Param): JSONObject {
@@ -106,6 +107,19 @@ class Tools(
         out.put(tool("read_screen", "Call this to see what is on the phone's screen right now: which app is in front and its visible text, buttons and fields, each with the point to tap. Use it when the user asks what is on the screen, asks you to read something in another app, or before you try to do something in an app. No arguments."))
         if (eyes != null) out.put(tool("look_at_screen", "Call this to LOOK at the phone's screen with a vision model and answer a question about it: pictures, games, video, charts, or an app whose text read_screen cannot see. Slower than read_screen, so try read_screen first for plain text and buttons. The screenshot is sent to a cloud model.",
             Param("question", "string", "what to find out, for example: what is in this picture, or which button looks like Send")))
+        if (hands != null) {
+            out.put(tool("tap", "Call this to tap the screen at a point. Read the screen first (read_screen) to get the point of the button or field. Then read it again to check what happened.",
+                Param("x", "integer", "pixels from the left edge"), Param("y", "integer", "pixels from the top edge")))
+            out.put(tool("long_press", "Call this to press and hold a point on the screen (opens menus, selects text). Same points as tap.",
+                Param("x", "integer", "pixels from the left edge"), Param("y", "integer", "pixels from the top edge")))
+            out.put(tool("swipe", "Call this to swipe or scroll: drag from one point to another. To scroll a list down, swipe from a lower point up to a higher one.",
+                Param("x1", "integer", "start, pixels from the left"), Param("y1", "integer", "start, pixels from the top"),
+                Param("x2", "integer", "end, pixels from the left"), Param("y2", "integer", "end, pixels from the top")))
+            out.put(tool("type_text", "Call this to type text into the field that is focused (tap the field first). Up to ${InputCommands.MAX_TEXT} characters.",
+                Param("text", "string", "the text to type")))
+            out.put(tool("press_key", "Call this to press a key. Keys: ${InputCommands.KEYS.keys.joinToString(", ")}.",
+                Param("key", "string", "one of the keys listed")))
+        }
         return out
     }
 
@@ -153,6 +167,11 @@ class Tools(
                 }
                 "list_apps" -> ok(device.listApps(args.optString("search", "")))
                 "read_screen" -> ok(device.readScreen())
+                "tap" -> hands?.let { ok(it.tap(int(args, "x"), int(args, "y"))) } ?: fail("controlling the screen is not available")
+                "long_press" -> hands?.let { ok(it.longPress(int(args, "x"), int(args, "y"))) } ?: fail("controlling the screen is not available")
+                "swipe" -> hands?.let { ok(it.swipe(int(args, "x1"), int(args, "y1"), int(args, "x2"), int(args, "y2"))) } ?: fail("controlling the screen is not available")
+                "type_text" -> hands?.let { ok(it.typeText(args.optString("text", ""))) } ?: fail("controlling the screen is not available")
+                "press_key" -> hands?.let { ok(it.pressKey(args.optString("key", ""))) } ?: fail("controlling the screen is not available")
                 "look_at_screen" -> if (eyes == null) fail("looking at the screen is not available") else ok(eyes.look(args.optString("question", "")))
                 "get_weather" -> {
                     val city = args.optString("city", "").trim().ifEmpty { settings.weatherLocation().trim() }
@@ -169,6 +188,11 @@ class Tools(
         } catch (e: Exception) {
             fail("$name failed: ${e.message ?: e.javaClass.simpleName}")
         }
+    }
+
+    private fun int(args: JSONObject, name: String): Int {
+        if (!args.has(name) || args.isNull(name)) throw ToolFailure("$name is required (a whole number of pixels)")
+        return args.optInt(name, Int.MIN_VALUE).also { if (it == Int.MIN_VALUE) throw ToolFailure("$name must be a whole number") }
     }
 
     private fun ok(text: String) = ToolResult(true, text)

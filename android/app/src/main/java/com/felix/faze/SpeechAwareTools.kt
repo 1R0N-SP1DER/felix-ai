@@ -36,7 +36,7 @@ class SpeechAwareTools(
 
     companion object {
         /** Tools that put another app or page in front of this one. */
-        val FOREGROUND_TOOLS = setOf("open_app", "open_url")
+        val FOREGROUND_TOOLS = setOf("open_app", "open_url", "tap", "long_press", "swipe", "type_text", "press_key")
         private const val POLL_MS = 100L
         private const val SETTLE_MS = 300L
     }
