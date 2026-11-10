@@ -51,7 +51,7 @@ class ScreenEyes(private val chat: ChatApi, private val model: () -> String, pri
 
 /** Root screenshot, shrunk to what a vision model needs (a long side of 1280 px, JPEG), so the upload is small and quick. */
 class AndroidScreenCapture {
-    fun jpeg(): ByteArray {
+    fun jpeg(maxSide: Int = 1280): ByteArray {
         val pb = ProcessBuilder("su", "-c", "screencap -p")
         pb.redirectError(java.io.File("/dev/null"))
         pb.environment().remove("LD_PRELOAD")
@@ -65,7 +65,7 @@ class AndroidScreenCapture {
         val png = out.toByteArray()
         if (png.size < 100) throw ToolFailure("no screenshot came back (is root granted?)")
         val bmp = BitmapFactory.decodeByteArray(png, 0, png.size) ?: throw ToolFailure("the screenshot could not be read")
-        val scale = 1280f / maxOf(bmp.width, bmp.height)
+        val scale = maxSide.toFloat() / maxOf(bmp.width, bmp.height)
         val small = if (scale < 1f) Bitmap.createScaledBitmap(bmp, (bmp.width * scale).toInt().coerceAtLeast(1), (bmp.height * scale).toInt().coerceAtLeast(1), true) else bmp
         val jpg = ByteArrayOutputStream()
         small.compress(Bitmap.CompressFormat.JPEG, 70, jpg)
