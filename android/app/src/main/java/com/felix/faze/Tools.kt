@@ -60,6 +60,7 @@ class Tools(
     private val userTools: UserTools? = null,
     private val eyes: Eyes? = null,
     private val hands: Hands? = null,
+    private val liveControl: LiveControl? = null,
 ) : ToolRunner {
 
     private fun tool(name: String, description: String, vararg params: Param): JSONObject {
@@ -107,6 +108,7 @@ class Tools(
         out.put(tool("read_screen", "Call this to see what is on the phone's screen right now: which app is in front and its visible text, buttons and fields, each with the point to tap. Use it when the user asks what is on the screen, asks you to read something in another app, or before you try to do something in an app. No arguments."))
         if (eyes != null) out.put(tool("look_at_screen", "Call this to LOOK at the phone's screen with a vision model and answer a question about it: pictures, games, video, charts, or an app whose text read_screen cannot see. Slower than read_screen, so try read_screen first for plain text and buttons. The screenshot is sent to a cloud model.",
             Param("question", "string", "what to find out, for example: what is in this picture, or which button looks like Send")))
+        if (liveControl != null) out.put(tool("end_live", "Call this when the user asks to end, stop or leave live mode or the voice chat (for example: end live, stop the call, bye). Say a short goodbye in the same reply; the conversation closes after you finish speaking. No arguments."))
         if (hands != null) {
             out.put(tool("tap", "Call this to tap the screen at a point. Read the screen first (read_screen) to get the point of the button or field. Then read it again to check what happened.",
                 Param("x", "integer", "pixels from the left edge"), Param("y", "integer", "pixels from the top edge")))
@@ -167,6 +169,7 @@ class Tools(
                 }
                 "list_apps" -> ok(device.listApps(args.optString("search", "")))
                 "read_screen" -> ok(device.readScreen())
+                "end_live" -> liveControl?.let { if (it.active()) { it.endAfterSpeech(); ok("Ending after the goodbye.") } else fail("there is no live or voice chat running") } ?: fail("not available")
                 "tap" -> hands?.let { ok(it.tap(int(args, "x"), int(args, "y"))) } ?: fail("controlling the screen is not available")
                 "long_press" -> hands?.let { ok(it.longPress(int(args, "x"), int(args, "y"))) } ?: fail("controlling the screen is not available")
                 "swipe" -> hands?.let { ok(it.swipe(int(args, "x1"), int(args, "y1"), int(args, "x2"), int(args, "y2"))) } ?: fail("controlling the screen is not available")
