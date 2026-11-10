@@ -63,6 +63,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = text("filler_model").ifEmpty { ModelFiller.DEFAULT_MODEL }
         set(value) = put("filler_model", value)
 
+    /** The vision model that looks at screenshots (a Groq model that accepts images). */
+    var visionModel: String
+        get() = text("vision_model").ifEmpty { ScreenEyes.DEFAULT_MODEL }
+        set(value) = put("vision_model", value)
+
     /** The Gemini Live model and the voice it speaks with (Settings > Agent > Live voice). */
     var liveModel: String
         get() = text("live_model").ifEmpty { LiveProtocol.DEFAULT_MODEL }
