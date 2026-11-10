@@ -60,6 +60,7 @@ class Tools(
     private val userTools: UserTools? = null,
     private val eyes: Eyes? = null,
     private val hands: Hands? = null,
+    private val scheduler: SchedulerApi? = null,
 ) : ToolRunner {
 
     private fun tool(name: String, description: String, vararg params: Param): JSONObject {
@@ -107,6 +108,15 @@ class Tools(
         out.put(tool("read_screen", "Call this to see what is on the phone's screen right now: which app is in front and its visible text, buttons and fields, each with the point to tap. Use it when the user asks what is on the screen, asks you to read something in another app, or before you try to do something in an app. No arguments."))
         if (eyes != null) out.put(tool("look_at_screen", "Call this to LOOK at the phone's screen with a vision model and answer a question about it: pictures, games, video, charts, or an app whose text read_screen cannot see. Slower than read_screen, so try read_screen first for plain text and buttons. The screenshot is sent to a cloud model.",
             Param("question", "string", "what to find out, for example: what is in this picture, or which button looks like Send")))
+        if (scheduler != null) {
+            out.put(tool("schedule_task", "Run something later or on repeat. Use when the user says things like 'remind me in 20 minutes', 'every morning at 7 tell me the weather', 'check my battery every hour'. Give EITHER in_minutes OR at (HH:mm 24 hour clock, the next time it is that time); put 0 in in_minutes or "" in at for the one you do not use. The task is then run as if the user had typed it, at that time. Write the task as the instruction to follow later.",
+                Param("task", "string", "What to do at that time, as a short instruction"),
+                Param("in_minutes", "integer", "Minutes from now, or 0 when using at"),
+                Param("at", "string", "Clock time HH:mm on a 24 hour clock, or empty when using in_minutes"),
+                Param("repeat_minutes", "integer", "0 to run once, otherwise how often to repeat: 60 hourly, 1440 daily. At least 15")))
+            out.put(tool("list_scheduled", "Call this when the user asks what is scheduled or what reminders they have. No arguments."))
+            out.put(tool("cancel_scheduled", "Cancel a scheduled task. Use list_scheduled first if you do not know its id.", Param("id", "string", "The task id, like t1")))
+        }
         if (hands != null) {
             out.put(tool("tap", "Call this to tap the screen at a point. Read the screen first (read_screen) to get the point of the button or field. Then read it again to check what happened.",
                 Param("x", "integer", "pixels from the left edge"), Param("y", "integer", "pixels from the top edge")))
@@ -167,6 +177,23 @@ class Tools(
                 }
                 "list_apps" -> ok(device.listApps(args.optString("search", "")))
                 "read_screen" -> ok(device.readScreen())
+                "schedule_task" -> scheduler?.let { s ->
+                    val inMin = args.optInt("in_minutes", 0).takeIf { it > 0 }
+                    val at = args.optString("at", "").ifBlank { null }
+                    val whenAt = ScheduleTime.resolve(inMin, at, s.now(), s.zone())
+                    val every = ScheduleTime.repeat(args.optInt("repeat_minutes", 0))
+                    val task = s.add(args.optString("task", ""), whenAt, every)
+                    ok("Scheduled ${task.id}: \"${task.prompt}\" at ${ScheduleTime.describe(task.nextAt, s.now(), s.zone())}, ${ScheduleTime.everyText(task.everyMinutes)}.")
+                } ?: fail("scheduling is not available")
+                "list_scheduled" -> scheduler?.let { s ->
+                    val items = s.list()
+                    if (items.isEmpty()) ok("Nothing is scheduled.")
+                    else ok(items.joinToString("\n") { "${it.id}: \"${it.prompt}\" next at ${ScheduleTime.describe(it.nextAt, s.now(), s.zone())}, ${ScheduleTime.everyText(it.everyMinutes)}" })
+                } ?: fail("scheduling is not available")
+                "cancel_scheduled" -> scheduler?.let { s ->
+                    val id = args.optString("id", "")
+                    if (s.cancel(id)) ok("Cancelled $id.") else fail("there is no scheduled task $id")
+                } ?: fail("scheduling is not available")
                 "tap" -> hands?.let { ok(it.tap(int(args, "x"), int(args, "y"))) } ?: fail("controlling the screen is not available")
                 "long_press" -> hands?.let { ok(it.longPress(int(args, "x"), int(args, "y"))) } ?: fail("controlling the screen is not available")
                 "swipe" -> hands?.let { ok(it.swipe(int(args, "x1"), int(args, "y1"), int(args, "x2"), int(args, "y2"))) } ?: fail("controlling the screen is not available")

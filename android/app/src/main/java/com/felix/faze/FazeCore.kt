@@ -71,6 +71,10 @@ class FazeCore(private val app: Application) : EngineListener {
     private val executor = Executors.newSingleThreadExecutor()
     private val transport = UrlTransport()
     private val speaker = Speaker(app)
+    val scheduler = AndroidScheduler(app, ScheduleStore(File(app.filesDir, "schedule.json")))
+    private val scheduleRunner = ScheduleRunner(app, this, scheduler)
+    fun runDueTasks() = main.post { scheduleRunner.runDue() }
+    fun rearmSchedule() = scheduler.rearm()
     private val recorder = Recorder()
     private val stt = Stt(transport, { settings.groqKey })
     private val store = ChatStore(File(app.filesDir, "chats"))
@@ -142,7 +146,7 @@ class FazeCore(private val app: Application) : EngineListener {
             { settings.allowPowered },
             { PermissionPolicy.all().map { it.first }.toSet() },
         )
-        gate = GatedTools(Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app)), broker) { name -> if (userTools.has(name)) Tier.SAFE else null }
+        gate = GatedTools(Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app), scheduler), broker) { name -> if (userTools.has(name)) Tier.SAFE else null }
         val tools: ToolRunner = gate
         gatedTools = tools
         // A tool that takes over the screen waits for the assistant to finish speaking, unless the bubble keeps the conversation going outside the app.
