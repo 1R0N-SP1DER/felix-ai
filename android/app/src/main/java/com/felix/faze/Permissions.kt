@@ -37,6 +37,8 @@ object PermissionPolicy {
     fun tier(tool: String): Tier = registry[tool] ?: Tier.BLOCK
 
     /** Tools that move the screen for you. One yes covers all of them for [CONTROL_MINUTES] minutes, so a task of many taps is not many questions. */
+    const val DECLINED = "The user declined"
+
     val controls = setOf("tap", "long_press", "swipe", "type_text", "press_key")
     const val CONTROL_MINUTES = 2L
 
@@ -113,7 +115,7 @@ class GatedTools(
                     false
                 }
                 if (allowed && name in PermissionPolicy.controls) controlUntil = clock() + PermissionPolicy.CONTROL_MINUTES * 60_000
-                if (allowed) inner.execute(name, args) else ToolResult(false, "The user declined $name. Do not try it again.")
+                if (allowed) inner.execute(name, args) else ToolResult(false, "${PermissionPolicy.DECLINED} $name. Do not try it again.")
             }
         }
     }
