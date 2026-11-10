@@ -106,6 +106,7 @@ class ResilientTest {
         )
         assertEquals(listOf(Attempt("gemini", "g1"), Attempt("groq", "q1")), Fallbacks.plan("gemini", setOf("groq"), m)) // chosen first even without a key
         assertEquals(listOf(Attempt("groq", "q1")), Fallbacks.plan("groq", setOf("groq"), m))
+        assertEquals(listOf(Attempt("offline", "/m.gguf")), Fallbacks.plan("offline", setOf("groq", "gemini"), { "/m.gguf" })) // offline never goes online by itself
     }
 
     // ---- free OpenRouter models

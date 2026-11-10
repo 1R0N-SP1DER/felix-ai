@@ -77,6 +77,7 @@ class RemoteClient(
     private val key: () -> String,
     private val label: String,
     private val maxTokens: Int = 1000,
+    private val extra: JSONObject? = null,
 ) : ChatApi {
     override fun chat(model: String, messages: JSONArray, tools: JSONArray?, onToken: (String) -> Unit, cancelled: () -> Boolean): ChatResult {
         val apiKey = key().trim()
@@ -87,6 +88,7 @@ class RemoteClient(
             .put("stream", true)
             .put("temperature", 0.3)
             .put("max_tokens", maxTokens)
+        extra?.keys()?.forEach { payload.put(it, extra.get(it)) }
         if (tools != null && tools.length() > 0) {
             payload.put("tools", tools)
             payload.put("tool_choice", "auto")

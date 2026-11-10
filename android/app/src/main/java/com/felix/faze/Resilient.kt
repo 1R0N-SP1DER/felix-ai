@@ -15,6 +15,7 @@ object Fallbacks {
      * The chosen provider always comes first, even without a key, so the person is told what is wrong with it.
      */
     fun plan(selected: String, keys: Set<String>, model: (String) -> String): List<Attempt> {
+        if (selected == "offline") return listOf(Attempt(selected, model(selected))) // offline means offline: never quietly send it online
         val out = ArrayList<Attempt>()
         out.add(Attempt(selected, model(selected)))
         if (selected in keys) for (alt in alternates[selected].orEmpty()) if (alt != model(selected)) out.add(Attempt(selected, alt))

@@ -79,7 +79,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
 
     /** Which online model answers: groq, gemini or openrouter. */
     var provider: String
-        get() = text("provider").let { if (it == "gemini" || it == "openrouter") it else "groq" }
+        get() = text("provider").let { if (it == "gemini" || it == "openrouter" || it == "offline") it else "groq" }
         set(value) = put("provider", value)
 
     var geminiKey: String
@@ -98,7 +98,25 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = text("openrouter_model") // blank: a free model is picked automatically
         set(value) = put("openrouter_model", value)
 
+    /** Offline: the model file picked, where llama-server was found, and how it is run. */
+    var offlineModel: String
+        get() = text("offline_model")
+        set(value) = put("offline_model", value)
+
+    var offlineBinary: String
+        get() = text("offline_binary")
+        set(value) = put("offline_binary", value)
+
+    var offlineThreads: Int
+        get() = text("offline_threads").toIntOrNull() ?: 4
+        set(value) = put("offline_threads", value.toString())
+
+    var offlineCtx: Int
+        get() = text("offline_ctx").toIntOrNull() ?: 2048
+        set(value) = put("offline_ctx", value.toString())
+
     fun modelFor(provider: String): String = when (provider) {
+        "offline" -> offlineModel
         "gemini" -> geminiModel
         "openrouter" -> openrouterModel
         else -> modelName.ifBlank { Groq.DEFAULT_MODEL }
@@ -107,6 +125,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
     /** Chooses the model of one provider (Groq, Gemini or OpenRouter) from the picker. */
     fun setModelFor(provider: String, id: String) {
         when (provider) {
+            "offline" -> offlineModel = id
             "gemini" -> geminiModel = id
             "openrouter" -> openrouterModel = id
             else -> modelName = id
@@ -114,12 +133,14 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
     }
 
     fun keyFor(provider: String): String = when (provider) {
+        "offline" -> ""
         "gemini" -> geminiKey
         "openrouter" -> openrouterKey
         else -> groqKey
     }
 
     fun hasKey(provider: String): Boolean = when (provider) {
+        "offline" -> true // no key: it runs on the phone
         "gemini" -> geminiKey.isNotEmpty()
         "openrouter" -> openrouterKey.isNotEmpty()
         else -> groqKey.isNotEmpty()

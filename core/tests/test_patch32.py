@@ -25,7 +25,9 @@ class ModelSheetMatchesTheWebUI(unittest.TestCase):
         order = re.search(r"for \(const id of \[([^\]]*)\]", self.js[self.js.index("function renderModelSheet"):]).group(1)
         self.assertEqual(re.findall(r"'(\w+)'", order), [n for n, _ in web_names])
         kt = re.search(r"val names = linkedMapOf\((.*?)\)\n", self.kt, re.S).group(1)
-        self.assertEqual(web_names, re.findall(r'"(\w+)" to "([^"]+)"', kt))
+        # the phone lists Offline (the models found on the phone are under it) where the web page has its Qwen and LFM rows
+        phone = [("auto", "Auto"), ("offline", "Offline")] + [n for n in web_names if n[0] not in ("auto", "qwen", "lfm")]
+        self.assertEqual(phone, re.findall(r'"(\w+)" to "([^"]+)"', kt))
 
     def test_thinking_levels_and_hints(self):
         web = re.findall(r'<option value="(\w+)">(\w+)</option>', self.html[self.html.index('id="think-level"'):][:500])
