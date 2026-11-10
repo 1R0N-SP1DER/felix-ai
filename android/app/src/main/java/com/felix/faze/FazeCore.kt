@@ -78,6 +78,7 @@ class FazeCore(private val app: Application) : EngineListener {
     private val broker = ApprovalBroker({ block -> main.post { block() } }, 60) { approval = it }
     private val engine: ChatEngine
     private lateinit var gatedTools: ToolRunner
+    private lateinit var gate: GatedTools
     private lateinit var liveTools: ToolRunner
 
     /** The listening bar and the bubble: the mic level while listening, the output level while it speaks (0..1). */
@@ -125,7 +126,8 @@ class FazeCore(private val app: Application) : EngineListener {
             { settings.allowPowered },
             { PermissionPolicy.all().map { it.first }.toSet() },
         )
-        val tools = GatedTools(Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() })), broker) { name -> if (userTools.has(name)) Tier.SAFE else null }
+        gate = GatedTools(Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app)), broker) { name -> if (userTools.has(name)) Tier.SAFE else null }
+        val tools: ToolRunner = gate
         gatedTools = tools
         // A tool that takes over the screen waits for the assistant to finish speaking, unless the bubble keeps the conversation going outside the app.
         val speakingNow = { speaker.isSpeaking() || (live?.isSpeaking() ?: false) }
@@ -187,6 +189,7 @@ class FazeCore(private val app: Application) : EngineListener {
     }
 
     fun stop() {
+        gate.revokeControl()
         broker.denyAll()
         engine.stop()
     }

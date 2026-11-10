@@ -23,6 +23,11 @@ object PermissionPolicy {
         "list_apps" to Tier.SAFE,
         "read_screen" to Tier.CONFIRM,
         "look_at_screen" to Tier.CONFIRM,
+        "tap" to Tier.CONFIRM,
+        "long_press" to Tier.CONFIRM,
+        "swipe" to Tier.CONFIRM,
+        "type_text" to Tier.CONFIRM,
+        "press_key" to Tier.CONFIRM,
         "get_weather" to Tier.SAFE,
         "remember" to Tier.CONFIRM,
         "recall" to Tier.SAFE,
@@ -31,6 +36,10 @@ object PermissionPolicy {
 
     fun tier(tool: String): Tier = registry[tool] ?: Tier.BLOCK
 
+    /** Tools that move the screen for you. One yes covers all of them for [CONTROL_MINUTES] minutes, so a task of many taps is not many questions. */
+    val controls = setOf("tap", "long_press", "swipe", "type_text", "press_key")
+    const val CONTROL_MINUTES = 2L
+
     /** Every tool the app knows, with its tier (the sidebar's Tools list). */
     fun all(): List<Pair<String, Tier>> = registry.toList()
 
@@ -38,6 +47,13 @@ object PermissionPolicy {
 
     fun summary(tool: String, args: JSONObject): String = when (tool) {
         "read_clipboard" -> "Read what is on your clipboard and show it to the model"
+        "tap", "long_press", "swipe", "type_text", "press_key" -> "Control your screen for $CONTROL_MINUTES minutes (tap, swipe, type, press keys). First: " + when (tool) {
+            "tap" -> "tap at ${args.optInt("x")},${args.optInt("y")}"
+            "long_press" -> "press and hold at ${args.optInt("x")},${args.optInt("y")}"
+            "swipe" -> "swipe from ${args.optInt("x1")},${args.optInt("y1")} to ${args.optInt("x2")},${args.optInt("y2")}"
+            "type_text" -> "type \"" + args.optString("text", "").replace('\n', ' ').take(60) + "\""
+            else -> "press " + args.optString("key", "")
+        }
         "read_screen" -> "Read what is on your screen and show it to the model"
         "look_at_screen" -> "Take a screenshot and send it to the vision model" + (args.optString("question", "").trim().let { if (it.isEmpty()) "" else ": " + it.replace('\n', ' ').take(100) })
         "write_clipboard" -> "Put this on your clipboard: " + args.optString("text", "").replace('\n', ' ').take(80)
@@ -48,6 +64,7 @@ object PermissionPolicy {
 
     /** Extra text for the approval dialog: for a new tool, its parameters, the sites it may reach, and the code itself. */
     fun detail(tool: String, args: JSONObject): String = when (tool) {
+        "tap", "long_press", "swipe", "type_text", "press_key" -> "After you allow this, FAZE can tap, swipe, type and press keys on your screen without asking again for $CONTROL_MINUTES minutes. Press Stop to take it back."
         "create_tool" -> "Parameters: ${args.optString("parameters").ifBlank { "none" }}\nMay reach: ${args.optString("domains").ifBlank { "no websites" }}\nPowers: ${powersOf(args).ifEmpty { "none (locked sandbox)" }}\n\n${args.optString("code")}"
         else -> ""
     }
@@ -62,7 +79,17 @@ interface Approver {
 }
 
 /** Wraps a [ToolRunner]: safe tools run, confirm tools wait for the person, everything else is refused. */
-class GatedTools(private val inner: ToolRunner, private val approver: Approver, private val extraTier: (String) -> Tier? = { null }) : ToolRunner {
+class GatedTools(
+    private val inner: ToolRunner,
+    private val approver: Approver,
+    private val clock: () -> Long = { System.currentTimeMillis() },
+    private val extraTier: (String) -> Tier? = { null },
+) : ToolRunner {
+    @Volatile private var controlUntil = 0L
+
+    /** Takes back the "control the screen" yes (the Stop button). */
+    fun revokeControl() { controlUntil = 0L }
+
     override fun schema(): JSONArray = inner.schema()
 
     override fun precheck(name: String, args: JSONObject): String? = inner.precheck(name, args)
@@ -75,7 +102,9 @@ class GatedTools(private val inner: ToolRunner, private val approver: Approver, 
         Tier.BLOCK -> ToolResult(false, "$name is not allowed.")
         Tier.CONFIRM -> {
             val refusal = inner.precheck(name, args)
-            if (refusal != null) {
+            if (name in PermissionPolicy.controls && clock() < controlUntil) {
+                inner.execute(name, args) // the person said yes a moment ago to controlling the screen
+            } else if (refusal != null) {
                 ToolResult(false, refusal) // fix it and try again; nothing was shown to the person
             } else {
                 val allowed = try {
@@ -83,6 +112,7 @@ class GatedTools(private val inner: ToolRunner, private val approver: Approver, 
                 } catch (e: Exception) {
                     false
                 }
+                if (allowed && name in PermissionPolicy.controls) controlUntil = clock() + PermissionPolicy.CONTROL_MINUTES * 60_000
                 if (allowed) inner.execute(name, args) else ToolResult(false, "The user declined $name. Do not try it again.")
             }
         }

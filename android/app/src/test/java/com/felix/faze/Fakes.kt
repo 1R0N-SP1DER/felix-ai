@@ -136,6 +136,15 @@ class FakeEyes(var answer: String = "A photo of a cat.") : Eyes {
     override fun look(question: String): String { asked.add(question); return answer }
 }
 
+class FakeHands : Hands {
+    val log = ArrayList<String>()
+    override fun tap(x: Int, y: Int): String { log.add("tap $x,$y"); return "Tapped at $x,$y." }
+    override fun longPress(x: Int, y: Int): String { log.add("hold $x,$y"); return "Long-pressed at $x,$y." }
+    override fun swipe(x1: Int, y1: Int, x2: Int, y2: Int): String { log.add("swipe $x1,$y1,$x2,$y2"); return "Swiped." }
+    override fun typeText(text: String): String { log.add("type $text"); return "Typed ${text.length} characters." }
+    override fun pressKey(key: String): String { log.add("key $key"); return "Pressed $key." }
+}
+
 class FakeSettings(var tavily: String = "tvly-test", var city: String = "") : ToolSettings {
     override fun tavilyKey() = tavily
     override fun weatherLocation() = city
