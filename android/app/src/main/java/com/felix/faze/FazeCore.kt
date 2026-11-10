@@ -11,6 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import java.io.File
 import java.util.concurrent.Executors
+import org.json.JSONObject
 
 /** Lets the push-to-talk button borrow the microphone from the always-on service and hand it back. */
 interface ListenControl {
@@ -105,11 +106,23 @@ class FazeCore(private val app: Application) : EngineListener {
     private val liveWorker = Executors.newSingleThreadExecutor() // tool calls: one may wait up to a minute for an approval
     private var sttMs = 0L
 
+    private val localServer: LocalServer = LocalServerControl(
+        run = { cmd, ms -> Su.run(cmd, ms) },
+        alive = { try { transport.get("${LocalLlama.BASE}/models", emptyMap(), 1500).let { if (it.status == 200) LocalLlama.parseServed(it.body) else null } } catch (e: Exception) { null } },
+        binary = { settings.offlineBinary.ifEmpty { LocalLlama.pickBinary(Su.run(LocalLlama.findBinaryCommand(), 15_000))?.also { settings.offlineBinary = it } } },
+        threads = { settings.offlineThreads },
+        ctx = { settings.offlineCtx },
+    )
+
     init {
         val client = ResilientChat(
             mapOf(
                 "groq" to RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq"),
                 "gemini" to GeminiClient(transport, { settings.geminiKey }, { settings.thinkLevel }),
+                "offline" to OfflineChat(
+                    RemoteClient(transport, LocalLlama.BASE, { "local" }, "Offline", 400, JSONObject().put("chat_template_kwargs", JSONObject().put("enable_thinking", false))),
+                    localServer, { settings.offlineModel }, { text -> main.post { status = text } },
+                ),
                 "openrouter" to OpenRouterChat(
                     RemoteClient(transport, OpenRouter.BASE, { settings.openrouterKey }, "OpenRouter"),
                     { transport.get("${OpenRouter.BASE}/models", emptyMap(), 15000).body },
@@ -236,7 +249,11 @@ class FazeCore(private val app: Application) : EngineListener {
         modelError = ""
         Thread {
             try {
-                val list = ModelCatalog(transport) { settings.keyFor(it) }.fetch(provider)
+                val list = if (provider == "offline") {
+                    LocalLlama.parseModels(Su.run(LocalLlama.scanCommand(), 20_000)).ifEmpty {
+                        throw RemoteError("empty", "No .gguf models found in Termux's home, Download or models folder (offline models need root)")
+                    }
+                } else ModelCatalog(transport) { settings.keyFor(it) }.fetch(provider)
                 main.post { modelLists[provider] = list; modelLoading = "" }
             } catch (e: RemoteError) {
                 main.post { modelError = e.message ?: "couldn't load the list"; modelLoading = "" }
@@ -252,7 +269,12 @@ class FazeCore(private val app: Application) : EngineListener {
         modelRev++
     }
 
-    fun useProvider(id: String) { settings.provider = id; provider = settings.provider }
+    fun useProvider(id: String) {
+        val was = provider
+        settings.provider = id
+        provider = settings.provider
+        if (was == "offline" && provider != "offline") Thread { localServer.stop() }.start() // give the memory back
+    }
 
     fun useMotion(on: Boolean) { settings.motion = on; motion = on }
 

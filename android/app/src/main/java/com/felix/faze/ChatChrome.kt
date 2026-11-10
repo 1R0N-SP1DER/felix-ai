@@ -347,7 +347,7 @@ private fun ModelPicker(core: FazeCore, provider: String, query: String, onQuery
             Text("Refresh", color = Palette.Accent, fontSize = 13.sp, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { core.loadModels(provider, true) }.padding(6.dp))
         }
         when {
-            core.modelLoading == provider -> Text("Loading the models your key can use…", color = Palette.Muted, fontSize = 13.sp)
+            core.modelLoading == provider -> Text(if (provider == "offline") "Looking for models on your phone…" else "Loading the models your key can use…", color = Palette.Muted, fontSize = 13.sp)
             all == null -> Text(core.modelError.ifEmpty { "No list yet." }, color = if (core.modelError.isEmpty()) Palette.Muted else Palette.Bad, fontSize = 13.sp)
             else -> {
                 val shown = ModelLists.filter(all, query)
