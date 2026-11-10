@@ -25,7 +25,7 @@ object LocalLlama {
     const val KEEP_MESSAGES = 6
 
     /** Small on purpose: a slow phone reads every word of the prompt before it answers. */
-    const val SYSTEM = "You are FAZE, a private voice assistant running offline on the user's phone. Answer briefly and plainly, in a few sentences. You cannot use tools or look things up right now."
+    const val SYSTEM = "You are FAZE, a close, casual friend of the user, running offline on their phone. Talk relaxed and natural, match the length of their message, no lists or markdown (replies are read aloud). You cannot use tools or look things up right now."
 
     val modelDirs = listOf("$TERMUX/home", "/sdcard/Download", "/sdcard/models")
 
@@ -76,6 +76,16 @@ object LocalLlama {
         }
         var tail = kept.takeLast(KEEP_MESSAGES)
         while (tail.isNotEmpty() && tail.first().getString("role") != "user") tail = tail.drop(1)
+        // what a tool just did (after the last thing the user said) goes into that message, so the model can say it was done
+        val lastUser = (0 until messages.length()).lastOrNull { messages.optJSONObject(it)?.optString("role") == "user" }
+        if (lastUser != null && tail.isNotEmpty()) {
+            val results = (lastUser + 1 until messages.length()).mapNotNull { messages.optJSONObject(it) }
+                .filter { it.optString("role") == "tool" }.map { it.optString("content").take(400) }
+            if (results.isNotEmpty()) {
+                val last = tail.last()
+                if (last.getString("role") == "user") tail = tail.dropLast(1) + JSONObject().put("role", "user").put("content", last.getString("content") + "\n\n(Just done for you: " + results.joinToString("; ") + ". Say so in one short sentence.)")
+            }
+        }
         val out = JSONArray().put(JSONObject().put("role", "system").put("content", SYSTEM))
         for (m in tail) out.put(m)
         return out

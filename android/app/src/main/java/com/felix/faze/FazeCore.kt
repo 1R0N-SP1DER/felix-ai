@@ -107,6 +107,9 @@ class FazeCore(private val app: Application) : EngineListener {
     private val liveWorker = Executors.newSingleThreadExecutor() // tool calls: one may wait up to a minute for an approval
     private var sttMs = 0L
 
+    val learned = LearnedRoutes(File(app.filesDir, "learned_routes.json"))
+    private val router = FastRoute(learned, NeedleClient(transport), { settings.fastRoutes }, { settings.needleOn }, { PermissionPolicy.tier(it) == Tier.SAFE })
+
     private val localServer: LocalServer = LocalServerControl(
         run = { cmd, ms -> Su.run(cmd, ms) },
         alive = { try { transport.get("${LocalLlama.BASE}/models", emptyMap(), 1500).let { if (it.status == 200) LocalLlama.parseServed(it.body) else null } } catch (e: Exception) { null } },
@@ -145,7 +148,7 @@ class FazeCore(private val app: Application) : EngineListener {
         // A tool that takes over the screen waits for the assistant to finish speaking, unless the bubble keeps the conversation going outside the app.
         val speakingNow = { speaker.isSpeaking() || (live?.isSpeaking() ?: false) }
         liveTools = SpeechAwareTools(tools, { true }, speakingNow, { bubbleReady() })
-        engine = ChatEngine(Agent(client, SpeechAwareTools(tools, { voiceActive }, speakingNow, { bubbleReady() })), object : EngineConfig by settings {
+        engine = ChatEngine(Agent(client, SpeechAwareTools(tools, { voiceActive }, speakingNow, { bubbleReady() }), router = router), object : EngineConfig by settings {
             override fun memoryBlock(): String = if (settings.useMemory) memory.promptBlock(settings.user) else ""
             override fun speak(): Boolean = settings.speakReplies || voiceActive
         }, speaker, { block -> main.post { block() } }, executor, messages, this)

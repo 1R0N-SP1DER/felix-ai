@@ -54,6 +54,15 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getBoolean("allow_powered", true)
         set(value) = prefs.edit().putBoolean("allow_powered", value).apply()
 
+    /** Fast routes: built-in rules and learned shortcuts pick the tool without the model; Needle is asked too when its server is running. */
+    var fastRoutes: Boolean
+        get() = prefs.getBoolean("fast_routes", true)
+        set(value) = prefs.edit().putBoolean("fast_routes", value).apply()
+
+    var needleOn: Boolean
+        get() = prefs.getBoolean("needle_on", true)
+        set(value) = prefs.edit().putBoolean("needle_on", value).apply()
+
     /** Voice chat: whether a short phrase covers a slow answer, and the small fast Groq model that writes it. */
     var voiceFillers: Boolean
         get() = prefs.getBoolean("voice_fillers", true)

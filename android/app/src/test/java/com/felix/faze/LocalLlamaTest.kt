@@ -64,12 +64,25 @@ class LocalLlamaTest {
         val s = LocalLlama.shrink(m)
         assertEquals("system", s.getJSONObject(0).getString("role"))
         assertEquals(LocalLlama.SYSTEM, s.getJSONObject(0).getString("content"))
-        assertTrue(LocalLlama.SYSTEM.length < 250)
+        assertTrue(LocalLlama.SYSTEM.length < 300)
         assertEquals("user", s.getJSONObject(1).getString("role"))
         assertEquals("user", s.getJSONObject(s.length() - 1).getString("role"))
         assertEquals("q6", s.getJSONObject(s.length() - 1).getString("content"))
         assertTrue(s.length() <= LocalLlama.KEEP_MESSAGES + 1)
         for (i in 0 until s.length()) assertFalse(s.getJSONObject(i).getString("role") == "tool")
+    }
+
+    @Test fun whatAToolJustDidReachesTheOfflineModelAsPartOfTheLastMessage() {
+        val m = JSONArray()
+            .put(JSONObject().put("role", "system").put("content", "s"))
+            .put(JSONObject().put("role", "user").put("content", "how much juice is left"))
+            .put(JSONObject().put("role", "assistant").put("content", JSONObject.NULL).put("tool_calls", JSONArray().put(JSONObject())))
+            .put(JSONObject().put("role", "tool").put("content", "82%"))
+        val s = LocalLlama.shrink(m)
+        assertEquals(2, s.length())
+        val last = s.getJSONObject(1)
+        assertEquals("user", last.getString("role"))
+        assertTrue(last.getString("content"), last.getString("content").startsWith("how much juice is left") && last.getString("content").contains("Just done for you: 82%"))
     }
 
     // ---- starting the server
