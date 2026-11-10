@@ -105,6 +105,28 @@ class AndroidDevice(private val context: Context) : DeviceApi {
         return "Copied to the clipboard."
     }
 
+    /** Root only: asks the system for the screen's UI tree (`uiautomator dump`) and turns it into text. Tries twice, because the dump fails while the screen is animating. */
+    override fun readScreen(): String {
+        val file = "/data/local/tmp/faze_ui.xml"
+        var last = ""
+        for (attempt in 1..2) {
+            val pb = ProcessBuilder("su", "-c", "uiautomator dump $file >/dev/null 2>&1; cat $file; rm -f $file")
+            pb.redirectErrorStream(true)
+            pb.environment().remove("LD_PRELOAD")
+            pb.environment().remove("LD_LIBRARY_PATH")
+            val p = try { pb.start() } catch (e: Exception) { throw ToolFailure("root is not available, so the screen can't be read") }
+            p.outputStream.close()
+            val out = java.io.ByteArrayOutputStream()
+            val reader = Thread { try { p.inputStream.copyTo(out) } catch (_: Exception) {} }.also { it.start() }
+            if (!p.waitFor(12, java.util.concurrent.TimeUnit.SECONDS)) { p.destroyForcibly(); reader.join(500); throw ToolFailure("reading the screen timed out") }
+            reader.join(1000)
+            last = String(out.toByteArray(), Charsets.UTF_8)
+            if (ScreenReader.isDump(last)) return ScreenReader.describe(last, context.packageName)
+            if (attempt == 1) Thread.sleep(500)
+        }
+        throw ToolFailure("the screen could not be read" + (if (last.contains("denied", true) || last.contains("not found", true)) " (is root granted to Faze?)" else " (it may be blocked, or still animating; try again)"))
+    }
+
     override fun vibrate(): String {
         val vibrator: Vibrator = if (Build.VERSION.SDK_INT >= 31) {
             context.getSystemService(VibratorManager::class.java).defaultVibrator

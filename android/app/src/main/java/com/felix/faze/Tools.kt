@@ -33,6 +33,9 @@ interface DeviceApi {
     fun readClipboard(): String
     fun writeClipboard(text: String): String
     fun vibrate(): String
+
+    /** What is on the screen right now, as text (needs root). Throws with a readable reason. */
+    fun readScreen(): String
 }
 
 object AppMatch {
@@ -99,6 +102,7 @@ class Tools(
             Param("search", "string", "part of an app's name to filter by, or a single space for every app")))
         out.put(tool("get_weather", "Call this for the current weather or today's temperature, rain chance and conditions in a place. Fast and reliable; prefer it over search_web for weather. Pass an empty city for the user's default place.",
             Param("city", "string", "the place to get the weather for, for example Lagos; an empty string means the user's default place")))
+        out.put(tool("read_screen", "Call this to see what is on the phone's screen right now: which app is in front and its visible text, buttons and fields, each with the point to tap. Use it when the user asks what is on the screen, asks you to read something in another app, or before you try to do something in an app. No arguments."))
         return out
     }
 
@@ -145,6 +149,7 @@ class Tools(
                     if (app.isEmpty()) fail("which app?") else ok(device.openApp(app))
                 }
                 "list_apps" -> ok(device.listApps(args.optString("search", "")))
+                "read_screen" -> ok(device.readScreen())
                 "get_weather" -> {
                     val city = args.optString("city", "").trim().ifEmpty { settings.weatherLocation().trim() }
                     ok(Weather.get(transport, city))
