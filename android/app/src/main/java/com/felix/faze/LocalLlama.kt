@@ -25,7 +25,7 @@ object LocalLlama {
     const val KEEP_MESSAGES = 6
 
     /** Small on purpose: a slow phone reads every word of the prompt before it answers. */
-    const val SYSTEM = "You are FAZE, a private voice assistant running offline on the user's phone. Answer briefly and plainly, in a few sentences. You cannot use tools or look things up right now."
+    const val SYSTEM = "You are FAZE, a close, casual friend of the user, running offline on their phone. Talk relaxed and natural, match the length of their message, no lists or markdown (replies are read aloud). You cannot use tools or look things up right now."
 
     val modelDirs = listOf("$TERMUX/home", "/sdcard/Download", "/sdcard/models")
 

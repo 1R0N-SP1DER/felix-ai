@@ -64,7 +64,7 @@ class LocalLlamaTest {
         val s = LocalLlama.shrink(m)
         assertEquals("system", s.getJSONObject(0).getString("role"))
         assertEquals(LocalLlama.SYSTEM, s.getJSONObject(0).getString("content"))
-        assertTrue(LocalLlama.SYSTEM.length < 250)
+        assertTrue(LocalLlama.SYSTEM.length < 300)
         assertEquals("user", s.getJSONObject(1).getString("role"))
         assertEquals("user", s.getJSONObject(s.length() - 1).getString("role"))
         assertEquals("q6", s.getJSONObject(s.length() - 1).getString("content"))

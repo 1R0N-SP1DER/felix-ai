@@ -36,10 +36,10 @@ class AgentRouteTest {
     }
 
     @Test fun aDeclinedToolIsNotAskedAgainByTheModel() {
-        val declined = ToolResult(false, "${PermissionPolicy.DECLINED} read_clipboard. Do not try it again.")
+        val declined = ToolResult(false, "${PermissionPolicy.DECLINED} get_battery_status. Do not try it again.")
         val chat = FakeChat(text("Okay, I won't."))
-        val tools = FakeTools(mapOf("read_clipboard" to declined))
-        assertEquals("Okay, I won't.", run("what's on my clipboard", chat, tools, router()))
+        val tools = FakeTools(mapOf("get_battery_status" to declined))
+        assertEquals("Okay, I won't.", run("what's my battery", chat, tools, router()))
         assertEquals(1, tools.executed.size)
         assertEquals(1, chat.calls.size)
         assertNull(chat.calls[0].tools)
