@@ -111,7 +111,8 @@ class RemoteClient(
                 chunk.optJSONObject("error")?.let { throw RemoteError("server", "$label stopped mid-reply: ${it.optString("message", "unknown")}".take(200)) }
                 val delta = chunk.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("delta")
                 if (delta != null) {
-                    val piece = delta.optString("content", "")
+                    // a chunk with "content": null (llama-server sends one first) must not become the word "null"
+                    val piece = if (delta.isNull("content")) "" else delta.optString("content", "")
                     if (piece.isNotEmpty()) {
                         content.append(piece)
                         streamed = true
@@ -122,12 +123,12 @@ class RemoteClient(
                         for (i in 0 until calls.length()) {
                             val tc = calls.optJSONObject(i) ?: continue
                             val slot = slots.getOrPut(tc.optInt("index", 0)) { Slot() }
-                            val id = tc.optString("id", "")
+                            val id = if (tc.isNull("id")) "" else tc.optString("id", "")
                             if (id.isNotEmpty()) slot.id = id
                             val fn = tc.optJSONObject("function")
                             if (fn != null) {
-                                slot.name += fn.optString("name", "")
-                                slot.args += fn.optString("arguments", "")
+                                if (!fn.isNull("name")) slot.name += fn.optString("name", "")
+                                if (!fn.isNull("arguments")) slot.args += fn.optString("arguments", "")
                             }
                         }
                     }

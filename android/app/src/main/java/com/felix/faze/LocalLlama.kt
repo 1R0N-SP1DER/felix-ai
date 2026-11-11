@@ -25,7 +25,7 @@ object LocalLlama {
     const val KEEP_MESSAGES = 6
 
     /** Small on purpose: a slow phone reads every word of the prompt before it answers. */
-    const val SYSTEM = "You are FAZE, a close, casual friend of the user, running offline on their phone. Talk relaxed and natural, match the length of their message, no lists or markdown (replies are read aloud). You cannot use tools or look things up right now."
+    const val SYSTEM = "You are FAZE, a close, casual friend of the user, running offline on their phone. Talk relaxed and natural, match the length of their message, no lists or markdown (replies are read aloud). Use a tool only when clearly asked; never invent a tool result."
 
     val modelDirs = listOf("$TERMUX/home", "/sdcard/Download", "/sdcard/models")
 
@@ -54,7 +54,7 @@ object LocalLlama {
 
     /** Starts the server in the background. One slot and a small context keep the memory down. */
     fun serverCommand(bin: String, model: String, threads: Int, ctx: Int): String =
-        "LD_LIBRARY_PATH=$TERMUX/usr/lib nohup $bin -m $model -c ${ctx.coerceIn(512, 8192)} -t ${threads.coerceIn(1, 8)} -np 1 --host 127.0.0.1 --port $PORT >$LOG 2>&1 &"
+        "LD_LIBRARY_PATH=$TERMUX/usr/lib nohup $bin -m $model -c ${ctx.coerceIn(512, 8192)} -t ${threads.coerceIn(1, 8)} -np 1 --jinja --host 127.0.0.1 --port $PORT >$LOG 2>&1 &"
 
     fun stopCommand() = "pkill -f 'port $PORT'"
 
@@ -63,6 +63,58 @@ object LocalLlama {
         JSONObject(json).optJSONArray("data")?.optJSONObject(0)?.optString("id")?.takeIf { it.isNotEmpty() }
     } catch (e: Exception) {
         null
+    }
+
+    /** The few tools a small offline model is offered (more would eat its short memory and confuse it). Only those the app really has are sent. */
+    val OFFLINE_TOOLS = listOf("get_current_datetime", "get_battery_status", "get_weather", "set_volume", "open_app", "search_web", "vibrate", "set_wifi", "set_mobile_data", "set_bluetooth")
+
+    /** The tool list shrunk to names, one short sentence each and the arguments, or null when none of the offered tools exist. */
+    fun compactTools(schema: JSONArray?): JSONArray? {
+        if (schema == null) return null
+        val out = JSONArray()
+        for (name in OFFLINE_TOOLS) {
+            for (i in 0 until schema.length()) {
+                val fn = schema.optJSONObject(i)?.optJSONObject("function") ?: continue
+                if (fn.optString("name") != name) continue
+                val props = JSONObject()
+                val src = fn.optJSONObject("parameters")?.optJSONObject("properties")
+                if (src != null) for (k in src.keys()) props.put(k, JSONObject().put("type", src.getJSONObject(k).optString("type", "string")).put("description", src.getJSONObject(k).optString("description", "").take(60)))
+                val required = JSONArray(); for (k in props.keys()) required.put(k)
+                val short = fn.optString("description", "").substringBefore(". ").take(100)
+                out.put(JSONObject().put("type", "function").put("function", JSONObject().put("name", name).put("description", short)
+                    .put("parameters", JSONObject().put("type", "object").put("properties", props).put("required", required))))
+            }
+        }
+        return if (out.length() == 0) null else out
+    }
+
+    /** Tools are offered only before one has run for this request; afterwards the model just says what was done. */
+    fun noToolResultYet(messages: JSONArray): Boolean {
+        val lastUser = (0 until messages.length()).lastOrNull { messages.optJSONObject(it)?.optString("role") == "user" } ?: return true
+        return (lastUser + 1 until messages.length()).none { messages.optJSONObject(it)?.optString("role") == "tool" }
+    }
+
+    /** LFM writes a call as <|tool_call_start|>[name(arg="x", n=3)]<|tool_call_end|>; if the server did not turn that into a real call, read it here. */
+    fun parseInlineCalls(text: String): List<ToolCall> {
+        val body = Regex("<\\|tool_call_start\\|>(.*?)<\\|tool_call_end\\|>", RegexOption.DOT_MATCHES_ALL).find(text)?.groupValues?.get(1)?.trim() ?: return emptyList()
+        val calls = ArrayList<ToolCall>()
+        for ((i, m) in Regex("([A-Za-z_][A-Za-z0-9_]*)\\(([^()]*)\\)").findAll(body).withIndex()) {
+            val args = JSONObject()
+            for (a in Regex("([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^,]+)").findAll(m.groupValues[2])) {
+                val raw = a.groupValues[2].trim()
+                val v: Any = when {
+                    raw.length >= 2 && (raw[0] == '"' || raw[0] == '\'') -> raw.substring(1, raw.length - 1)
+                    raw == "true" || raw == "True" -> true
+                    raw == "false" || raw == "False" -> false
+                    raw.toLongOrNull() != null -> raw.toLong()
+                    raw.toDoubleOrNull() != null -> raw.toDouble()
+                    else -> raw
+                }
+                args.put(a.groupValues[1], v)
+            }
+            calls.add(ToolCall("local$i", m.groupValues[1], args.toString()))
+        }
+        return calls
     }
 
     /** What the offline model is sent: the short system prompt, then only the last few things said (no tool traffic). */
@@ -150,6 +202,23 @@ class OfflineChat(
         if (path.isEmpty()) throw RemoteError("model", "pick an offline model first (model picker > Offline)")
         server.ensure(path, notice)?.let { throw RemoteError("model", it) }
         if (cancelled()) throw Cancelled()
-        return inner.chat("local", LocalLlama.shrink(messages), null, onToken, cancelled)
+        val msgs = LocalLlama.shrink(messages)
+        val offered = if (LocalLlama.noToolResultYet(messages)) LocalLlama.compactTools(tools) else null
+        if (offered != null) {
+            try {
+                val r = inner.chat("local", msgs, offered, onToken, cancelled)
+                if (r.toolCalls.isEmpty() && r.content.contains("<|tool_call_start|>")) {
+                    val inline = LocalLlama.parseInlineCalls(r.content)
+                    if (inline.isNotEmpty()) return ChatResult("", inline, r.streamed)
+                }
+                return r
+            } catch (e: Cancelled) {
+                throw e
+            } catch (e: RemoteError) {
+                if (cancelled()) throw Cancelled()
+                // an old llama-server may refuse tools: talk without them rather than fail
+            }
+        }
+        return inner.chat("local", msgs, null, onToken, cancelled)
     }
 }

@@ -32,6 +32,7 @@ object BuiltInRoutes {
     private val writeClipboard = Regex("""(?:copy|put|save|write)\s+["“](.+?)["”]\s+(?:to|in|into)\s+(?:my |the )?clipboard""", RegexOption.IGNORE_CASE)
     private val time = Regex("^(what time is it|whats time|what is time|time now|current time|whats current time|date and time|current date and time|todays date|whats todays date|what is todays date)$")
     private val readClipboard = Regex("^(whats|what is) (on|in) clipboard$|^read clipboard$|^whats clipboard$|^what is clipboard$")
+    private val endLive = Regex("^(end|stop|exit|close|leave|quit) (live|live mode|voice chat|voice mode|live chat|call)$|^hang up$|^end call$")
     private val volume = Regex("^(set |turn )?volume (to )?(\\d{1,2})$")
     private val notToday = Regex(
         "\\b(tomorrow|yesterday|next|last|week|weekend|month|forecast for|monday|tuesday|wednesday|thursday|friday|saturday|sunday|why|climate|average|usually|history|app|widget|change|and|then|also|after)\\b",
@@ -56,6 +57,7 @@ object BuiltInRoutes {
             "battery" in tokens && tokens.size <= 6 -> Route("get_battery_status", JSONObject(), "built-in")
             time.matches(joined) -> Route("get_current_datetime", JSONObject(), "built-in")
             readClipboard.matches(joined) -> Route("read_clipboard", JSONObject(), "built-in")
+            endLive.matches(joined) -> Route("end_live", JSONObject(), "built-in")
             else -> null
         }
     }

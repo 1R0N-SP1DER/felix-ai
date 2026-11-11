@@ -56,7 +56,7 @@ class LiveService : Service() {
     /** The bubble shows only while a conversation is going and the app is not on screen. */
     private fun update() {
         val b = bubble ?: return
-        if (!(core.liveOn || core.voiceOn) || core.appVisible || !b.canShow()) {
+        if (!(core.liveOn || core.voiceOn) || core.appVisible || core.overlayUp || !b.canShow()) {
             b.hide()
             return
         }

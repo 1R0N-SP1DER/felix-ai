@@ -71,6 +71,17 @@ class FazeCore(private val app: Application) : EngineListener {
     private val executor = Executors.newSingleThreadExecutor()
     private val transport = UrlTransport()
     private val speaker = Speaker(app)
+    private lateinit var rawTools: Tools
+    val scheduler = AndroidScheduler(app, ScheduleStore(File(app.filesDir, "schedule.json")))
+    private val scheduleRunner = ScheduleRunner(app, this, scheduler)
+    fun runDueTasks(done: () -> Unit = {}) = main.post { scheduleRunner.runDue(done) }
+
+    /** A switch the person approved when they scheduled it. Only the allowed ones, and not through the chat or the model. */
+    fun runApprovedAction(tool: String, enabled: Boolean): ToolResult {
+        if (tool !in ScheduledActions.ALLOWED) return ToolResult(false, "not allowed")
+        return rawTools.execute(tool, org.json.JSONObject().put("enabled", enabled))
+    }
+    fun rearmSchedule() = scheduler.rearm()
     private val recorder = Recorder()
     private val stt = Stt(transport, { settings.groqKey })
     private val store = ChatStore(File(app.filesDir, "chats"))
@@ -90,6 +101,19 @@ class FazeCore(private val app: Application) : EngineListener {
     /** Whether the app is on screen. When it is not and a conversation is going, the floating bubble shows. */
     @Volatile var appVisible = true
     @Volatile private var serviceUp = false
+
+    /** Lets the model end live mode or voice chat itself, after its goodbye has been spoken. */
+    private val liveControl = object : LiveControl {
+        override fun active(): Boolean = liveOn || voiceOn
+        override fun endAfterSpeech() {
+            Thread {
+                EndAfterSpeech.run({ speaker.isSpeaking() || (live?.isSpeaking() ?: false) }, { Thread.sleep(it) }, { main.post { closeLiveScreen() } })
+            }.start()
+        }
+    }
+
+    /** True while the half-screen overlay (the volume-key chord) is open: it stands in for the bubble. */
+    @Volatile var overlayUp = false
 
     /** Voice chat (you talk, Whisper listens, the chat answers aloud): whether it is on, and its one-line state for Settings. */
     var voiceOn by mutableStateOf(false)
@@ -146,7 +170,8 @@ class FazeCore(private val app: Application) : EngineListener {
             { settings.allowPowered },
             { PermissionPolicy.all().map { it.first }.toSet() },
         )
-        gate = GatedTools(Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app)), broker) { name -> if (userTools.has(name)) Tier.SAFE else null }
+        rawTools = Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app), scheduler, AndroidSwitches(), liveControl)
+        gate = GatedTools(rawTools, broker, extraTier = { name -> if (userTools.has(name)) Tier.SAFE else null }, approvalMode = { settings.approvalMode }, phoneControl = { settings.phoneControl })
         val tools: ToolRunner = gate
         gatedTools = tools
         // A tool that takes over the screen waits for the assistant to finish speaking, unless the bubble keeps the conversation going outside the app.
@@ -389,7 +414,7 @@ class FazeCore(private val app: Application) : EngineListener {
     }
 
     /** The conversation can carry on outside the app: the service is up and the bubble may be drawn. */
-    private fun bubbleReady(): Boolean = serviceUp && android.provider.Settings.canDrawOverlays(app)
+    private fun bubbleReady(): Boolean = overlayUp || (serviceUp && android.provider.Settings.canDrawOverlays(app))
 
     /** A microphone foreground service keeps the conversation alive when the app is left. It has to be started while the app is on screen. */
     private fun startLiveService() {

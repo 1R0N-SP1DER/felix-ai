@@ -23,6 +23,14 @@ object PermissionPolicy {
         "list_apps" to Tier.SAFE,
         "read_screen" to Tier.CONFIRM,
         "look_at_screen" to Tier.CONFIRM,
+        "set_mobile_data" to Tier.CONFIRM,
+        "set_wifi" to Tier.CONFIRM,
+        "set_bluetooth" to Tier.CONFIRM,
+        "schedule_action" to Tier.CONFIRM,
+        "schedule_task" to Tier.CONFIRM,
+        "list_scheduled" to Tier.SAFE,
+        "cancel_scheduled" to Tier.SAFE,
+        "end_live" to Tier.SAFE,
         "tap" to Tier.CONFIRM,
         "long_press" to Tier.CONFIRM,
         "swipe" to Tier.CONFIRM,
@@ -40,12 +48,29 @@ object PermissionPolicy {
     const val DECLINED = "The user declined"
 
     val controls = setOf("tap", "long_press", "swipe", "type_text", "press_key")
+
+    /** Everything that looks at or drives the screen: the "Phone control" setting decides about these. */
+    val phoneTools = controls + setOf("read_screen", "look_at_screen")
+
+    /** Settings > Approval mode: ask (default) or yolo (every tool that would ask runs at once). */
+    fun approvalMode(v: String): String = if (v == "yolo") "yolo" else "ask"
+
+    /** Settings > Phone control: off (refused), ask (one yes covers a couple of minutes) or on (always allowed). */
+    fun phoneMode(v: String): String = if (v == "off" || v == "on") v else "ask"
     const val CONTROL_MINUTES = 2L
 
     /** Every tool the app knows, with its tier (the sidebar's Tools list). */
     fun all(): List<Pair<String, Tier>> = registry.toList()
 
     private fun powersOf(args: JSONObject): String = args.optString("powers").split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct().joinToString(", ")
+
+    private fun whenText(args: JSONObject): String {
+        val inMin = args.optInt("in_minutes", 0)
+        val at = args.optString("at", "").trim()
+        val first = if (inMin > 0) "in $inMin minutes" else if (at.isNotEmpty()) "at $at" else "at the time given"
+        val every = args.optInt("repeat_minutes", 0)
+        return if (every > 0) first + ", then " + ScheduleTime.everyText(every) else first
+    }
 
     fun summary(tool: String, args: JSONObject): String = when (tool) {
         "read_clipboard" -> "Read what is on your clipboard and show it to the model"
@@ -56,6 +81,9 @@ object PermissionPolicy {
             "type_text" -> "type \"" + args.optString("text", "").replace('\n', ' ').take(60) + "\""
             else -> "press " + args.optString("key", "")
         }
+        "set_mobile_data", "set_wifi", "set_bluetooth" -> ScheduledActions.label(tool, args.optBoolean("enabled")) + " now"
+        "schedule_action" -> ScheduledActions.label(args.optString("action"), args.optBoolean("enabled")) + " " + whenText(args) + " (runs by itself, even with the phone locked)"
+        "schedule_task" -> "Run this " + whenText(args) + ": " + args.optString("task", "").replace('\n', ' ').take(120)
         "read_screen" -> "Read what is on your screen and show it to the model"
         "look_at_screen" -> "Take a screenshot and send it to the vision model" + (args.optString("question", "").trim().let { if (it.isEmpty()) "" else ": " + it.replace('\n', ' ').take(100) })
         "write_clipboard" -> "Put this on your clipboard: " + args.optString("text", "").replace('\n', ' ').take(80)
@@ -85,6 +113,8 @@ class GatedTools(
     private val inner: ToolRunner,
     private val approver: Approver,
     private val clock: () -> Long = { System.currentTimeMillis() },
+    private val approvalMode: () -> String = { "ask" },
+    private val phoneControl: () -> String = { "ask" },
     private val extraTier: (String) -> Tier? = { null },
 ) : ToolRunner {
     @Volatile private var controlUntil = 0L
@@ -104,7 +134,14 @@ class GatedTools(
         Tier.BLOCK -> ToolResult(false, "$name is not allowed.")
         Tier.CONFIRM -> {
             val refusal = inner.precheck(name, args)
-            if (name in PermissionPolicy.controls && clock() < controlUntil) {
+            val phone = if (name in PermissionPolicy.phoneTools) PermissionPolicy.phoneMode(phoneControl()) else "ask"
+            if (phone == "off") {
+                ToolResult(false, "Phone control is turned off in Settings, so $name is not allowed. Tell the user they can turn it on in Settings > Agent > Phone control.")
+            } else if (refusal != null) {
+                ToolResult(false, refusal) // bad arguments are refused in every mode; nothing was shown to the person
+            } else if (phone == "on" || PermissionPolicy.approvalMode(approvalMode()) == "yolo") {
+                inner.execute(name, args) // the person chose "no questions" in Settings
+            } else if (name in PermissionPolicy.controls && clock() < controlUntil) {
                 inner.execute(name, args) // the person said yes a moment ago to controlling the screen
             } else if (refusal != null) {
                 ToolResult(false, refusal) // fix it and try again; nothing was shown to the person
