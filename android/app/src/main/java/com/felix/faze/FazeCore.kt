@@ -71,9 +71,16 @@ class FazeCore(private val app: Application) : EngineListener {
     private val executor = Executors.newSingleThreadExecutor()
     private val transport = UrlTransport()
     private val speaker = Speaker(app)
+    private lateinit var rawTools: Tools
     val scheduler = AndroidScheduler(app, ScheduleStore(File(app.filesDir, "schedule.json")))
     private val scheduleRunner = ScheduleRunner(app, this, scheduler)
-    fun runDueTasks() = main.post { scheduleRunner.runDue() }
+    fun runDueTasks(done: () -> Unit = {}) = main.post { scheduleRunner.runDue(done) }
+
+    /** A switch the person approved when they scheduled it. Only the allowed ones, and not through the chat or the model. */
+    fun runApprovedAction(tool: String, enabled: Boolean): ToolResult {
+        if (tool !in ScheduledActions.ALLOWED) return ToolResult(false, "not allowed")
+        return rawTools.execute(tool, org.json.JSONObject().put("enabled", enabled))
+    }
     fun rearmSchedule() = scheduler.rearm()
     private val recorder = Recorder()
     private val stt = Stt(transport, { settings.groqKey })
@@ -146,7 +153,8 @@ class FazeCore(private val app: Application) : EngineListener {
             { settings.allowPowered },
             { PermissionPolicy.all().map { it.first }.toSet() },
         )
-        gate = GatedTools(Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app), scheduler), broker) { name -> if (userTools.has(name)) Tier.SAFE else null }
+        rawTools = Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app), scheduler, AndroidSwitches())
+        gate = GatedTools(rawTools, broker) { name -> if (userTools.has(name)) Tier.SAFE else null }
         val tools: ToolRunner = gate
         gatedTools = tools
         // A tool that takes over the screen waits for the assistant to finish speaking, unless the bubble keeps the conversation going outside the app.

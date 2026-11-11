@@ -92,7 +92,7 @@ class ScheduleTest {
     }
 
     private class FakeScheduler(val store: ScheduleStore, val at: Long) : SchedulerApi {
-        override fun add(prompt: String, atMillis: Long, everyMinutes: Int) = store.add(prompt, atMillis, everyMinutes)
+        override fun add(prompt: String, atMillis: Long, everyMinutes: Int, action: ScheduledAction?) = store.add(prompt, atMillis, everyMinutes, action)
         override fun list() = store.list()
         override fun cancel(id: String) = store.cancel(id)
         override fun now() = at

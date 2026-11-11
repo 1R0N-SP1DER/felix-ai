@@ -10,11 +10,14 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /** A request to run later: [prompt] is handed to Faze as if the person had typed it. [everyMinutes] is 0 for a one-off. */
-data class ScheduledTask(val id: String, val prompt: String, val nextAt: Long, val everyMinutes: Int, val createdAt: Long)
+data class ScheduledAction(val tool: String, val enabled: Boolean)
+
+/** [action] is set for a switch flipped directly at the time (no model, no screen, no network); otherwise [prompt] is run as chat. */
+data class ScheduledTask(val id: String, val prompt: String, val nextAt: Long, val everyMinutes: Int, val createdAt: Long, val action: ScheduledAction? = null)
 
 /** The tools' view of the scheduler. The real one also sets the phone alarm. */
 interface SchedulerApi {
-    fun add(prompt: String, atMillis: Long, everyMinutes: Int): ScheduledTask
+    fun add(prompt: String, atMillis: Long, everyMinutes: Int, action: ScheduledAction? = null): ScheduledTask
     fun list(): List<ScheduledTask>
     fun cancel(id: String): Boolean
     fun now(): Long
@@ -86,26 +89,27 @@ class ScheduleStore(private val file: File, private val clock: () -> Long = { Sy
         val arr = JSONArray(file.readText())
         MutableList(arr.length()) { i ->
             val o = arr.getJSONObject(i)
-            ScheduledTask(o.getString("id"), o.getString("prompt"), o.getLong("nextAt"), o.optInt("every", 0), o.optLong("createdAt", 0))
+            val a = o.optJSONObject("action")?.let { ScheduledAction(it.getString("tool"), it.getBoolean("enabled")) }
+            ScheduledTask(o.getString("id"), o.getString("prompt"), o.getLong("nextAt"), o.optInt("every", 0), o.optLong("createdAt", 0), a)
         }
     } catch (e: Exception) { mutableListOf() }
 
     private fun save() {
         val arr = JSONArray()
-        for (t in items) arr.put(JSONObject().put("id", t.id).put("prompt", t.prompt).put("nextAt", t.nextAt).put("every", t.everyMinutes).put("createdAt", t.createdAt))
+        for (t in items) arr.put(JSONObject().put("id", t.id).put("prompt", t.prompt).put("nextAt", t.nextAt).put("every", t.everyMinutes).put("createdAt", t.createdAt).apply { t.action?.let { a -> put("action", JSONObject().put("tool", a.tool).put("enabled", a.enabled)) } })
         file.writeText(arr.toString())
     }
 
     @Synchronized fun list(): List<ScheduledTask> = items.sortedBy { it.nextAt }
 
-    @Synchronized fun add(prompt: String, atMillis: Long, every: Int): ScheduledTask {
+    @Synchronized fun add(prompt: String, atMillis: Long, every: Int, action: ScheduledAction? = null): ScheduledTask {
         val p = prompt.trim()
         if (p.isEmpty()) throw ToolFailure("say what to do when it is time")
         if (p.length > MAX_PROMPT) throw ToolFailure("keep the task under $MAX_PROMPT characters")
         if (items.size >= MAX_TASKS) throw ToolFailure("there are already $MAX_TASKS scheduled tasks; cancel one first")
         var n = 1
         while (items.any { it.id == "t$n" }) n++
-        val t = ScheduledTask("t$n", p, atMillis, every, clock())
+        val t = ScheduledTask("t$n", p, atMillis, every, clock(), action)
         items.add(t)
         save()
         return t
