@@ -249,12 +249,18 @@ private fun AgentTab(core: FazeCore) {
     var fillers by remember { mutableStateOf(core.settings.voiceFillers) }
     var liveModel by remember { mutableStateOf(core.settings.liveModel) }
     SettingsCard("Approval mode") {
-        Seg(listOf("ask" to "Ask", "yolo" to "Yolo", "off" to "Off"), "ask", soonValues = setOf("yolo", "off")) {}
-        Hint("Ask: tools that read or change what you copied wait for your yes. In the app, the clipboard tools always ask first.")
+        var approval by remember { mutableStateOf(PermissionPolicy.approvalMode(core.settings.approvalMode)) }
+        Seg(listOf("ask" to "Ask", "yolo" to "Yolo"), approval) { approval = it; core.settings.approvalMode = it }
+        Hint(if (approval == "yolo") "Yolo: every tool runs at once with no question, including clipboard, switches, scheduling, new tools and phone control. Anything Faze reads from the web or your screen could steer it, so use it knowingly. Stop still cancels a request." else "Ask: tools that read or change things (clipboard, switches, scheduling, new tools) wait for your yes.")
     }
     SettingsCard("Phone control") {
-        Seg(listOf("off" to "Off", "ask" to "Ask", "on" to "On"), "off", soonValues = setOf("ask", "on")) {}
-        Hint("Lets Gemini see your screen, tap, swipe, type and listen through the mic. Needs higher-level tools. Touches show as circles while it works.")
+        var phone by remember { mutableStateOf(PermissionPolicy.phoneMode(core.settings.phoneControl)) }
+        Seg(listOf("off" to "Off", "ask" to "Ask", "on" to "Always on"), phone) { phone = it; core.settings.phoneControl = it }
+        Hint(when (phone) {
+            "off" -> "Off: Faze can't read your screen, look at it, tap, swipe or type. Needs root."
+            "on" -> "Always on: Faze can read the screen, look at it, tap, swipe, type and press keys with no question and no time limit. It also works from a scheduled task or with the phone locked."
+            else -> "Ask: one yes lets Faze control the screen for 2 minutes. Needs root. Press Stop to take it back."
+        })
         SettingRow("Allow higher-level tools", "Network, shell, files outside the sandbox. Also /elevated") { FazeSwitch(powered, { powered = it; core.settings.allowPowered = it }) }
         val ctx = androidx.compose.ui.platform.LocalContext.current
         val filesOk = if (Build.VERSION.SDK_INT >= 30) android.os.Environment.isExternalStorageManager() else true

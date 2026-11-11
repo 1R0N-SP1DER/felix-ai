@@ -199,6 +199,16 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getBoolean("chord_on", true)
         set(value) = prefs.edit().putBoolean("chord_on", value).apply()
 
+    /** Settings > Approval mode: "ask" or "yolo". */
+    var approvalMode: String
+        get() = PermissionPolicy.approvalMode(text("approval_mode"))
+        set(value) = put("approval_mode", PermissionPolicy.approvalMode(value))
+
+    /** Settings > Phone control: "off", "ask" or "on". */
+    var phoneControl: String
+        get() = PermissionPolicy.phoneMode(text("phone_control"))
+        set(value) = put("phone_control", PermissionPolicy.phoneMode(value))
+
     override fun tavilyKey(): String = tavily
 
     override fun weatherLocation(): String = city

@@ -47,6 +47,15 @@ object PermissionPolicy {
     const val DECLINED = "The user declined"
 
     val controls = setOf("tap", "long_press", "swipe", "type_text", "press_key")
+
+    /** Everything that looks at or drives the screen: the "Phone control" setting decides about these. */
+    val phoneTools = controls + setOf("read_screen", "look_at_screen")
+
+    /** Settings > Approval mode: ask (default) or yolo (every tool that would ask runs at once). */
+    fun approvalMode(v: String): String = if (v == "yolo") "yolo" else "ask"
+
+    /** Settings > Phone control: off (refused), ask (one yes covers a couple of minutes) or on (always allowed). */
+    fun phoneMode(v: String): String = if (v == "off" || v == "on") v else "ask"
     const val CONTROL_MINUTES = 2L
 
     /** Every tool the app knows, with its tier (the sidebar's Tools list). */
@@ -104,6 +113,8 @@ class GatedTools(
     private val approver: Approver,
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val extraTier: (String) -> Tier? = { null },
+    private val approvalMode: () -> String = { "ask" },
+    private val phoneControl: () -> String = { "ask" },
 ) : ToolRunner {
     @Volatile private var controlUntil = 0L
 
@@ -122,7 +133,14 @@ class GatedTools(
         Tier.BLOCK -> ToolResult(false, "$name is not allowed.")
         Tier.CONFIRM -> {
             val refusal = inner.precheck(name, args)
-            if (name in PermissionPolicy.controls && clock() < controlUntil) {
+            val phone = if (name in PermissionPolicy.phoneTools) PermissionPolicy.phoneMode(phoneControl()) else "ask"
+            if (phone == "off") {
+                ToolResult(false, "Phone control is turned off in Settings, so $name is not allowed. Tell the user they can turn it on in Settings > Agent > Phone control.")
+            } else if (refusal != null) {
+                ToolResult(false, refusal) // bad arguments are refused in every mode; nothing was shown to the person
+            } else if (phone == "on" || PermissionPolicy.approvalMode(approvalMode()) == "yolo") {
+                inner.execute(name, args) // the person chose "no questions" in Settings
+            } else if (name in PermissionPolicy.controls && clock() < controlUntil) {
                 inner.execute(name, args) // the person said yes a moment ago to controlling the screen
             } else if (refusal != null) {
                 ToolResult(false, refusal) // fix it and try again; nothing was shown to the person
