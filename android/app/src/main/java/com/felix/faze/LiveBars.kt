@@ -25,11 +25,14 @@ object MicLevel {
 object LiveBars {
     /** Heights 0..1 for [n] bars: a bell (the middle is tallest) that follows [level] and ripples with [phase] (0..1, repeating). */
     fun heights(level: Float, phase: Float, n: Int, floor: Float = 0.08f): FloatArray {
-        val l = level.coerceIn(0f, 1f)
+        // boosted and curved so ordinary speech already reaches high, and each bar moves on its own two rhythms
+        val l = Math.pow((level * 1.4f).coerceIn(0f, 1f).toDouble(), 0.75).toFloat()
         return FloatArray(n) { i ->
             val x = if (n <= 1) 0f else (i - (n - 1) / 2f) / ((n - 1) / 2f)
-            val bell = exp(-2.2 * x * x).toFloat()
-            val ripple = 0.65f + 0.35f * sin(phase * 2.0 * PI + i * 0.9).toFloat()
+            val bell = exp(-1.3 * x * x).toFloat() // flatter than before: the outer bars move too
+            val slow = sin(phase * 2.0 * PI + i * 0.9).toFloat()
+            val quick = sin(phase * 2.0 * PI * 2.3 + i * 1.7).toFloat()
+            val ripple = 0.55f + 0.30f * slow + 0.15f * quick
             (floor + (1f - floor) * l * bell * ripple).coerceIn(floor, 1f)
         }
     }

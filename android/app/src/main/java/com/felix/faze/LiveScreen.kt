@@ -29,7 +29,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.camera.view.PreviewView
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Text
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -85,13 +89,32 @@ fun LiveScreen(core: FazeCore) {
             .background(Brush.verticalGradient(0f to Palette.Bg, 0.55f to Palette.Bg1, 1f to Palette.Accent.copy(alpha = 0.26f)))
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
     ) {
-        Column(modifier = Modifier.align(Alignment.Center).padding(horizontal = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            CoreView(mode, 150.dp)
-            Spacer(Modifier.height(22.dp))
-            Text(
-                if (core.micMuted) "Muted" else state.ifEmpty { "Live" } + when (core.shareMode) { ShareMode.CAMERA -> " · sharing camera"; ShareMode.SCREEN -> " · sharing screen"; else -> "" },
-                color = if (core.micMuted) Palette.Warn else Palette.Dim, fontSize = 15.sp, textAlign = TextAlign.Center,
+        val statusLine = if (core.micMuted) "Muted" else state.ifEmpty { "Live" } + when (core.shareMode) { ShareMode.CAMERA -> " · sharing camera"; ShareMode.SCREEN -> " · sharing screen"; else -> "" }
+        if (core.shareMode == ShareMode.CAMERA) {
+            // the camera is the background: you see what Faze sees, and the logo steps aside
+            AndroidView(
+                factory = { ctx ->
+                    PreviewView(ctx).apply {
+                        implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                        scaleType = PreviewView.ScaleType.FILL_CENTER
+                        core.showCameraPreview(surfaceProvider)
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
             )
+            DisposableEffect(Unit) { onDispose { core.showCameraPreview(null) } }
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.45f), 0.22f to Color.Transparent, 0.65f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.7f))))
+            Text(
+                statusLine,
+                color = if (core.micMuted) Palette.Warn else Color.White, fontSize = 14.sp, textAlign = TextAlign.Center,
+                modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 14.dp).clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.4f)).padding(horizontal = 14.dp, vertical = 6.dp),
+            )
+        } else {
+            Column(modifier = Modifier.align(Alignment.Center).padding(horizontal = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                CoreView(mode, 150.dp)
+                Spacer(Modifier.height(22.dp))
+                Text(statusLine, color = if (core.micMuted) Palette.Warn else Palette.Dim, fontSize = 15.sp, textAlign = TextAlign.Center)
+            }
         }
         Row(
             modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(start = 14.dp, end = 14.dp, bottom = 22.dp),
@@ -100,7 +123,7 @@ fun LiveScreen(core: FazeCore) {
         ) {
             RoundButton(Ico.CAMERA, tint = if (core.shareMode == ShareMode.CAMERA) Palette.Accent else Palette.Text) { toggleShare(ShareMode.CAMERA) }
             RoundButton(Ico.SCREEN, tint = if (core.shareMode == ShareMode.SCREEN) Palette.Accent else Palette.Text) { toggleShare(ShareMode.SCREEN) }
-            ListeningBar(if (speaking) core.outLevel else core.micLevel, core.micMuted, Modifier.weight(1f).height(56.dp))
+            ListeningBar(if (speaking) core.outLevel else core.micLevel, core.micMuted, Modifier.weight(1f).height(76.dp))
             RoundButton(if (core.micMuted) Ico.MIC_OFF else Ico.MIC, tint = if (core.micMuted) Palette.Warn else Palette.Text) { core.toggleMute() }
             RoundButton(Ico.CLOSE) { core.closeLiveScreen() }
         }
@@ -121,7 +144,7 @@ private fun RoundButton(icon: Ico, tint: Color = Palette.Text, soon: Boolean = f
 /** The pill in the middle of the bottom bar: bars that rise with your voice (or with the voice you are hearing). */
 @Composable
 fun ListeningBar(level: Float, muted: Boolean, modifier: Modifier = Modifier) {
-    val smooth by animateFloatAsState(if (muted) 0f else level, tween(90), label = "level")
+    val smooth by animateFloatAsState(if (muted) 0f else level, tween(60), label = "level")
     val ripple = rememberInfiniteTransition(label = "ripple")
     val moving by ripple.animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart), label = "phase")
     val phase = if (LocalMotion.current) moving else 0f
@@ -136,7 +159,7 @@ fun ListeningBar(level: Float, muted: Boolean, modifier: Modifier = Modifier) {
         val n = 23
         val heights = LiveBars.heights(smooth, phase, n)
         val gap = size.width / (n + 1)
-        val maxH = size.height * 0.64f
+        val maxH = size.height * 0.88f
         val brush = Brush.horizontalGradient(listOf(accent, partner), startX = 0f, endX = size.width)
         for (i in 0 until n) {
             val h = heights[i] * maxH
