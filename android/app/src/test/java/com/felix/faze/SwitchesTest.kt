@@ -29,7 +29,7 @@ class SwitchesTest {
         override fun zone(): ZoneId = ZoneId.of("Africa/Lagos")
     }
 
-    private fun tmp(): File = File.createTempFile("sw", ".json").also { it.delete(); it.deleteOnExit() }
+    private fun tmp(): File = File.createTempFile("swtest", ".json").also { it.delete(); it.deleteOnExit() }
 
     private fun tools(sw: FakeSwitches, store: ScheduleStore = ScheduleStore(tmp()) { now }) =
         Tools(FakeDevice(), FakeTransport(), FakeSettings(), scheduler = Sched(store, now), switches = sw)
