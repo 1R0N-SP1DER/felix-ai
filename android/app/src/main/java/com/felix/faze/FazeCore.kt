@@ -171,7 +171,7 @@ class FazeCore(private val app: Application) : EngineListener {
             { PermissionPolicy.all().map { it.first }.toSet() },
         )
         rawTools = Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app), scheduler, AndroidSwitches(), liveControl)
-        gate = GatedTools(rawTools, broker) { name -> if (userTools.has(name)) Tier.SAFE else null }
+        gate = GatedTools(rawTools, broker, extraTier = { name -> if (userTools.has(name)) Tier.SAFE else null }, approvalMode = { settings.approvalMode }, phoneControl = { settings.phoneControl })
         val tools: ToolRunner = gate
         gatedTools = tools
         // A tool that takes over the screen waits for the assistant to finish speaking, unless the bubble keeps the conversation going outside the app.
