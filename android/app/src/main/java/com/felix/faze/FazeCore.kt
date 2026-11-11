@@ -536,6 +536,11 @@ class FazeCore(private val app: Application) : EngineListener {
         })
     }
 
+    /** The live screen shows the camera full screen while it is shared. */
+    fun showCameraPreview(surface: androidx.camera.core.Preview.SurfaceProvider?) {
+        (shareSource as? CameraSource)?.showPreview(surface)
+    }
+
     fun stopShare() {
         shareSource?.stop()
         shareSource = null

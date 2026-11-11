@@ -8,6 +8,7 @@ import android.graphics.Matrix
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -37,6 +38,27 @@ class CameraSource(private val context: Context) : VideoSource {
     }
     private val worker = Executors.newSingleThreadExecutor()
     private var provider: ProcessCameraProvider? = null
+    private var analysis: ImageAnalysis? = null
+    private var preview: Preview? = null
+
+    /** Puts what the camera sees on a [PreviewView] (call on the main thread); null takes it off again. The pictures for the model keep flowing either way. */
+    fun showPreview(surface: Preview.SurfaceProvider?) {
+        val p = provider ?: return
+        val a = analysis ?: return
+        try {
+            p.unbindAll()
+            if (surface == null) {
+                preview = null
+                p.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, a)
+            } else {
+                val pv = Preview.Builder().build().also { it.setSurfaceProvider(surface) }
+                preview = pv
+                p.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, pv, a)
+            }
+        } catch (e: Exception) {
+            // the picture for the model matters more than the preview: carry on without it
+        }
+    }
 
     override fun start(onFrame: (ByteArray) -> Unit, ready: (String?) -> Unit) {
         if (context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) { ready("the camera is not allowed yet"); return }
@@ -66,6 +88,7 @@ class CameraSource(private val context: Context) : VideoSource {
                 p.unbindAll()
                 p.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, analysis)
                 provider = p
+                this.analysis = analysis
                 ready(null)
             } catch (e: Exception) {
                 owner.registry.currentState = Lifecycle.State.DESTROYED
