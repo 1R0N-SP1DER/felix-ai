@@ -75,7 +75,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
     /** The vision model that looks at screenshots (a Groq model that accepts images). */
     var visionModel: String
         get() = text("vision_model").ifEmpty { ScreenEyes.DEFAULT_MODEL }
-        set(value) = put("vision_model", value)
+        set(value) = put("vision_model", value.trim())
 
     /** The Gemini Live model and the voice it speaks with (Settings > Agent > Live voice). */
     var liveModel: String
@@ -117,12 +117,12 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         set(value) = put("offline_binary", value)
 
     var offlineThreads: Int
-        get() = text("offline_threads").toIntOrNull() ?: 4
-        set(value) = put("offline_threads", value.toString())
+        get() = OfflineLimits.threads(text("offline_threads").toIntOrNull())
+        set(value) = put("offline_threads", OfflineLimits.threads(value).toString())
 
     var offlineCtx: Int
-        get() = text("offline_ctx").toIntOrNull() ?: 2048
-        set(value) = put("offline_ctx", value.toString())
+        get() = OfflineLimits.ctx(text("offline_ctx").toIntOrNull())
+        set(value) = put("offline_ctx", OfflineLimits.ctx(value).toString())
 
     fun modelFor(provider: String): String = when (provider) {
         "offline" -> offlineModel
@@ -208,6 +208,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
     var phoneControl: String
         get() = PermissionPolicy.phoneMode(text("phone_control"))
         set(value) = put("phone_control", PermissionPolicy.phoneMode(value))
+
+    /** The volume-key overlay also starts a voice chat (needs the microphone allowed and a Groq key). */
+    var chordVoice: Boolean
+        get() = prefs.getBoolean("chord_voice", true)
+        set(value) = prefs.edit().putBoolean("chord_voice", value).apply()
 
     override fun tavilyKey(): String = tavily
 

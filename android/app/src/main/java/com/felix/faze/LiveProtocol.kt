@@ -80,6 +80,12 @@ object LiveProtocol {
 
     fun text(text: String): String = JSONObject().put("realtimeInput", JSONObject().put("text", text)).toString()
 
+    /** One picture (a camera or screen frame, JPEG) for the model to look at. */
+    fun video(jpeg: ByteArray): String = JSONObject().put(
+        "realtimeInput",
+        JSONObject().put("video", JSONObject().put("data", Base64.getEncoder().encodeToString(jpeg)).put("mimeType", "image/jpeg")),
+    ).toString()
+
     fun audioEnd(): String = JSONObject().put("realtimeInput", JSONObject().put("audioStreamEnd", true)).toString()
 
     fun toolResponses(replies: List<LiveReply>): String {
