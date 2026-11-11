@@ -68,6 +68,10 @@ dependencies {
     // runs the JavaScript of tools the assistant makes, in a sandbox with no way out to Java
     implementation("org.mozilla:rhino:1.7.15")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // camera frames for live mode (no preview, just pictures for the model)
+    implementation("androidx.camera:camera-core:1.4.2")
+    implementation("androidx.camera:camera-camera2:1.4.2")
+    implementation("androidx.camera:camera-lifecycle:1.4.2")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

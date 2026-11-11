@@ -118,6 +118,8 @@ class LiveClient(
 
     fun sendAudio(pcm: ByteArray) = send(LiveProtocol.audio(pcm))
 
+    fun sendVideo(jpeg: ByteArray) = send(LiveProtocol.video(jpeg))
+
     fun sendText(text: String) = send(LiveProtocol.text(text))
 
     fun endAudio() = send(LiveProtocol.audioEnd())
