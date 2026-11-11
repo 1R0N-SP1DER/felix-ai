@@ -102,6 +102,19 @@ class FazeCore(private val app: Application) : EngineListener {
     @Volatile var appVisible = true
     @Volatile private var serviceUp = false
 
+    /** Lets the model end live mode or voice chat itself, after its goodbye has been spoken. */
+    private val liveControl = object : LiveControl {
+        override fun active(): Boolean = liveOn || voiceOn
+        override fun endAfterSpeech() {
+            Thread {
+                EndAfterSpeech.run({ speaker.isSpeaking() || (live?.isSpeaking() ?: false) }, { Thread.sleep(it) }, { main.post { closeLiveScreen() } })
+            }.start()
+        }
+    }
+
+    /** True while the half-screen overlay (the volume-key chord) is open: it stands in for the bubble. */
+    @Volatile var overlayUp = false
+
     /** Voice chat (you talk, Whisper listens, the chat answers aloud): whether it is on, and its one-line state for Settings. */
     var voiceOn by mutableStateOf(false)
     var voiceState by mutableStateOf("")
@@ -114,6 +127,10 @@ class FazeCore(private val app: Application) : EngineListener {
     var liveOn by mutableStateOf(false)
     var liveState by mutableStateOf("")
     @Volatile private var live: LiveSession? = null
+
+    /** What is being shown to the model in live mode: nothing, the camera, or the screen. */
+    var shareMode by mutableStateOf(ShareMode.NONE)
+    private var shareSource: VideoSource? = null
     private val liveStarter = Executors.newSingleThreadExecutor()
     private val liveWorker = Executors.newSingleThreadExecutor() // tool calls: one may wait up to a minute for an approval
     private var sttMs = 0L
@@ -153,7 +170,7 @@ class FazeCore(private val app: Application) : EngineListener {
             { settings.allowPowered },
             { PermissionPolicy.all().map { it.first }.toSet() },
         )
-        rawTools = Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app), scheduler, AndroidSwitches())
+        rawTools = Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app), scheduler, AndroidSwitches(), liveControl)
         gate = GatedTools(rawTools, broker) { name -> if (userTools.has(name)) Tier.SAFE else null }
         val tools: ToolRunner = gate
         gatedTools = tools
@@ -397,7 +414,7 @@ class FazeCore(private val app: Application) : EngineListener {
     }
 
     /** The conversation can carry on outside the app: the service is up and the bubble may be drawn. */
-    private fun bubbleReady(): Boolean = serviceUp && android.provider.Settings.canDrawOverlays(app)
+    private fun bubbleReady(): Boolean = overlayUp || (serviceUp && android.provider.Settings.canDrawOverlays(app))
 
     /** A microphone foreground service keeps the conversation alive when the app is left. It has to be started while the app is on screen. */
     private fun startLiveService() {
@@ -487,12 +504,42 @@ class FazeCore(private val app: Application) : EngineListener {
     }
 
     private fun liveEnded() {
+        stopShare()
         liveOn = false
         live = null
         micLevel = 0f
         outLevel = 0f
         listenControl?.resume()
         stopLiveServiceIfIdle()
+    }
+
+    /** Shows the camera or the screen to the model (live mode only). [done] gets null when it started, otherwise why not (on the main thread). Sharing again switches source. */
+    fun startShare(mode: String, done: (String?) -> Unit) {
+        val session = live
+        if (!liveOn || session == null || !session.isRunning()) { done("Camera and screen share work in live mode (Gemini). Start it with the waveform button."); return }
+        stopShare()
+        val gate = FrameGate()
+        val source: VideoSource = when (mode) {
+            ShareMode.CAMERA -> CameraSource(app)
+            ShareMode.SCREEN -> ScreenSource()
+            else -> { done("unknown source"); return }
+        }
+        shareSource = source
+        source.start({ jpeg ->
+            if (gate.tryBegin()) try { session.sendFrame(jpeg) } finally { gate.done() }
+        }, { failed ->
+            main.post {
+                if (failed == null && shareSource === source && liveOn) shareMode = mode
+                else { if (shareSource === source) { source.stop(); shareSource = null } }
+                done(failed)
+            }
+        })
+    }
+
+    fun stopShare() {
+        shareSource?.stop()
+        shareSource = null
+        shareMode = ShareMode.NONE
     }
 
     /** Starts live mode. The wake-word listener is paused meanwhile (one microphone). The outcome shows in [liveState]. */

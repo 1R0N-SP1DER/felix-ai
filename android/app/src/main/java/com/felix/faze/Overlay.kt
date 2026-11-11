@@ -89,6 +89,27 @@ class CoreDrawView(context: Context) : View(context) {
     }
 }
 
+/** Listening bars for the overlay: moves with the mic while listening and the voice while the AI speaks. */
+class OverlayBarsView(context: Context) : View(context) {
+    var level = 0f
+    var muted = false
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    override fun onDraw(canvas: Canvas) {
+        val n = 9
+        val phase = (SystemClock.uptimeMillis() % 1400L) / 1400f
+        val h = LiveBars.heights(if (muted) 0f else level, phase, n)
+        val slot = width / n.toFloat()
+        paint.color = if (muted) Ink.muted else Ink.accent
+        for (i in 0 until n) {
+            val bar = height * h[i].coerceIn(0.08f, 1f)
+            val cx = slot * (i + 0.5f)
+            canvas.drawRoundRect(cx - slot * 0.18f, (height - bar) / 2f, cx + slot * 0.18f, (height + bar) / 2f, slot * 0.18f, slot * 0.18f, paint)
+        }
+        postInvalidateOnAnimation()
+    }
+}
+
 /**
  * The overlay that replaces the Tasker scene: a panel at the bottom of the screen over a darkened, blurred view of whatever app is
  * open. Tapping outside the panel closes it. The keyboard works because the window only becomes focusable while the text box is in use.
@@ -108,8 +129,11 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
     private var edit: EditText? = null
     private var mic: TextView? = null
     private var send: TextView? = null
+    private var bars: OverlayBarsView? = null
     private var shown = ""
     private var approvalId = 0L
+    private var startedHere = false
+    private var sawActive = false
 
     private val poll = object : Runnable {
         override fun run() {
@@ -152,11 +176,16 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
             background = round(Ink.bg, 22, true)
             setPadding(dp(14), dp(12), dp(14), dp(12))
         }
+        // The grab handle and header: a swipe up on them opens the full app.
+        val grab = View(context).apply { background = round(Ink.line, 3) }
+        panel.addView(grab, LinearLayout.LayoutParams(dp(40), dp(4)).apply { gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(8) })
         val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; orientation = LinearLayout.HORIZONTAL }
         val cv = CoreDrawView(context)
         header.addView(cv, LinearLayout.LayoutParams(dp(44), dp(44)))
         val st = TextView(context).apply { setTextColor(Ink.dim); textSize = 13f }
         header.addView(st, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = dp(10) })
+        val bv = OverlayBarsView(context)
+        header.addView(bv, LinearLayout.LayoutParams(dp(54), dp(28)))
         header.addView(TextView(context).apply {
             text = "✕"
             setTextColor(Ink.dim)
@@ -165,6 +194,8 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
             setOnClickListener { close(false) }
         })
         panel.addView(header)
+        swipeUp(grab)
+        swipeUp(header)
 
         val body = TextView(context).apply { setTextColor(Ink.text); textSize = 16f; setLineSpacing(0f, 1.1f) }
         val sc = ScrollView(context).apply { addView(body) }
@@ -242,11 +273,43 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
             core.reportStatus("couldn't open the overlay: ${e.message ?: e.javaClass.simpleName}")
             return false
         }
-        root = frame; params = p; coreView = cv; status = st; reply = body; scroll = sc
+        root = frame; params = p; coreView = cv; status = st; reply = body; scroll = sc; bars = bv
+        core.overlayUp = true
+        startedHere = false
+        sawActive = core.voiceOn || core.liveOn
         approvalBox = box; approvalText = at; edit = et; mic = mc; send = sd
         shown = ""
         handler.post(poll)
+        if (!sawActive && core.settings.chordVoice && context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            core.startVoiceChat()
+            if (core.voiceOn) { startedHere = true; sawActive = true }
+        }
         return true
+    }
+
+    /** A swipe up on [v] opens the full app; the conversation carries on there. */
+    private fun swipeUp(v: View) {
+        var downY = 0f
+        v.setOnTouchListener { _, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { downY = e.rawY; true }
+                MotionEvent.ACTION_UP -> {
+                    if (downY - e.rawY > dp(60)) openApp()
+                    true
+                }
+                else -> true
+            }
+        }
+    }
+
+    private fun openApp() {
+        startedHere = false // the session now belongs to the app
+        try {
+            context.startActivity(android.content.Intent(context, MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+        } catch (e: Exception) {
+            core.reportStatus("couldn't open the app: ${e.message ?: e.javaClass.simpleName}")
+        }
+        close(false)
     }
 
     // ---- the keyboard: the window is only focusable while the text box is being used
@@ -282,7 +345,8 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
     }
 
     private fun doMic() {
-        if (core.recording) core.finishRecording()
+        if (core.voiceOn || core.liveOn) core.toggleMute()
+        else if (core.recording) core.finishRecording()
         else if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) core.startRecording()
         else core.reportStatus("open the Faze app once and allow the microphone")
     }
@@ -309,7 +373,14 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
             approvalId = a.id
             approvalText?.text = a.summary
         }
-        mic?.text = if (core.recording) "Done" else "Mic"
+        val inCall = core.voiceOn || core.liveOn
+        if (inCall) sawActive = true
+        // A conversation this overlay started ends the overlay when it ends (said "end live", or hung up elsewhere).
+        if (startedHere && sawActive && !inCall) { close(false); return }
+        bars?.level = if (core.speaking || (core.liveOn && core.liveState == LiveSession.SPEAKING)) core.outLevel else core.micLevel
+        bars?.muted = core.micMuted
+        bars?.visibility = if (inCall) View.VISIBLE else View.GONE
+        mic?.text = if (inCall) (if (core.micMuted) "Unmute" else "Mute") else if (core.recording) "Done" else "Mic"
         send?.text = if (core.busy) "■" else "↑"
     }
 
@@ -317,7 +388,9 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
     fun close(force: Boolean) {
         val r = root ?: return
         handler.removeCallbacks(poll)
+        core.overlayUp = false
         core.cancelRecording()
+        if (startedHere) { startedHere = false; core.closeLiveScreen() }
         if (force) core.stop()
         try {
             edit?.let { imm.hideSoftInputFromWindow(it.windowToken, 0) }
@@ -326,6 +399,6 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
             // already gone
         }
         root = null; params = null; coreView = null; status = null; reply = null; scroll = null
-        approvalBox = null; approvalText = null; edit = null; mic = null; send = null
+        approvalBox = null; approvalText = null; edit = null; mic = null; send = null; bars = null
     }
 }

@@ -1,6 +1,10 @@
 package com.felix.faze
 
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -61,6 +65,19 @@ fun LiveScreen(core: FazeCore) {
         else -> CoreMode.LISTENING
     }
     val state = if (core.liveOn) core.liveState else core.voiceState
+    fun toast(text: String) = android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_LONG).show()
+    fun startShare(mode: String) = core.startShare(mode) { failed -> if (failed != null) toast(failed) }
+    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startShare(ShareMode.CAMERA) else toast("Allow the camera to show it to Faze")
+    }
+    fun toggleShare(mode: String) {
+        when {
+            core.shareMode == mode -> core.stopShare()
+            !core.liveOn -> toast("Camera and screen share work in live mode (Gemini)")
+            mode == ShareMode.CAMERA && context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED -> cameraPermission.launch(Manifest.permission.CAMERA)
+            else -> startShare(mode)
+        }
+    }
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -72,7 +89,7 @@ fun LiveScreen(core: FazeCore) {
             CoreView(mode, 150.dp)
             Spacer(Modifier.height(22.dp))
             Text(
-                if (core.micMuted) "Muted" else state.ifEmpty { "Live" },
+                if (core.micMuted) "Muted" else state.ifEmpty { "Live" } + when (core.shareMode) { ShareMode.CAMERA -> " · sharing camera"; ShareMode.SCREEN -> " · sharing screen"; else -> "" },
                 color = if (core.micMuted) Palette.Warn else Palette.Dim, fontSize = 15.sp, textAlign = TextAlign.Center,
             )
         }
@@ -81,8 +98,8 @@ fun LiveScreen(core: FazeCore) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            RoundButton(Ico.CAMERA, soon = true) { soonToast(context) }
-            RoundButton(Ico.SCREEN, soon = true) { soonToast(context) }
+            RoundButton(Ico.CAMERA, tint = if (core.shareMode == ShareMode.CAMERA) Palette.Accent else Palette.Text) { toggleShare(ShareMode.CAMERA) }
+            RoundButton(Ico.SCREEN, tint = if (core.shareMode == ShareMode.SCREEN) Palette.Accent else Palette.Text) { toggleShare(ShareMode.SCREEN) }
             ListeningBar(if (speaking) core.outLevel else core.micLevel, core.micMuted, Modifier.weight(1f).height(56.dp))
             RoundButton(if (core.micMuted) Ico.MIC_OFF else Ico.MIC, tint = if (core.micMuted) Palette.Warn else Palette.Text) { core.toggleMute() }
             RoundButton(Ico.CLOSE) { core.closeLiveScreen() }

@@ -80,6 +80,11 @@ class LiveSession(
         return null
     }
 
+    /** A picture from the camera or screen. Dropped when live mode is not running. */
+    fun sendFrame(jpeg: ByteArray) {
+        if (running) client?.sendVideo(jpeg)
+    }
+
     @Synchronized
     fun stop() {
         val wasRunning = running
@@ -133,6 +138,7 @@ class LiveSession(
         /** What the model is told: the usual persona and notes, plus how a spoken conversation differs from typing. */
         fun instruction(userName: String, memoryBlock: String, toolNames: List<String>): String =
             Persona.system(userName) + memoryBlock + Persona.toolNote(toolNames) +
-                "\n\nYou are talking out loud, live. Keep answers short and natural, as spoken sentences: no lists, no markdown, no symbols read aloud."
+                "\n\nYou are talking out loud, live. Keep answers short and natural, as spoken sentences: no lists, no markdown, no symbols read aloud. " +
+                "When the user shares their camera or screen you receive a picture about once a second: describe or use what you see when asked, and say so if the picture is unclear."
     }
 }

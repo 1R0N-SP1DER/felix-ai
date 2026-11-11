@@ -135,4 +135,23 @@ class RemoteTest {
         transport.streamLines = listOf("", ": keep-alive", "data: not json", "data: " + delta("fine"), "data: [DONE]", "data: " + delta("ignored"))
         assertEquals("fine", chat().content)
     }
+
+    @Test
+    fun aNullContentChunkIsNotTheWordNull() {
+        // llama-server starts a stream with "content": null; that once showed as "null" at the start of every answer
+        val first = "{\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null}}]}"
+        transport.streamLines = sse(first, delta("Hey"), delta(" there"))
+        val tokens = ArrayList<String>()
+        val out = chat(tokens = tokens)
+        assertEquals("Hey there", out.content)
+        assertEquals(listOf("Hey", " there"), tokens)
+    }
+
+    @Test
+    fun aNullToolNameOrIdIsNotTheWordNull() {
+        val call = "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":null,\"function\":{\"name\":\"get_current_datetime\",\"arguments\":null}}]}}]}"
+        transport.streamLines = sse(call, delta(toolCalls = listOf(tc(0, "", "{}"))))
+        val out = chat(tools = JSONArray().put(JSONObject().put("type", "function")))
+        assertEquals(listOf(ToolCall("", "get_current_datetime", "{}")), out.toolCalls)
+    }
 }
