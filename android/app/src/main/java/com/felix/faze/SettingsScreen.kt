@@ -274,6 +274,21 @@ private fun AgentTab(core: FazeCore) {
             if (count > 0) Text("Forget all", color = Palette.Accent, modifier = Modifier.clickable { core.learned.clear(); count = 0 }.padding(8.dp))
         }
     }
+    SettingsCard("Offline model") {
+        var threads by remember { mutableStateOf(core.settings.offlineThreads.toString()) }
+        var ctxSize by remember { mutableStateOf(core.settings.offlineCtx.toString()) }
+        SettingRow("Threads", "CPU cores the model uses. Fewer is gentler on the phone and its memory; more is faster") {}
+        Seg(OfflineLimits.THREADS.map { it.toString() to it.toString() }, threads, small = true) { threads = it; core.settings.offlineThreads = it.toInt() }
+        SettingRow("Context", "How much of the chat it can hold. A smaller number uses less memory (Android closes apps that use too much)") {}
+        Seg(OfflineLimits.CTX.map { it.toString() to it.toString() }, ctxSize, small = true) { ctxSize = it; core.settings.offlineCtx = it.toInt() }
+        Hint("Applies the next time the offline model starts: switch to another model and back, or restart the app. Pick the model itself from the model button in the chat.")
+    }
+    SettingsCard("Vision model") {
+        var vision by remember { mutableStateOf(core.settings.visionModel) }
+        SettingRow("Model", "The Groq model that looks at screenshots (look at screen). Leave blank for the default: ${ScreenEyes.DEFAULT_MODEL}", last = true) {
+            FieldBox(vision, false, Modifier.widthIn(max = 190.dp)) { vision = it; core.settings.visionModel = it }
+        }
+    }
     SettingsCard("Voice chat") {
         SettingRow("Filler phrases", "A short phrase like \"let me look that up\" while a slow answer is on its way") { FazeSwitch(fillers, { fillers = it; core.settings.voiceFillers = it }) }
         Hint("Start it from the arrow next to the mic in the chat. Talk and it answers out loud; Groq Whisper does the listening. With headphones you can talk over it; without them the mic waits until it has finished. It keeps going outside the app in a floating bubble (needs the overlay permission).")
@@ -285,10 +300,7 @@ private fun AgentTab(core: FazeCore) {
         Hint("A spoken conversation with Gemini Live. With headphones you can talk over it; without them the mic is muted while it speaks.")
     }
     SavedToolsCard(core)
-    SettingsCard("Saved tasks") {
-        Hint("Nothing saved yet.")
-        WideButton("Clear all tasks", soon = true) {}
-    }
+    ScheduledTasksCard(core)
     MemoryCard(core)
 }
 
@@ -410,6 +422,7 @@ private fun AdvancedTab(core: FazeCore) {
     var city by remember { mutableStateOf(s.city) }
     var hideDot by remember { mutableStateOf(s.hideMicDot) }
     var chord by remember { mutableStateOf(s.chordEnabled) }
+    var chordVoice by remember { mutableStateOf(s.chordVoice) }
     var note by remember { mutableStateOf("") }
     val main = remember { Handler(Looper.getMainLooper()) }
 
@@ -433,6 +446,9 @@ private fun AdvancedTab(core: FazeCore) {
         val a11yOk = (android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: "").contains("com.felix.faze/")
         SettingRow("Hold both volume keys to open", "Opens the overlay over any app. With it open, hold volume up to force-close it.") {
             FazeSwitch(chord, { chord = it; s.chordEnabled = it })
+        }
+        SettingRow("Start voice chat with it", "The overlay starts listening as soon as it opens. Swipe up on its top edge to open the full app.") {
+            FazeSwitch(chordVoice, { chordVoice = it; s.chordVoice = it })
         }
         SettingRow("Display over other apps", if (overlayOk) "Allowed" else "Not allowed yet") {
             Text("Allow", color = Palette.Accent, modifier = Modifier.clickable {
@@ -478,5 +494,21 @@ private fun FieldBox(value: String, secret: Boolean, modifier: Modifier = Modifi
             visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
             modifier = Modifier.fillMaxWidth(),
         )
+    }
+}
+
+/** Tasks Faze will run later or on repeat (made by asking, for example "remind me in 20 minutes to stretch"). */
+@Composable
+private fun ScheduledTasksCard(core: FazeCore) {
+    var items by remember { mutableStateOf(core.scheduler.list()) }
+    SettingsCard("Scheduled tasks") {
+        if (items.isEmpty()) Hint("Nothing scheduled. Ask Faze, for example: remind me in 20 minutes to stretch, or every day at 7 tell me the weather.")
+        items.forEachIndexed { i, t ->
+            val zone = core.scheduler.zone()
+            SettingRow(t.prompt, "${ScheduleTime.describe(t.nextAt, core.scheduler.now(), zone)}, ${ScheduleTime.everyText(t.everyMinutes)}", last = i == items.lastIndex) {
+                Text("Cancel", color = Palette.Accent, modifier = Modifier.clickable { core.scheduler.cancel(t.id); items = core.scheduler.list() }.padding(8.dp))
+            }
+        }
+        Hint("Runs when the phone wakes at the time. For exact times, allow \"Alarms & reminders\" for Faze in the phone's app settings; otherwise a task can be a few minutes late. A task that needs your approval waits for you in the app.")
     }
 }

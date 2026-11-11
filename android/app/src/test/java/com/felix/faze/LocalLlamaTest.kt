@@ -4,6 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -171,5 +172,61 @@ class LocalLlamaTest {
             try { chat.chat("x", JSONArray(), null, { }, { false }); fail(part) } catch (e: RemoteError) { assertTrue(e.message, e.message!!.contains(part)) }
         }
         assertTrue(inner.calls.isEmpty())
+    }
+
+    private fun tool(name: String, desc: String, vararg params: String): JSONObject {
+        val props = JSONObject(); for (p in params) props.put(p, JSONObject().put("type", "string").put("description", "d".repeat(200)))
+        return JSONObject().put("type", "function").put("function", JSONObject().put("name", name).put("description", desc)
+            .put("parameters", JSONObject().put("type", "object").put("properties", props).put("required", JSONArray(params.toList()))))
+    }
+
+    @Test fun theOfflineModelGetsOnlyAFewShortenedTools() {
+        val all = JSONArray().put(tool("get_weather", "Gets the weather. It is long and has more detail after.", "city")).put(tool("create_tool", "x")).put(tool("tap", "y")).put(tool("get_battery_status", "Battery."))
+        val c = LocalLlama.compactTools(all)!!
+        val names = (0 until c.length()).map { c.getJSONObject(it).getJSONObject("function").getString("name") }
+        assertEquals(listOf("get_current_datetime", "get_battery_status", "get_weather").filter { it in names }, names.sortedBy { LocalLlama.OFFLINE_TOOLS.indexOf(it) })
+        assertTrue("tap" !in names && "create_tool" !in names)
+        val w = (0 until c.length()).map { c.getJSONObject(it).getJSONObject("function") }.first { it.getString("name") == "get_weather" }
+        assertEquals("Gets the weather", w.getString("description"))
+        assertTrue(w.getJSONObject("parameters").getJSONObject("properties").getJSONObject("city").getString("description").length <= 60)
+        assertNull(LocalLlama.compactTools(JSONArray().put("tool")))
+        assertNull(LocalLlama.compactTools(null))
+    }
+
+    @Test fun toolsAreOfferedOnlyBeforeOneHasRun() {
+        val before = JSONArray().put(JSONObject().put("role", "user").put("content", "battery?"))
+        val after = JSONArray(before.toString()).put(JSONObject().put("role", "tool").put("content", "82%"))
+        assertTrue(LocalLlama.noToolResultYet(before))
+        assertFalse(LocalLlama.noToolResultYet(after))
+    }
+
+    @Test fun anInlineLfmToolCallIsReadAsARealCall() {
+        val calls = LocalLlama.parseInlineCalls("<|tool_call_start|>[get_weather(city=\"Lagos\"), set_volume(level=7)]<|tool_call_end|>")
+        assertEquals(listOf("get_weather", "set_volume"), calls.map { it.name })
+        assertEquals("Lagos", JSONObject(calls[0].arguments).getString("city"))
+        assertEquals(7, JSONObject(calls[1].arguments).getInt("level"))
+        assertTrue(LocalLlama.parseInlineCalls("just talking").isEmpty())
+    }
+
+    @Test fun theServerIsStartedWithJinjaSoToolsAreAccepted() {
+        assertTrue(LocalLlama.serverCommand("/b/s", lfm, 4, 2048).contains("--jinja"))
+    }
+
+    @Test fun offlineChatOffersToolsFirstAndTalksWithoutThemIfTheServerRefuses() {
+        val schema = JSONArray().put(tool("get_battery_status", "Battery."))
+        val inner = FakeChat(RemoteError("server", "tools need --jinja"), ChatResult("hey", emptyList(), false))
+        val out = OfflineChat(inner, FakeServer(), { lfm }, { }).chat("x", JSONArray().put(JSONObject().put("role", "user").put("content", "hi")), schema, { }, { false })
+        assertEquals("hey", out.content)
+        assertEquals(2, inner.calls.size)
+        assertNotNull(inner.calls[0].tools)
+        assertNull(inner.calls[1].tools)
+    }
+
+    @Test fun offlineChatReadsAnInlineToolCallWhenTheServerDidNotParseIt() {
+        val schema = JSONArray().put(tool("get_battery_status", "Battery."))
+        val inner = FakeChat(ChatResult("<|tool_call_start|>[get_battery_status()]<|tool_call_end|>", emptyList(), true))
+        val out = OfflineChat(inner, FakeServer(), { lfm }, { }).chat("x", JSONArray().put(JSONObject().put("role", "user").put("content", "battery?")), schema, { }, { false })
+        assertEquals(listOf("get_battery_status"), out.toolCalls.map { it.name })
+        assertEquals("", out.content)
     }
 }

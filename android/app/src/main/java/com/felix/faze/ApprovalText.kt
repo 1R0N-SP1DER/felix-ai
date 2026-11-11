@@ -11,6 +11,7 @@ object ApprovalText {
             if (summary.contains("(powers: ")) "Faze wrote the code below and asks for the powers listed above. The tool uses them for real, and once you approve it runs without asking again each time. Read the code and the powers before you approve. You can delete the tool later in Settings > Agent."
             else "Faze wrote the code below. It runs in a locked sandbox: no files, no phone access, and only the websites listed. Read it before you approve. You can delete the tool later in Settings > Agent.")
         "write_clipboard" -> ApprovalInfo("Let Faze change your clipboard?", tool, "normal", summary, "Replaces what you last copied with the text above.")
+        "schedule_task" -> ApprovalInfo("Let Faze schedule this?", tool, "normal", summary, "At the time shown, Faze will run the task as if you had typed it, and tell you the result in a notification. Anything that needs your approval then will wait for you. You can see and cancel scheduled tasks in Settings > Agent.")
         else -> ApprovalInfo("Allow this action?", tool, "higher-level", summary, "Runs the tool $tool.")
     }
 }
