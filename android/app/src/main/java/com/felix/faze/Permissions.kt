@@ -112,9 +112,9 @@ class GatedTools(
     private val inner: ToolRunner,
     private val approver: Approver,
     private val clock: () -> Long = { System.currentTimeMillis() },
-    private val extraTier: (String) -> Tier? = { null },
     private val approvalMode: () -> String = { "ask" },
     private val phoneControl: () -> String = { "ask" },
+    private val extraTier: (String) -> Tier? = { null },
 ) : ToolRunner {
     @Volatile private var controlUntil = 0L
 
