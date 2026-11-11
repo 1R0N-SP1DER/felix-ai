@@ -26,6 +26,7 @@ object PermissionPolicy {
         "schedule_task" to Tier.CONFIRM,
         "list_scheduled" to Tier.SAFE,
         "cancel_scheduled" to Tier.SAFE,
+        "end_live" to Tier.SAFE,
         "tap" to Tier.CONFIRM,
         "long_press" to Tier.CONFIRM,
         "swipe" to Tier.CONFIRM,

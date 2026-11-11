@@ -61,6 +61,7 @@ class Tools(
     private val eyes: Eyes? = null,
     private val hands: Hands? = null,
     private val scheduler: SchedulerApi? = null,
+    private val liveControl: LiveControl? = null,
 ) : ToolRunner {
 
     private fun tool(name: String, description: String, vararg params: Param): JSONObject {
@@ -117,6 +118,7 @@ class Tools(
             out.put(tool("list_scheduled", "Call this when the user asks what is scheduled or what reminders they have. No arguments."))
             out.put(tool("cancel_scheduled", "Cancel a scheduled task. Use list_scheduled first if you do not know its id.", Param("id", "string", "The task id, like t1")))
         }
+        if (liveControl != null) out.put(tool("end_live", "Call this when the user asks to end, stop or leave live mode or the voice chat (for example: end live, stop the call, bye). Say a short goodbye in the same reply; the conversation closes after you finish speaking. No arguments."))
         if (hands != null) {
             out.put(tool("tap", "Call this to tap the screen at a point. Read the screen first (read_screen) to get the point of the button or field. Then read it again to check what happened.",
                 Param("x", "integer", "pixels from the left edge"), Param("y", "integer", "pixels from the top edge")))
@@ -194,6 +196,7 @@ class Tools(
                     val id = args.optString("id", "")
                     if (s.cancel(id)) ok("Cancelled $id.") else fail("there is no scheduled task $id")
                 } ?: fail("scheduling is not available")
+                "end_live" -> liveControl?.let { if (it.active()) { it.endAfterSpeech(); ok("Ending after the goodbye.") } else fail("there is no live or voice chat running") } ?: fail("not available")
                 "tap" -> hands?.let { ok(it.tap(int(args, "x"), int(args, "y"))) } ?: fail("controlling the screen is not available")
                 "long_press" -> hands?.let { ok(it.longPress(int(args, "x"), int(args, "y"))) } ?: fail("controlling the screen is not available")
                 "swipe" -> hands?.let { ok(it.swipe(int(args, "x1"), int(args, "y1"), int(args, "x2"), int(args, "y2"))) } ?: fail("controlling the screen is not available")
