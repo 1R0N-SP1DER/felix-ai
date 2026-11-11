@@ -23,6 +23,10 @@ object PermissionPolicy {
         "list_apps" to Tier.SAFE,
         "read_screen" to Tier.CONFIRM,
         "look_at_screen" to Tier.CONFIRM,
+        "set_mobile_data" to Tier.CONFIRM,
+        "set_wifi" to Tier.CONFIRM,
+        "set_bluetooth" to Tier.CONFIRM,
+        "schedule_action" to Tier.CONFIRM,
         "schedule_task" to Tier.CONFIRM,
         "list_scheduled" to Tier.SAFE,
         "cancel_scheduled" to Tier.SAFE,
@@ -51,6 +55,14 @@ object PermissionPolicy {
 
     private fun powersOf(args: JSONObject): String = args.optString("powers").split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct().joinToString(", ")
 
+    private fun whenText(args: JSONObject): String {
+        val inMin = args.optInt("in_minutes", 0)
+        val at = args.optString("at", "").trim()
+        val first = if (inMin > 0) "in $inMin minutes" else if (at.isNotEmpty()) "at $at" else "at the time given"
+        val every = args.optInt("repeat_minutes", 0)
+        return if (every > 0) first + ", then " + ScheduleTime.everyText(every) else first
+    }
+
     fun summary(tool: String, args: JSONObject): String = when (tool) {
         "read_clipboard" -> "Read what is on your clipboard and show it to the model"
         "tap", "long_press", "swipe", "type_text", "press_key" -> "Control your screen for $CONTROL_MINUTES minutes (tap, swipe, type, press keys). First: " + when (tool) {
@@ -60,6 +72,9 @@ object PermissionPolicy {
             "type_text" -> "type \"" + args.optString("text", "").replace('\n', ' ').take(60) + "\""
             else -> "press " + args.optString("key", "")
         }
+        "set_mobile_data", "set_wifi", "set_bluetooth" -> ScheduledActions.label(tool, args.optBoolean("enabled")) + " now"
+        "schedule_action" -> ScheduledActions.label(args.optString("action"), args.optBoolean("enabled")) + " " + whenText(args) + " (runs by itself, even with the phone locked)"
+        "schedule_task" -> "Run this " + whenText(args) + ": " + args.optString("task", "").replace('\n', ' ').take(120)
         "read_screen" -> "Read what is on your screen and show it to the model"
         "look_at_screen" -> "Take a screenshot and send it to the vision model" + (args.optString("question", "").trim().let { if (it.isEmpty()) "" else ": " + it.replace('\n', ' ').take(100) })
         "write_clipboard" -> "Put this on your clipboard: " + args.optString("text", "").replace('\n', ' ').take(80)

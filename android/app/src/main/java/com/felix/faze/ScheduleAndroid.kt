@@ -16,7 +16,7 @@ import java.time.ZoneId
 class AndroidScheduler(private val app: Context, val store: ScheduleStore) : SchedulerApi {
     private val alarms = app.getSystemService(AlarmManager::class.java)
 
-    override fun add(prompt: String, atMillis: Long, everyMinutes: Int): ScheduledTask = store.add(prompt, atMillis, everyMinutes).also { rearm() }
+    override fun add(prompt: String, atMillis: Long, everyMinutes: Int, action: ScheduledAction?): ScheduledTask = store.add(prompt, atMillis, everyMinutes, action).also { rearm() }
     override fun list(): List<ScheduledTask> = store.list()
     override fun cancel(id: String): Boolean = store.cancel(id).also { if (it) rearm() }
     override fun now(): Long = System.currentTimeMillis()
@@ -45,7 +45,11 @@ class ScheduleReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val core = (context.applicationContext as FazeApp).core
-        if (intent.action == ACTION) core.runDueTasks() else core.rearmSchedule()
+        if (intent.action == ACTION) {
+            // goAsync keeps the process alive until the switches have been flipped (the phone may be locked and asleep)
+            val pending = goAsync()
+            core.runDueTasks { try { pending.finish() } catch (e: Exception) { } }
+        } else core.rearmSchedule()
     }
 }
 
@@ -56,12 +60,32 @@ class ScheduleRunner(private val app: Context, private val core: FazeCore, priva
     private var running = false
     private var lock: PowerManager.WakeLock? = null
 
-    fun runDue() {
+    private val actions = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+    /** [done] is called when every direct action has run (prompts carry on afterwards, through the chat). */
+    fun runDue(done: () -> Unit) {
         val due = scheduler.store.takeDue(System.currentTimeMillis())
         scheduler.rearm()
-        if (due.isEmpty()) return
-        queue.addAll(due)
-        if (!running) { running = true; hold(); next() }
+        val direct = due.filter { it.action != null }
+        val chats = due.filter { it.action == null }
+        if (chats.isNotEmpty()) {
+            queue.addAll(chats)
+            if (!running) { running = true; hold(); next() }
+        }
+        if (direct.isEmpty()) { done(); return }
+        val wake = app.getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "faze:action").apply { acquire(60_000L) }
+        actions.execute {
+            try {
+                for (t in direct) {
+                    val a = t.action!!
+                    val r = core.runApprovedAction(a.tool, a.enabled)
+                    notify(t.prompt, if (r.ok) r.text else "Didn't work: ${r.text}")
+                }
+            } finally {
+                try { if (wake.isHeld) wake.release() } catch (e: Exception) { }
+                done()
+            }
+        }
     }
 
     private fun hold() {
