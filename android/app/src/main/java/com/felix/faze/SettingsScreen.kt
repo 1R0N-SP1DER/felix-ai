@@ -300,10 +300,7 @@ private fun AgentTab(core: FazeCore) {
         Hint("A spoken conversation with Gemini Live. With headphones you can talk over it; without them the mic is muted while it speaks.")
     }
     SavedToolsCard(core)
-    SettingsCard("Saved tasks") {
-        Hint("Nothing saved yet.")
-        WideButton("Clear all tasks", soon = true) {}
-    }
+    ScheduledTasksCard(core)
     MemoryCard(core)
 }
 
@@ -497,5 +494,21 @@ private fun FieldBox(value: String, secret: Boolean, modifier: Modifier = Modifi
             visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
             modifier = Modifier.fillMaxWidth(),
         )
+    }
+}
+
+/** Tasks Faze will run later or on repeat (made by asking, for example "remind me in 20 minutes to stretch"). */
+@Composable
+private fun ScheduledTasksCard(core: FazeCore) {
+    var items by remember { mutableStateOf(core.scheduler.list()) }
+    SettingsCard("Scheduled tasks") {
+        if (items.isEmpty()) Hint("Nothing scheduled. Ask Faze, for example: remind me in 20 minutes to stretch, or every day at 7 tell me the weather.")
+        items.forEachIndexed { i, t ->
+            val zone = core.scheduler.zone()
+            SettingRow(t.prompt, "${ScheduleTime.describe(t.nextAt, core.scheduler.now(), zone)}, ${ScheduleTime.everyText(t.everyMinutes)}", last = i == items.lastIndex) {
+                Text("Cancel", color = Palette.Accent, modifier = Modifier.clickable { core.scheduler.cancel(t.id); items = core.scheduler.list() }.padding(8.dp))
+            }
+        }
+        Hint("Runs when the phone wakes at the time. For exact times, allow \"Alarms & reminders\" for Faze in the phone's app settings; otherwise a task can be a few minutes late. A task that needs your approval waits for you in the app.")
     }
 }
