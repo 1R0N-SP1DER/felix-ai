@@ -410,6 +410,7 @@ private fun AdvancedTab(core: FazeCore) {
     var city by remember { mutableStateOf(s.city) }
     var hideDot by remember { mutableStateOf(s.hideMicDot) }
     var chord by remember { mutableStateOf(s.chordEnabled) }
+    var chordVoice by remember { mutableStateOf(s.chordVoice) }
     var note by remember { mutableStateOf("") }
     val main = remember { Handler(Looper.getMainLooper()) }
 
@@ -433,6 +434,9 @@ private fun AdvancedTab(core: FazeCore) {
         val a11yOk = (android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: "").contains("com.felix.faze/")
         SettingRow("Hold both volume keys to open", "Opens the overlay over any app. With it open, hold volume up to force-close it.") {
             FazeSwitch(chord, { chord = it; s.chordEnabled = it })
+        }
+        SettingRow("Start voice chat with it", "The overlay starts listening as soon as it opens. Swipe up on its top edge to open the full app.") {
+            FazeSwitch(chordVoice, { chordVoice = it; s.chordVoice = it })
         }
         SettingRow("Display over other apps", if (overlayOk) "Allowed" else "Not allowed yet") {
             Text("Allow", color = Palette.Accent, modifier = Modifier.clickable {

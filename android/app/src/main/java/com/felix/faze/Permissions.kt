@@ -23,6 +23,7 @@ object PermissionPolicy {
         "list_apps" to Tier.SAFE,
         "read_screen" to Tier.CONFIRM,
         "look_at_screen" to Tier.CONFIRM,
+        "end_live" to Tier.SAFE,
         "tap" to Tier.CONFIRM,
         "long_press" to Tier.CONFIRM,
         "swipe" to Tier.CONFIRM,

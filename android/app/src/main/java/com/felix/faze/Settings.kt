@@ -199,6 +199,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getBoolean("chord_on", true)
         set(value) = prefs.edit().putBoolean("chord_on", value).apply()
 
+    /** The volume-key overlay also starts a voice chat (needs the microphone allowed and a Groq key). */
+    var chordVoice: Boolean
+        get() = prefs.getBoolean("chord_voice", true)
+        set(value) = prefs.edit().putBoolean("chord_voice", value).apply()
+
     override fun tavilyKey(): String = tavily
 
     override fun weatherLocation(): String = city
