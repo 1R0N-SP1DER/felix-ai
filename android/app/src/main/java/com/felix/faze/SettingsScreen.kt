@@ -261,6 +261,10 @@ private fun AgentTab(core: FazeCore) {
             "on" -> "Always on: Faze can read the screen, look at it, tap, swipe, type and press keys with no question and no time limit. It also works from a scheduled task or with the phone locked."
             else -> "Ask: one yes lets Faze control the screen for 2 minutes. Needs root. Press Stop to take it back."
         })
+        var touches by remember { mutableStateOf(core.settings.showTouches) }
+        SettingRow("Show where it touches", if (android.provider.Settings.canDrawOverlays(LocalContext.current)) "A dot where Faze taps, and a line for a swipe, so you can see it really did it" else "A dot where Faze taps or swipes. Needs \"Display over other apps\" (below)") {
+            FazeSwitch(touches, { touches = it; core.settings.showTouches = it })
+        }
         SettingRow("Allow higher-level tools", "Network, shell, files outside the sandbox. Also /elevated") { FazeSwitch(powered, { powered = it; core.settings.allowPowered = it }) }
         val ctx = androidx.compose.ui.platform.LocalContext.current
         val filesOk = if (Build.VERSION.SDK_INT >= 30) android.os.Environment.isExternalStorageManager() else true

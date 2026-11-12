@@ -199,6 +199,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getBoolean("chord_on", true)
         set(value) = prefs.edit().putBoolean("chord_on", value).apply()
 
+    /** Show a dot where Faze taps or swipes (needs "Display over other apps"). */
+    var showTouches: Boolean
+        get() = prefs.getBoolean("show_touches", true)
+        set(value) = prefs.edit().putBoolean("show_touches", value).apply()
+
     /** Settings > Approval mode: "ask" or "yolo". */
     var approvalMode: String
         get() = PermissionPolicy.approvalMode(text("approval_mode"))

@@ -81,8 +81,13 @@ class Agent(private val chat: ChatApi, private val tools: ToolRunner, private va
             }
         }
 
-        for (round in 0 until maxRounds) {
-            val last = round == maxRounds - 1
+        var round = -1
+        while (true) {
+            round++
+            // a phone task (open the app, find the person, type, send) takes as many steps as it takes: once the screen is being driven there is no limit (Stop ends it)
+            val limit = if (executed.any { it.first in PermissionPolicy.phoneTools }) Int.MAX_VALUE else maxRounds
+            if (round >= limit) break
+            val last = round == limit - 1
             val result = try {
                 chat.chat(model, messages, if (last) null else schema, events.onToken, cancelled)
             } catch (e: RemoteError) {
@@ -116,12 +121,14 @@ class Agent(private val chat: ChatApi, private val tools: ToolRunner, private va
             calls.forEachIndexed { i, c ->
                 val args = parseArgs(c.arguments)
                 val key = c.name + "\u0000" + canonical(args)
-                val text = done.getOrPut(key) {
+                val runIt = {
                     val r = tools.execute(c.name, args)
                     events.onTool(c.name, r.ok)
                     executed.add(Triple(c.name, args, r.ok))
                     (if (r.ok) "" else "Error: ") + r.text.take(4000)
                 }
+                // The screen changes after every tap, so reading it again (or tapping the same spot again) must really run, never be answered from before.
+                val text = if (c.name in PermissionPolicy.phoneTools) runIt() else done.getOrPut(key, runIt)
                 messages.put(JSONObject().put("role", "tool").put("tool_call_id", c.id.ifEmpty { "call_$i" }).put("content", text))
             }
         }
