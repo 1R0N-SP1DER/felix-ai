@@ -88,7 +88,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
 
     /** Which online model answers: groq, gemini or openrouter. */
     var provider: String
-        get() = text("provider").let { if (it == "gemini" || it == "openrouter" || it == "offline" || it == "custom") it else "groq" }
+        get() = text("provider").let { if (it == "gemini" || it == "openrouter" || it == "offline" || it == "custom" || it in OpenAiProviders.all) it else "groq" }
         set(value) = put("provider", value)
 
     var geminiKey: String
@@ -137,6 +137,12 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = OfflineLimits.threads(text("offline_threads").toIntOrNull())
         set(value) = put("offline_threads", OfflineLimits.threads(value).toString())
 
+    /** Key and model of DeepSeek and NVIDIA, stored per provider id. */
+    fun compatKey(id: String): String = text("${id}_key")
+    fun setCompatKey(id: String, value: String) = put("${id}_key", value.trim())
+    fun compatModel(id: String): String = text("${id}_model").ifBlank { OpenAiProviders.all[id]?.defaultModel.orEmpty() }
+    fun setCompatModel(id: String, value: String) = put("${id}_model", value.trim())
+
     var offlineCtx: Int
         get() = OfflineLimits.ctx(text("offline_ctx").toIntOrNull())
         set(value) = put("offline_ctx", OfflineLimits.ctx(value).toString())
@@ -146,6 +152,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         "gemini" -> geminiModel
         "openrouter" -> openrouterModel
         "custom" -> customModel
+        in OpenAiProviders.all -> compatModel(provider)
         else -> modelName.ifBlank { Groq.DEFAULT_MODEL }
     }
 
@@ -156,6 +163,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
             "gemini" -> geminiModel = id
             "openrouter" -> openrouterModel = id
             "custom" -> customModel = id
+            in OpenAiProviders.all -> setCompatModel(provider, id)
             else -> modelName = id
         }
     }
@@ -165,6 +173,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         "gemini" -> geminiKey
         "openrouter" -> openrouterKey
         "custom" -> customKey
+        in OpenAiProviders.all -> compatKey(provider)
         else -> groqKey
     }
 
@@ -173,6 +182,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         "gemini" -> geminiKey.isNotEmpty()
         "openrouter" -> openrouterKey.isNotEmpty()
         "custom" -> CustomEndpoint.base(customUrl) != null // the key is optional; an address is what it needs
+        in OpenAiProviders.all -> compatKey(provider).isNotEmpty()
         else -> groqKey.isNotEmpty()
     }
 

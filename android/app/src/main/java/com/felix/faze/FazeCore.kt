@@ -155,6 +155,7 @@ class FazeCore(private val app: Application) : EngineListener {
                     RemoteClient(transport, LocalLlama.BASE, { "local" }, "Offline", 400, JSONObject().put("chat_template_kwargs", JSONObject().put("enable_thinking", false))),
                     localServer, { settings.offlineModel }, { text -> main.post { status = text } },
                 ),
+                *OpenAiProviders.all.values.map { info -> info.id to (RemoteClient(transport, info.base, { settings.compatKey(info.id) }, info.label) as ChatApi) }.toTypedArray(),
                 "custom" to CustomChat(transport, { settings.customUrl }, { settings.customKey }, { settings.customName }),
                 "openrouter" to OpenRouterChat(
                     RemoteClient(transport, OpenRouter.BASE, { settings.openrouterKey }, "OpenRouter"),
@@ -162,7 +163,7 @@ class FazeCore(private val app: Application) : EngineListener {
                     { settings.openrouterModel = it },
                 ),
             ),
-            { Fallbacks.plan(settings.provider, listOf("groq", "gemini", "openrouter", "custom").filter { settings.hasKey(it) }.toSet()) { settings.modelFor(it) } },
+            { Fallbacks.plan(settings.provider, listOf("groq", "gemini", "openrouter", "deepseek", "nvidia", "custom").filter { settings.hasKey(it) }.toSet()) { settings.modelFor(it) } },
             { text -> main.post { status = text } },
         )
         val userTools = UserTools(

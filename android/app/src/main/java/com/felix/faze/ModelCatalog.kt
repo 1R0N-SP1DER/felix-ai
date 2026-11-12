@@ -75,6 +75,7 @@ class ModelCatalog(private val transport: Transport, private val customUrl: () -
             "groq" -> transport.get("${Groq.BASE}/models", mapOf("Authorization" to "Bearer $k"), 15000)
             "gemini" -> transport.get("${GeminiApi.BASE}?pageSize=200", mapOf("x-goog-api-key" to k), 15000)
             "openrouter" -> transport.get("${OpenRouter.BASE}/models", if (k.isEmpty()) emptyMap() else mapOf("Authorization" to "Bearer $k"), 15000)
+            in OpenAiProviders.all -> transport.get("${OpenAiProviders.all.getValue(provider).base}/models", mapOf("Authorization" to "Bearer $k"), 15000)
             "custom" -> {
                 val base = CustomEndpoint.base(customUrl()) ?: throw RemoteError("auth", CustomEndpoint.problem(customUrl()) ?: "no address")
                 transport.get("$base/models", if (k.isEmpty()) emptyMap() else mapOf("Authorization" to "Bearer $k"), 15000)
@@ -83,7 +84,7 @@ class ModelCatalog(private val transport: Transport, private val customUrl: () -
         }
         if (res.status != 200) throw classify(res.status, res.body, res.headers)
         val list = try {
-            when (provider) { "groq" -> ModelLists.groq(res.body); "gemini" -> ModelLists.gemini(res.body); "custom" -> ModelLists.openai(res.body); else -> ModelLists.openrouter(res.body) }
+            when (provider) { "groq" -> ModelLists.groq(res.body); "gemini" -> ModelLists.gemini(res.body); "custom", "deepseek", "nvidia" -> ModelLists.openai(res.body); else -> ModelLists.openrouter(res.body) }
         } catch (e: Exception) {
             throw RemoteError("server", "${ModelSheet.label(provider)} sent a model list I could not read")
         }

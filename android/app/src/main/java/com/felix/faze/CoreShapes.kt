@@ -20,7 +20,7 @@ object CoreShapes {
     /** Which form each backend wears. */
     val MODEL_FORM = mapOf(
         "auto" to "faze", "faze" to "faze", "qwen" to "qwen", "lfm" to "lfm", "gemini" to "gemini",
-        "groq" to "kimi", "openrouter" to "gpt", "custom" to "gpt", "regex" to "faze", "intent" to "faze", "needle" to "faze",
+        "groq" to "kimi", "openrouter" to "gpt", "custom" to "gpt", "deepseek" to "qwen", "nvidia" to "gpt", "regex" to "faze", "intent" to "faze", "needle" to "faze",
     )
 
     private val cache = HashMap<String, FloatArray>()
