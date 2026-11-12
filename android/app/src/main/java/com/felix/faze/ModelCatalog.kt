@@ -19,6 +19,14 @@ object ModelLists {
             .sorted().map { ModelOption(it, it.substringAfterLast('/')) }
     }
 
+    /** The plain OpenAI list: {"data":[{"id":"..."}]}. Embedding, speech and image models are left out. */
+    fun openai(json: String): List<ModelOption> {
+        val data = JSONObject(json).optJSONArray("data") ?: return emptyList()
+        return (0 until data.length()).mapNotNull { data.optJSONObject(it)?.optString("id") }
+            .filter { id -> id.isNotEmpty() && notChat.none { id.contains(it, ignoreCase = true) } }
+            .sorted().map { ModelOption(it, it) }
+    }
+
     fun gemini(json: String): List<ModelOption> {
         val models = JSONObject(json).optJSONArray("models") ?: return emptyList()
         val out = ArrayList<ModelOption>()
@@ -59,19 +67,23 @@ object ModelLists {
 }
 
 /** Asks a provider which models this key can use. Keys go in headers, never in the address. */
-class ModelCatalog(private val transport: Transport, private val key: (String) -> String) {
+class ModelCatalog(private val transport: Transport, private val key: (String) -> String, private val customUrl: () -> String = { "" }) {
     fun fetch(provider: String): List<ModelOption> {
         val k = key(provider).trim()
-        if (k.isEmpty() && provider != "openrouter") throw RemoteError("auth", "add a ${ModelSheet.label(provider)} key first (Settings > Advanced)")
+        if (k.isEmpty() && provider != "openrouter" && provider != "custom") throw RemoteError("auth", "add a ${ModelSheet.label(provider)} key first (Settings > Advanced)")
         val res = when (provider) {
             "groq" -> transport.get("${Groq.BASE}/models", mapOf("Authorization" to "Bearer $k"), 15000)
             "gemini" -> transport.get("${GeminiApi.BASE}?pageSize=200", mapOf("x-goog-api-key" to k), 15000)
             "openrouter" -> transport.get("${OpenRouter.BASE}/models", if (k.isEmpty()) emptyMap() else mapOf("Authorization" to "Bearer $k"), 15000)
+            "custom" -> {
+                val base = CustomEndpoint.base(customUrl()) ?: throw RemoteError("auth", CustomEndpoint.problem(customUrl()) ?: "no address")
+                transport.get("$base/models", if (k.isEmpty()) emptyMap() else mapOf("Authorization" to "Bearer $k"), 15000)
+            }
             else -> throw RemoteError("model", "${ModelSheet.label(provider)} is not in the app yet")
         }
         if (res.status != 200) throw classify(res.status, res.body, res.headers)
         val list = try {
-            when (provider) { "groq" -> ModelLists.groq(res.body); "gemini" -> ModelLists.gemini(res.body); else -> ModelLists.openrouter(res.body) }
+            when (provider) { "groq" -> ModelLists.groq(res.body); "gemini" -> ModelLists.gemini(res.body); "custom" -> ModelLists.openai(res.body); else -> ModelLists.openrouter(res.body) }
         } catch (e: Exception) {
             throw RemoteError("server", "${ModelSheet.label(provider)} sent a model list I could not read")
         }

@@ -78,10 +78,11 @@ class RemoteClient(
     private val label: String,
     private val maxTokens: Int = 1000,
     private val extra: JSONObject? = null,
+    private val keyRequired: Boolean = true,
 ) : ChatApi {
     override fun chat(model: String, messages: JSONArray, tools: JSONArray?, onToken: (String) -> Unit, cancelled: () -> Boolean): ChatResult {
         val apiKey = key().trim()
-        if (apiKey.isEmpty()) throw RemoteError("auth", "$label has no key (add it under Keys)")
+        if (apiKey.isEmpty() && keyRequired) throw RemoteError("auth", "$label has no key (add it under Keys)")
         val payload = JSONObject()
             .put("model", model)
             .put("messages", messages)
@@ -98,7 +99,7 @@ class RemoteClient(
         val slots = TreeMap<Int, Slot>()
         var streamed = false
         val result = try {
-            transport.postStream("$base/chat/completions", mapOf("Authorization" to "Bearer $apiKey"), payload.toString(), 60000) { line ->
+            transport.postStream("$base/chat/completions", if (apiKey.isEmpty()) emptyMap() else mapOf("Authorization" to "Bearer $apiKey"), payload.toString(), 60000) { line ->
                 if (cancelled()) return@postStream false
                 if (!line.startsWith("data:")) return@postStream true
                 val raw = line.substring(5).trim()

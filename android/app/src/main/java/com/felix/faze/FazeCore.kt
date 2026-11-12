@@ -155,13 +155,14 @@ class FazeCore(private val app: Application) : EngineListener {
                     RemoteClient(transport, LocalLlama.BASE, { "local" }, "Offline", 400, JSONObject().put("chat_template_kwargs", JSONObject().put("enable_thinking", false))),
                     localServer, { settings.offlineModel }, { text -> main.post { status = text } },
                 ),
+                "custom" to CustomChat(transport, { settings.customUrl }, { settings.customKey }, { settings.customName }),
                 "openrouter" to OpenRouterChat(
                     RemoteClient(transport, OpenRouter.BASE, { settings.openrouterKey }, "OpenRouter"),
                     { transport.get("${OpenRouter.BASE}/models", emptyMap(), 15000).body },
                     { settings.openrouterModel = it },
                 ),
             ),
-            { Fallbacks.plan(settings.provider, listOf("groq", "gemini", "openrouter").filter { settings.hasKey(it) }.toSet()) { settings.modelFor(it) } },
+            { Fallbacks.plan(settings.provider, listOf("groq", "gemini", "openrouter", "custom").filter { settings.hasKey(it) }.toSet()) { settings.modelFor(it) } },
             { text -> main.post { status = text } },
         )
         val userTools = UserTools(
@@ -288,7 +289,7 @@ class FazeCore(private val app: Application) : EngineListener {
                     LocalLlama.parseModels(Su.run(LocalLlama.scanCommand(), 20_000)).ifEmpty {
                         throw RemoteError("empty", "No .gguf models found in Termux's home, Download or models folder (offline models need root)")
                     }
-                } else ModelCatalog(transport) { settings.keyFor(it) }.fetch(provider)
+                } else ModelCatalog(transport, { settings.keyFor(it) }, { settings.customUrl }).fetch(provider)
                 main.post { modelLists[provider] = list; modelLoading = "" }
             } catch (e: RemoteError) {
                 main.post { modelError = e.message ?: "couldn't load the list"; modelLoading = "" }
