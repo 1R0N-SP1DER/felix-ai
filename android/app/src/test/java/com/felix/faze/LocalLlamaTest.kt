@@ -181,11 +181,11 @@ class LocalLlamaTest {
     }
 
     @Test fun theOfflineModelGetsOnlyAFewShortenedTools() {
-        val all = JSONArray().put(tool("get_weather", "Gets the weather. It is long and has more detail after.", "city")).put(tool("create_tool", "x")).put(tool("tap", "y")).put(tool("get_battery_status", "Battery."))
+        val all = JSONArray().put(tool("get_weather", "Gets the weather. It is long and has more detail after.", "city")).put(tool("create_tool", "x")).put(tool("look_at_screen", "y")).put(tool("get_battery_status", "Battery."))
         val c = LocalLlama.compactTools(all)!!
         val names = (0 until c.length()).map { c.getJSONObject(it).getJSONObject("function").getString("name") }
         assertEquals(listOf("get_current_datetime", "get_battery_status", "get_weather").filter { it in names }, names.sortedBy { LocalLlama.OFFLINE_TOOLS.indexOf(it) })
-        assertTrue("tap" !in names && "create_tool" !in names)
+        assertTrue("look_at_screen" !in names && "create_tool" !in names)
         val w = (0 until c.length()).map { c.getJSONObject(it).getJSONObject("function") }.first { it.getString("name") == "get_weather" }
         assertEquals("Gets the weather", w.getString("description"))
         assertTrue(w.getJSONObject("parameters").getJSONObject("properties").getJSONObject("city").getString("description").length <= 60)

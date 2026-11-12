@@ -78,8 +78,9 @@ class ScheduleRunner(private val app: Context, private val core: FazeCore, priva
             try {
                 for (t in direct) {
                     val a = t.action!!
+                    notify("Running: ${t.prompt}", "Doing it now…", idFor(t), running = true)
                     val r = core.runApprovedAction(a.tool, a.enabled)
-                    notify(t.prompt, if (r.ok) r.text else "Didn't work: ${r.text}")
+                    notify(t.prompt, if (r.ok) r.text else "Didn't work: ${r.text}", idFor(t))
                 }
             } finally {
                 try { if (wake.isHeld) wake.release() } catch (e: Exception) { }
@@ -104,11 +105,12 @@ class ScheduleRunner(private val app: Context, private val core: FazeCore, priva
     /** A chat that is still busy (or a voice call) is given up to ~10 minutes; then the task is reported as missed. */
     private fun whenFree(t: ScheduledTask, tries: Int) {
         if (core.busy || core.voiceOn || core.liveOn) {
-            if (tries <= 0) { notify("Missed: ${t.prompt}", "Faze was busy when it was time."); next(); return }
+            if (tries <= 0) { notify("Missed: ${t.prompt}", "Faze was busy when it was time.", idFor(t)); next(); return }
             main.postDelayed({ whenFree(t, tries - 1) }, 15_000)
             return
         }
         val before = core.messages.size
+        notify("Running now: ${t.prompt}", "Faze is working on it…", idFor(t), running = true) // so a task starting by itself is never a surprise
         core.send("(Scheduled task, run now) ${t.prompt}")
         waitFor(t, before, 360)
     }
@@ -116,15 +118,19 @@ class ScheduleRunner(private val app: Context, private val core: FazeCore, priva
     private fun waitFor(t: ScheduledTask, before: Int, tries: Int) {
         if (core.busy && tries > 0) { main.postDelayed({ waitFor(t, before, tries - 1) }, 500); return }
         val reply = core.messages.drop(before).lastOrNull { it.role == "assistant" }?.text.orEmpty()
-        notify(t.prompt, if (reply.isBlank()) "It ran, but there was no reply (an approval may be waiting in the app)." else reply)
+        notify(t.prompt, if (reply.isBlank()) "It ran, but there was no reply (an approval may be waiting in the app)." else reply, idFor(t))
         next()
     }
 
-    private fun notify(title: String, text: String) {
+    /** One notification per task: "Running" first, then the result takes its place. */
+    private fun idFor(t: ScheduledTask): Int = 2000 + (t.id.removePrefix("t").toIntOrNull() ?: 0)
+
+    private fun notify(title: String, text: String, id: Int, running: Boolean = false) {
         val nm = app.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("scheduled", "Scheduled tasks", NotificationManager.IMPORTANCE_DEFAULT))
+        nm.createNotificationChannel(NotificationChannel("scheduled_running", "Scheduled task started", NotificationManager.IMPORTANCE_LOW)) // quiet: the result is the one that sounds
         val open = PendingIntent.getActivity(app, 0, Intent(app, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        val n = NotificationCompat.Builder(app, "scheduled")
+        val n = NotificationCompat.Builder(app, if (running) "scheduled_running" else "scheduled")
             .setSmallIcon(R.drawable.ic_stat_faze)
             .setContentTitle(title.take(60))
             .setContentText(text.take(120))
@@ -132,6 +138,6 @@ class ScheduleRunner(private val app: Context, private val core: FazeCore, priva
             .setContentIntent(open)
             .setAutoCancel(true)
             .build()
-        try { nm.notify((System.currentTimeMillis() % 100000).toInt(), n) } catch (e: SecurityException) { /* notifications not allowed */ }
+        try { nm.notify(id, n) } catch (e: SecurityException) { /* notifications not allowed */ }
     }
 }

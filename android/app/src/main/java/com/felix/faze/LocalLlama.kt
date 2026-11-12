@@ -66,7 +66,7 @@ object LocalLlama {
     }
 
     /** The few tools a small offline model is offered (more would eat its short memory and confuse it). Only those the app really has are sent. */
-    val OFFLINE_TOOLS = listOf("get_current_datetime", "get_battery_status", "get_weather", "set_volume", "open_app", "search_web", "vibrate", "set_wifi", "set_mobile_data", "set_bluetooth")
+    val OFFLINE_TOOLS = listOf("get_current_datetime", "get_battery_status", "get_weather", "set_volume", "open_app", "search_web", "vibrate", "set_wifi", "set_mobile_data", "set_bluetooth", "read_screen", "press_key", "tap", "swipe", "type_text")
 
     /** The tool list shrunk to names, one short sentence each and the arguments, or null when none of the offered tools exist. */
     fun compactTools(schema: JSONArray?): JSONArray? {
@@ -132,7 +132,7 @@ object LocalLlama {
         val lastUser = (0 until messages.length()).lastOrNull { messages.optJSONObject(it)?.optString("role") == "user" }
         if (lastUser != null && tail.isNotEmpty()) {
             val results = (lastUser + 1 until messages.length()).mapNotNull { messages.optJSONObject(it) }
-                .filter { it.optString("role") == "tool" }.map { it.optString("content").take(400) }
+                .filter { it.optString("role") == "tool" }.map { it.optString("content").take(900) }
             if (results.isNotEmpty()) {
                 val last = tail.last()
                 if (last.getString("role") == "user") tail = tail.dropLast(1) + JSONObject().put("role", "user").put("content", last.getString("content") + "\n\n(Just done for you: " + results.joinToString("; ") + ". Say so in one short sentence.)")

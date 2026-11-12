@@ -1,5 +1,6 @@
 package com.felix.faze
 
+import androidx.compose.ui.graphics.toArgb
 import android.app.Application
 import android.content.Intent
 import android.os.Handler
@@ -87,7 +88,22 @@ class FazeCore(private val app: Application) : EngineListener {
     private val store = ChatStore(File(app.filesDir, "chats"))
     val memory = MemoryStore(File(app.filesDir, "memory.json"))
     val toolStore = ToolStore(File(app.filesDir, "tools.json"))
-    private val broker = ApprovalBroker({ block -> main.post { block() } }, 60) { approval = it }
+    private val approvalNotice = ApprovalNotice(app)
+    private val broker = ApprovalBroker({ block -> main.post { block() } }, 60) { r ->
+        approval = r
+        // Faze is behind another app (it is driving the phone): the question comes as a notification instead of waiting out of sight
+        if (r != null && !appVisible && !overlayUp) approvalNotice.show(r) else approvalNotice.cancel()
+    }
+
+    @Volatile private var workOn = false
+    private fun startWork() {
+        if (workOn) return
+        workOn = true
+        try { app.startForegroundService(android.content.Intent(app, WorkService::class.java)) } catch (e: Exception) { workOn = false }
+    }
+    private fun stopWorkIfIdle() {
+        if (workOn && !engine.isBusy()) { workOn = false; app.stopService(android.content.Intent(app, WorkService::class.java)) }
+    }
     private val engine: ChatEngine
     private lateinit var gatedTools: ToolRunner
     private lateinit var gate: GatedTools
@@ -170,14 +186,14 @@ class FazeCore(private val app: Application) : EngineListener {
             { settings.allowPowered },
             { PermissionPolicy.all().map { it.first }.toSet() },
         )
-        rawTools = Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app), scheduler, AndroidSwitches(), liveControl)
+        rawTools = Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), MarkedHands(AndroidHands(app), TouchOverlay(app) { Palette.Accent.toArgb() }, { settings.showTouches }), scheduler, AndroidSwitches(), liveControl)
         gate = GatedTools(rawTools, broker, extraTier = { name -> if (userTools.has(name)) Tier.SAFE else null }, approvalMode = { settings.approvalMode }, phoneControl = { settings.phoneControl })
         val tools: ToolRunner = gate
         gatedTools = tools
         // A tool that takes over the screen waits for the assistant to finish speaking, unless the bubble keeps the conversation going outside the app.
         val speakingNow = { speaker.isSpeaking() || (live?.isSpeaking() ?: false) }
         liveTools = SpeechAwareTools(tools, { true }, speakingNow, { bubbleReady() })
-        engine = ChatEngine(Agent(client, SpeechAwareTools(tools, { voiceActive }, speakingNow, { bubbleReady() }), router = router), object : EngineConfig by settings {
+        engine = ChatEngine(Agent(client, SpeechAwareTools(KeepAliveTools(tools) { startWork() }, { voiceActive }, speakingNow, { bubbleReady() }), router = router), object : EngineConfig by settings {
             override fun memoryBlock(): String = if (settings.useMemory) memory.promptBlock(settings.user) else ""
             override fun speak(): Boolean = settings.speakReplies || voiceActive
         }, speaker, { block -> main.post { block() } }, executor, messages, this)
@@ -187,6 +203,7 @@ class FazeCore(private val app: Application) : EngineListener {
         main.post(object : Runnable {
             override fun run() {
                 speaking = speaker.isSpeaking()
+                stopWorkIfIdle()
                 main.postDelayed(this, 400)
             }
         })
