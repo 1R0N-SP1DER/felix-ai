@@ -32,5 +32,15 @@ class PhoneControl(unittest.TestCase):
         self.assertIn('"read_screen"', read("LocalLlama.kt"))
 
 
+
+class ScheduledTaskNotice(unittest.TestCase):
+    def test_a_task_announces_itself_when_it_starts(self):
+        s = read("ScheduleAndroid.kt")
+        self.assertIn('notify("Running now: ${t.prompt}"', s)
+        self.assertIn('notify("Running: ${t.prompt}"', s)
+        self.assertIn("scheduled_running", s)
+        self.assertLess(s.index('notify("Running now:'), s.index("core.send("))
+
+
 if __name__ == "__main__":
     unittest.main()
