@@ -9,13 +9,13 @@ class ModelSheetTest {
     @Test fun sameModelsInTheSameOrderAsTheWebSheet() {
         assertEquals(listOf("auto", "offline", "gemini", "groq", "openrouter", "custom"), ModelSheet.names.keys.toList())
         assertEquals("OpenRouter", ModelSheet.label("openrouter"))
-        assertEquals("custom", ModelSheet.label("custom"))
+        assertEquals("Custom", ModelSheet.label("custom"))
     }
 
     @Test fun groqGeminiAndOpenRouterRunInTheApp() {
         val models = mapOf("groq" to "openai/gpt-oss-120b", "gemini" to "gemini-3.1-flash-lite", "openrouter" to "openai/gpt-oss-120b:free")
         val rows = ModelSheet.rows(setOf("groq", "gemini"), models)
-        assertEquals(5, rows.size)
+        assertEquals(6, rows.size)
         assertEquals(listOf("custom", "gemini", "groq", "offline", "openrouter"), rows.filter { it.available }.map { it.id }.sorted())
         assertEquals("gpt-oss-120b", rows.first { it.id == "groq" }.sub)
         assertEquals("gemini-3.1-flash-lite", rows.first { it.id == "gemini" }.sub)
