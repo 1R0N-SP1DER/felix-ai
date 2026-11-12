@@ -88,7 +88,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
 
     /** Which online model answers: groq, gemini or openrouter. */
     var provider: String
-        get() = text("provider").let { if (it == "gemini" || it == "openrouter" || it == "offline") it else "groq" }
+        get() = text("provider").let { if (it == "gemini" || it == "openrouter" || it == "offline" || it == "custom") it else "groq" }
         set(value) = put("provider", value)
 
     var geminiKey: String
@@ -106,6 +106,23 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
     var openrouterModel: String
         get() = text("openrouter_model") // blank: a free model is picked automatically
         set(value) = put("openrouter_model", value)
+
+    /** The custom provider: any service that speaks the OpenAI chat format. */
+    var customName: String
+        get() = text("custom_name").ifBlank { "Custom" }
+        set(value) = put("custom_name", value.trim())
+
+    var customUrl: String
+        get() = text("custom_url")
+        set(value) = put("custom_url", value.trim())
+
+    var customKey: String
+        get() = text("custom_key")
+        set(value) = put("custom_key", value.trim())
+
+    var customModel: String
+        get() = text("custom_model")
+        set(value) = put("custom_model", value.trim())
 
     /** Offline: the model file picked, where llama-server was found, and how it is run. */
     var offlineModel: String
@@ -128,6 +145,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         "offline" -> offlineModel
         "gemini" -> geminiModel
         "openrouter" -> openrouterModel
+        "custom" -> customModel
         else -> modelName.ifBlank { Groq.DEFAULT_MODEL }
     }
 
@@ -137,6 +155,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
             "offline" -> offlineModel = id
             "gemini" -> geminiModel = id
             "openrouter" -> openrouterModel = id
+            "custom" -> customModel = id
             else -> modelName = id
         }
     }
@@ -145,6 +164,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         "offline" -> ""
         "gemini" -> geminiKey
         "openrouter" -> openrouterKey
+        "custom" -> customKey
         else -> groqKey
     }
 
@@ -152,6 +172,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         "offline" -> true // no key: it runs on the phone
         "gemini" -> geminiKey.isNotEmpty()
         "openrouter" -> openrouterKey.isNotEmpty()
+        "custom" -> CustomEndpoint.base(customUrl) != null // the key is optional; an address is what it needs
         else -> groqKey.isNotEmpty()
     }
 

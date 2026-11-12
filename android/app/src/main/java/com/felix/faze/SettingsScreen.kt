@@ -437,6 +437,14 @@ private fun AdvancedTab(core: FazeCore) {
         SettingRow("Gemini key") { FieldBox(gemini, true, Modifier.widthIn(max = 190.dp)) { gemini = it; s.geminiKey = it } }
         SettingRow("OpenRouter key") { FieldBox(openrouter, true, Modifier.widthIn(max = 190.dp)) { openrouter = it; s.openrouterKey = it } }
         SettingRow("OpenRouter model", "Leave blank to pick a free one automatically") { FieldBox(orModel, false, Modifier.widthIn(max = 190.dp)) { orModel = it; s.openrouterModel = it } }
+        var cName by remember { mutableStateOf(s.customName.let { if (it == "Custom") "" else it }) }
+        var cUrl by remember { mutableStateOf(s.customUrl) }
+        var cKey by remember { mutableStateOf(s.customKey) }
+        var cModel by remember { mutableStateOf(s.customModel) }
+        SettingRow("Custom provider name", "Any service that speaks the OpenAI chat format") { FieldBox(cName, false, Modifier.widthIn(max = 190.dp)) { cName = it; s.customName = it } }
+        SettingRow("Custom address", "For example https://api.deepseek.com/v1 or https://api.openai.com/v1") { FieldBox(cUrl, false, Modifier.widthIn(max = 190.dp)) { cUrl = it; s.customUrl = it } }
+        SettingRow("Custom key", "Optional for a server on this phone (http://127.0.0.1:port/v1)") { FieldBox(cKey, true, Modifier.widthIn(max = 190.dp)) { cKey = it; s.customKey = it } }
+        SettingRow("Custom model", "The model name, or pick it from the model button after the address is set") { FieldBox(cModel, false, Modifier.widthIn(max = 190.dp)) { cModel = it; s.customModel = it } }
         SettingRow("Tavily key", "Web search") { FieldBox(tavily, true, Modifier.widthIn(max = 190.dp)) { tavily = it; s.tavily = it } }
         SettingRow("Your name") { FieldBox(user, false, Modifier.widthIn(max = 190.dp)) { user = it; s.user = it } }
         SettingRow("Default city", "For weather", last = true) { FieldBox(city, false, Modifier.widthIn(max = 190.dp)) { city = it; s.city = it } }
