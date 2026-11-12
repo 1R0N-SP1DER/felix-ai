@@ -55,7 +55,7 @@ class CustomProviderTest {
     @Test fun theModelListIsReadFromTheAddress() {
         val t = FakeTransport()
         t.onGet = { url -> assertEquals("https://integrate.api.nvidia.com/v1/models", url); HttpResult(200, emptyMap(), "{\"data\":[{\"id\":\"meta/llama-3.3-70b-instruct\"},{\"id\":\"nvidia/nv-embed-v1\"},{\"id\":\"deepseek-ai/deepseek-r1\"}]}") }
-        val list = ModelCatalog(t, { "nvapi-test" }, { "https://integrate.api.nvidia.com/v1" }).fetch("custom")
+        val list = ModelCatalog(t, { "https://integrate.api.nvidia.com/v1" }) { "nvapi-test" }.fetch("custom")
         assertEquals(listOf("deepseek-ai/deepseek-r1", "meta/llama-3.3-70b-instruct"), list.map { it.id })
         assertEquals("Bearer nvapi-test", t.calls.single().headers["Authorization"])
     }
@@ -63,7 +63,7 @@ class CustomProviderTest {
     @Test fun theModelListWorksWithoutAKeyForALocalServer() {
         val t = FakeTransport()
         t.onGet = { HttpResult(200, emptyMap(), "{\"data\":[{\"id\":\"qwen3\"}]}") }
-        assertEquals(listOf("qwen3"), ModelCatalog(t, { "" }, { "http://127.0.0.1:1234/v1" }).fetch("custom").map { it.id })
+        assertEquals(listOf("qwen3"), ModelCatalog(t, { "http://127.0.0.1:1234/v1" }) { "" }.fetch("custom").map { it.id })
         assertFalse(t.calls.single().headers.containsKey("Authorization"))
     }
 

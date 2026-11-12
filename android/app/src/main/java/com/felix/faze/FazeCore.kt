@@ -289,7 +289,7 @@ class FazeCore(private val app: Application) : EngineListener {
                     LocalLlama.parseModels(Su.run(LocalLlama.scanCommand(), 20_000)).ifEmpty {
                         throw RemoteError("empty", "No .gguf models found in Termux's home, Download or models folder (offline models need root)")
                     }
-                } else ModelCatalog(transport, { settings.keyFor(it) }, { settings.customUrl }).fetch(provider)
+                } else ModelCatalog(transport, { settings.customUrl }) { settings.keyFor(it) }.fetch(provider)
                 main.post { modelLists[provider] = list; modelLoading = "" }
             } catch (e: RemoteError) {
                 main.post { modelError = e.message ?: "couldn't load the list"; modelLoading = "" }

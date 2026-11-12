@@ -67,7 +67,7 @@ object ModelLists {
 }
 
 /** Asks a provider which models this key can use. Keys go in headers, never in the address. */
-class ModelCatalog(private val transport: Transport, private val key: (String) -> String, private val customUrl: () -> String = { "" }) {
+class ModelCatalog(private val transport: Transport, private val customUrl: () -> String = { "" }, private val key: (String) -> String) {
     fun fetch(provider: String): List<ModelOption> {
         val k = key(provider).trim()
         if (k.isEmpty() && provider != "openrouter" && provider != "custom") throw RemoteError("auth", "add a ${ModelSheet.label(provider)} key first (Settings > Advanced)")
