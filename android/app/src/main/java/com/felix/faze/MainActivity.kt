@@ -38,9 +38,31 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // The overlay's wave button: live mode starts here, with the app on screen (the one moment Android lets a microphone service start).
+        if (intent?.getBooleanExtra(EXTRA_LIVE, false) == true) {
+            intent.removeExtra(EXTRA_LIVE)
+            val core = (application as FazeApp).core
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                core.stopVoiceChat()
+                core.startLive()
+            }
+        }
+    }
+
     override fun onStop() {
         super.onStop()
         (application as FazeApp).core.appVisible = false // a live conversation now shows the floating bubble
+    }
+
+    companion object {
+        const val EXTRA_LIVE = "faze_start_live"
     }
 
     override fun onStart() {

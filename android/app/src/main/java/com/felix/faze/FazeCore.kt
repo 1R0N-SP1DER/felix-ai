@@ -119,6 +119,12 @@ class FazeCore(private val app: Application) : EngineListener {
     var voiceOn by mutableStateOf(false)
     var voiceState by mutableStateOf("")
     @Volatile private var voiceLoop: VoiceLoop? = null
+    @Volatile private var androidListener: AndroidListener? = null
+    @Volatile private var nextAloud = false // the reply to a spoken message is read out; the reply to a typed one is not
+    @Volatile private var dictateNext = false
+
+    /** Where dictated text goes (the overlay's text box) while it is open. */
+    @Volatile var dictateSink: ((String) -> Unit)? = null
     @Volatile private var voiceActive = false // replies are spoken while voice chat is on, whatever "Speak replies aloud" says
     private val voiceWorker = Executors.newSingleThreadExecutor()
     private val fillerWorker = Executors.newCachedThreadPool()
@@ -181,7 +187,7 @@ class FazeCore(private val app: Application) : EngineListener {
         liveTools = SpeechAwareTools(tools, { true }, speakingNow, { bubbleReady() })
         engine = ChatEngine(Agent(client, SpeechAwareTools(tools, { voiceActive }, speakingNow, { bubbleReady() }), router = router), object : EngineConfig by settings {
             override fun memoryBlock(): String = if (settings.useMemory) memory.promptBlock(settings.user) else ""
-            override fun speak(): Boolean = settings.speakReplies || voiceActive
+            override fun speak(): Boolean = settings.speakReplies || nextAloud
         }, speaker, { block -> main.post { block() } }, executor, messages, this)
         speaker.setVoice(settings.voiceRate, settings.voicePitch)
         Palette.setAccent(Accents.byName(settings.accent))
@@ -229,7 +235,9 @@ class FazeCore(private val app: Application) : EngineListener {
 
     // ---- conversation
 
-    fun send(text: String) {
+    /** [aloud]: the message was spoken, so its reply is read out too (typed ones are not, unless "Speak replies aloud" is on). */
+    fun send(text: String, aloud: Boolean = false) {
+        nextAloud = aloud
         timing = ""
         status = ""
         engine.send(text)
@@ -441,6 +449,7 @@ class FazeCore(private val app: Application) : EngineListener {
         micMuted = !micMuted
         live?.muted = micMuted
         voiceLoop?.muted = micMuted
+        androidListener?.muted = micMuted
         if (micMuted) micLevel = 0f
     }
 
@@ -462,13 +471,13 @@ class FazeCore(private val app: Application) : EngineListener {
 
     /** What the person said goes to the chat as soon as it is free (a reply that was just talked over may still be winding down). */
     private fun sendWhenFree(text: String, tries: Int = 30) {
-        if (!engine.isBusy()) send(text) else if (tries > 0) main.postDelayed({ sendWhenFree(text, tries - 1) }, 100)
+        if (!engine.isBusy()) send(text, true) else if (tries > 0) main.postDelayed({ sendWhenFree(text, tries - 1) }, 100)
     }
 
     /** Starts voice chat. The wake-word listener is paused meanwhile (one microphone). The outcome shows in [voiceState]. */
     fun startVoiceChat() {
-        if (voiceLoop != null) return
-        if (settings.groqKey.isEmpty()) { voiceState = "Voice chat needs a Groq key (Whisper listens)"; return }
+        if (voiceLoop != null || androidListener != null) return
+        if (settings.groqKey.isEmpty()) { startAndroidListening("No Groq key: using Android's own speech recognition"); return }
         voiceOn = true
         voiceActive = true
         micMuted = false
@@ -477,7 +486,13 @@ class FazeCore(private val app: Application) : EngineListener {
         liveStarter.execute {
             listenControl?.pause()
             val host = object : VoiceHost {
-                override fun transcribe(wav: ByteArray): String = stt.transcribe(wav)
+                override fun transcribe(wav: ByteArray): String = try {
+                    stt.transcribe(wav)
+                } catch (e: Exception) {
+                    main.post { fallBackToAndroid() } // Groq is down or refused: carry on with Android's recogniser
+                    throw e
+                }
+                override fun takeDictation(text: String): Boolean = takeVoiceDictation(text)
                 override fun ask(text: String) { main.post { sendWhenFree(text) } }
                 override fun interrupt() { main.post { engine.stop() } }
                 override fun engineBusy(): Boolean = busy
@@ -500,7 +515,53 @@ class FazeCore(private val app: Application) : EngineListener {
         }
     }
 
+    /** Android's own recogniser listens (no Groq key, or Groq failed). Everything it hears goes the same way as the Whisper path. */
+    private fun startAndroidListening(note: String) {
+        voiceOn = true
+        voiceActive = true
+        micMuted = false
+        startLiveService()
+        listenControl?.pause()
+        val l = AndroidListener(
+            app,
+            { text -> main.post { if (!takeVoiceDictation(text)) sendWhenFree(text) } },
+            { level -> main.post { micLevel = if (micMuted) 0f else level } },
+            { why -> main.post { androidListener = null; voiceState = "Voice chat could not start: $why"; status = voiceState; voiceEnded() } },
+            { busy || speaker.isSpeaking() },
+        )
+        androidListener = l
+        val failed = l.start()
+        if (failed != null) { androidListener = null; voiceState = "Voice chat could not start: $failed"; voiceEnded() } else voiceState = note
+    }
+
+    private fun fallBackToAndroid() {
+        val l = voiceLoop ?: return
+        if (androidListener != null) return
+        voiceLoop = null
+        liveStarter.execute {
+            l.stop()
+            main.post { startAndroidListening("Groq's speech recognition failed: using Android's own") }
+        }
+    }
+
+    /** The mic was pressed while talking: this phrase goes into the text box instead of being sent. */
+    private fun takeVoiceDictation(text: String): Boolean {
+        val sink = dictateSink
+        if (!dictateNext || sink == null) return false
+        dictateNext = false
+        main.post { sink(text) }
+        return true
+    }
+
+    /** True while the person is in the middle of a phrase. */
+    fun hearingSpeech(): Boolean = (voiceLoop?.hearingSpeech() ?: false) || (androidListener?.hearing ?: false)
+
+    /** What is being said right now is typed into the text box, not sent. */
+    fun dictateThis() { dictateNext = true }
+
     fun stopVoiceChat() {
+        val a = androidListener
+        if (a != null) { a.stop(); androidListener = null; voiceEnded(); return }
         val l = voiceLoop ?: return
         liveStarter.execute { l.stop(); main.post { voiceEnded() } }
     }
@@ -634,7 +695,7 @@ class FazeCore(private val app: Application) : EngineListener {
                         } else {
                             status = ""
                             sttMs = ms
-                            send(text)
+                            send(text, true)
                         }
                     }
                 } catch (e: SttError) {

@@ -30,6 +30,9 @@ class VoiceLoopTest {
         override fun say(phrase: String) { said.add(phrase) }
         override fun status(text: String) { statuses.add(text) }
         override fun bargeIn() = barge
+        var dictate = false
+        val dictated = ArrayList<String>()
+        override fun takeDictation(text: String): Boolean = if (dictate) { dictate = false; dictated.add(text); true } else false
     }
 
     private class FakeMic(val fail: String? = null) : LiveAudioIn {
@@ -71,6 +74,26 @@ class VoiceLoopTest {
         assertEquals("RIFF", String(r.host.wavs.single(), 0, 4))
         assertTrue(r.host.wavs.single().size > 3200 * 5) // the words and the moments before them
         assertEquals("Thinking…", r.host.statuses.last())
+    }
+
+    @Test fun aPhraseCanBeDictatedIntoTheBoxInsteadOfSent() {
+        val r = rig()
+        r.host.dictate = true
+        talk(r.mic)
+        assertEquals(listOf("what is the weather"), r.host.dictated)
+        assertTrue(r.host.asked.isEmpty())
+        assertEquals(VoiceLoop.LISTENING, r.host.statuses.last())
+        talk(r.mic) // and the next phrase is sent as usual, straight away
+        assertEquals(listOf("what is the weather"), r.host.asked)
+    }
+
+    @Test fun itKnowsWhenAPhraseIsInTheMiddle() {
+        val r = rig()
+        assertFalse(r.loop.hearingSpeech())
+        feed(r.mic, false, 3); feed(r.mic, true, 3)
+        assertTrue(r.loop.hearingSpeech())
+        feed(r.mic, false, 8)
+        assertFalse(r.loop.hearingSpeech())
     }
 
     @Test fun roomNoiseAloneIsNeverTranscribed() {

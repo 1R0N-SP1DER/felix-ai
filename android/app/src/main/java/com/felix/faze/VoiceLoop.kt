@@ -28,6 +28,9 @@ interface VoiceHost {
     fun say(phrase: String)
     fun status(text: String)
 
+    /** The text goes into a text field to be edited instead of being sent (the person pressed the mic while talking). True when it was taken. */
+    fun takeDictation(text: String): Boolean = false
+
     /** True when the person can talk over the reply without the mic hearing the phone itself (headphones). */
     fun bargeIn(): Boolean
 }
@@ -135,6 +138,9 @@ class VoiceLoop(
 
     fun isRunning(): Boolean = running
 
+    /** True while the person is in the middle of saying something (the mic has heard speech and the pause has not come yet). */
+    fun hearingSpeech(): Boolean = synchronized(lock) { stage == Stage.LISTENING && capturing }
+
     /** Null when listening has begun, otherwise why not. */
     fun start(mic: LiveAudioIn): String? {
         if (running) return "voice chat is already on"
@@ -235,6 +241,15 @@ class VoiceLoop(
             phrase = null
             firstAt = nowMs + FIRST_FILLER_MS
             resetCapture()
+        }
+        if (host.takeDictation(text)) {
+            synchronized(lock) {
+                if (!running || turn != mine) return
+                stage = Stage.LISTENING
+                resetCapture()
+            }
+            host.status(LISTENING)
+            return
         }
         host.status("Thinking…")
         host.ask(text)

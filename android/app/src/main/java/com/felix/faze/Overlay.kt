@@ -24,6 +24,8 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.graphics.Path
+import android.graphics.RectF
 
 private object Ink {
     val bg = 0xFF0E1421.toInt()
@@ -110,9 +112,61 @@ class OverlayBarsView(context: Context) : View(context) {
     }
 }
 
+/** The little icons of the pill, drawn by hand so the overlay needs no icon files. */
+class GlyphView(context: Context, private val kind: Kind) : View(context) {
+    enum class Kind { PLUS, MIC, WAVE, SEND, STOP }
+
+    var ink = Ink.text
+        set(value) { field = value; invalidate() }
+    var slashed = false
+        set(value) { field = value; invalidate() }
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
+
+    override fun onDraw(canvas: Canvas) {
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val u = minOf(w, h) / 24f
+        val cx = w / 2f
+        val cy = h / 2f
+        paint.color = ink
+        paint.strokeWidth = 2f * u
+        paint.style = Paint.Style.STROKE
+        when (kind) {
+            Kind.PLUS -> { canvas.drawLine(cx - 6 * u, cy, cx + 6 * u, cy, paint); canvas.drawLine(cx, cy - 6 * u, cx, cy + 6 * u, paint) }
+            Kind.MIC -> {
+                canvas.drawRoundRect(RectF(cx - 3.5f * u, cy - 9 * u, cx + 3.5f * u, cy + 2 * u), 3.5f * u, 3.5f * u, paint)
+                val p = Path()
+                p.moveTo(cx - 7 * u, cy - 1 * u); p.arcTo(RectF(cx - 7 * u, cy - 6 * u, cx + 7 * u, cy + 8 * u), 180f, -180f); 
+                canvas.drawPath(p, paint)
+                canvas.drawLine(cx, cy + 8 * u, cx, cy + 11 * u, paint)
+                if (slashed) canvas.drawLine(cx - 8 * u, cy - 9 * u, cx + 8 * u, cy + 10 * u, paint)
+            }
+            Kind.WAVE -> {
+                val hs = floatArrayOf(4f, 9f, 14f, 9f, 5f)
+                for (k in hs.indices) { val x = cx + (k - 2) * 4.5f * u; canvas.drawLine(x, cy - hs[k] * u / 2f, x, cy + hs[k] * u / 2f, paint) }
+            }
+            Kind.SEND -> { canvas.drawLine(cx, cy + 7 * u, cx, cy - 7 * u, paint); canvas.drawLine(cx - 6 * u, cy - 1 * u, cx, cy - 7 * u, paint); canvas.drawLine(cx + 6 * u, cy - 1 * u, cx, cy - 7 * u, paint) }
+            Kind.STOP -> { paint.style = Paint.Style.FILL; canvas.drawRoundRect(RectF(cx - 6 * u, cy - 6 * u, cx + 6 * u, cy + 6 * u), 2 * u, 2 * u, paint) }
+        }
+    }
+}
+
+/** What the pill shows: kept as plain functions so the rule is tested without a phone. */
+object PillState {
+    /** The bar turns into the listening bar while a phrase is being said, and stays that way a moment after, so it does not flicker. */
+    fun listening(micOn: Boolean, hearing: Boolean, nowMs: Long, holdUntilMs: Long): Boolean = micOn && (hearing || nowMs < holdUntilMs)
+
+    /** The end button: the stop square while the AI works, the arrow once there is text, the wave (live mode) when the box is empty. */
+    fun trailing(busy: Boolean, hasText: Boolean): String = if (busy) "stop" else if (hasText) "send" else "live"
+
+    /** What the mic button does: dictate this phrase into the box when pressed mid-phrase, otherwise switch the always-listening mic off or on. */
+    fun micAction(micOn: Boolean, hearing: Boolean): String = if (micOn && hearing) "dictate" else if (micOn) "off" else "on"
+}
+
 /**
- * The overlay that replaces the Tasker scene: a panel at the bottom of the screen over a darkened, blurred view of whatever app is
- * open. Tapping outside the panel closes it. The keyboard works because the window only becomes focusable while the text box is in use.
+ * The overlay: a pill at the bottom of the screen over a darkened view of whatever is open (or the lock screen, see OverlayActivity).
+ * Tapping outside closes it; a swipe up on the handle opens the app. + attaches, the blue mic listens (and sends by itself after a
+ * pause), the wave opens live mode in the app. The keyboard works because the window only becomes focusable while the text box is used.
  */
 class OverlayWindow(private val context: Context, private val core: FazeCore) {
     private val wm = context.getSystemService(WindowManager::class.java)
@@ -120,25 +174,31 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
     private val handler = Handler(Looper.getMainLooper())
     private var root: FrameLayout? = null
     private var params: WindowManager.LayoutParams? = null
-    private var coreView: CoreDrawView? = null
     private var status: TextView? = null
     private var reply: TextView? = null
+    private var replyCard: LinearLayout? = null
     private var scroll: ScrollView? = null
     private var approvalBox: LinearLayout? = null
     private var approvalText: TextView? = null
     private var edit: EditText? = null
-    private var mic: TextView? = null
-    private var send: TextView? = null
+    private var plus: GlyphView? = null
+    private var micBtn: FrameLayout? = null
+    private var micGlyph: GlyphView? = null
+    private var trail: FrameLayout? = null
+    private var trailGlyph: GlyphView? = null
     private var bars: OverlayBarsView? = null
     private var shown = ""
     private var approvalId = 0L
     private var startedHere = false
     private var sawActive = false
+    private var userOff = false
+    private var holdUntil = 0L
+    private var trailKind = ""
 
     private val poll = object : Runnable {
         override fun run() {
             refresh()
-            if (root != null) handler.postDelayed(this, 150)
+            if (root != null) handler.postDelayed(this, 120)
         }
     }
 
@@ -150,6 +210,8 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         if (stroke) setStroke(1, Ink.line)
     }
 
+    private fun circle(color: Int) = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(color) }
+
     private fun button(label: String, fill: Int, ink: Int, onClick: () -> Unit) = TextView(context).apply {
         text = label
         setTextColor(ink)
@@ -160,9 +222,17 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         setOnClickListener { onClick() }
     }
 
+    private fun roundButton(glyph: GlyphView, fill: Int?, onClick: () -> Unit): FrameLayout = FrameLayout(context).apply {
+        if (fill != null) background = circle(fill)
+        addView(glyph, FrameLayout.LayoutParams(dp(26), dp(26), Gravity.CENTER))
+        setOnClickListener { onClick() }
+    }
+
     fun isShowing(): Boolean = root != null
 
     fun canShow(): Boolean = android.provider.Settings.canDrawOverlays(context)
+
+    private fun micAllowed() = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
     /** False if Android refused (usually: "display over other apps" is not allowed yet). */
     fun show(): Boolean {
@@ -171,35 +241,26 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
             core.reportStatus("allow \"display over other apps\" for Faze first")
             return false
         }
-        val panel = LinearLayout(context).apply {
+        val panel = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        // The grab handle: a swipe up on it opens the full app.
+        val grabZone = FrameLayout(context)
+        grabZone.addView(View(context).apply { background = round(Ink.dim, 3) }, FrameLayout.LayoutParams(dp(40), dp(4), Gravity.CENTER))
+        panel.addView(grabZone, LinearLayout.LayoutParams(-1, dp(24)))
+        swipeUp(grabZone)
+
+        val st = TextView(context).apply { setTextColor(Ink.dim); textSize = 12f; setPadding(dp(8), 0, dp(8), dp(4)); visibility = View.GONE }
+        panel.addView(st)
+
+        val card = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             background = round(Ink.bg, 22, true)
             setPadding(dp(14), dp(12), dp(14), dp(12))
+            visibility = View.GONE
         }
-        // The grab handle and header: a swipe up on them opens the full app.
-        val grab = View(context).apply { background = round(Ink.line, 3) }
-        panel.addView(grab, LinearLayout.LayoutParams(dp(40), dp(4)).apply { gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(8) })
-        val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; orientation = LinearLayout.HORIZONTAL }
-        val cv = CoreDrawView(context)
-        header.addView(cv, LinearLayout.LayoutParams(dp(44), dp(44)))
-        val st = TextView(context).apply { setTextColor(Ink.dim); textSize = 13f }
-        header.addView(st, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = dp(10) })
-        val bv = OverlayBarsView(context)
-        header.addView(bv, LinearLayout.LayoutParams(dp(54), dp(28)))
-        header.addView(TextView(context).apply {
-            text = "✕"
-            setTextColor(Ink.dim)
-            textSize = 18f
-            setPadding(dp(12), dp(4), dp(4), dp(4))
-            setOnClickListener { close(false) }
-        })
-        panel.addView(header)
-        swipeUp(grab)
-        swipeUp(header)
-
         val body = TextView(context).apply { setTextColor(Ink.text); textSize = 16f; setLineSpacing(0f, 1.1f) }
         val sc = ScrollView(context).apply { addView(body) }
-        panel.addView(sc, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(170)).apply { topMargin = dp(6) })
+        card.addView(sc, LinearLayout.LayoutParams(-1, dp(170)))
+        panel.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
         val box = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -214,14 +275,18 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         row.addView(button("Allow", Ink.accent, Ink.accentInk) { core.resolveApproval(approvalId, true) })
         row.addView(button("Deny", Ink.surface2, Ink.text) { core.resolveApproval(approvalId, false) }, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8) })
         box.addView(row)
-        panel.addView(box, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+        panel.addView(box, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
-        val input = LinearLayout(context).apply {
+        // The pill: + | text box (or listening bars) | blue mic | wave / send / stop
+        val pill = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = round(Ink.surface2, 26, true)
-            setPadding(dp(14), dp(4), dp(6), dp(4))
+            background = round(Ink.surface2, 30, true)
+            setPadding(dp(8), dp(6), dp(8), dp(6))
         }
+        val pg = GlyphView(context, GlyphView.Kind.PLUS)
+        val pb = roundButton(pg, null) { core.reportStatus("Attachments (photos, camera, files) arrive in the next patch") }
+        pill.addView(pb, LinearLayout.LayoutParams(dp(44), dp(44)))
         val et = EditText(context).apply {
             hint = "Message FAZE"
             setHintTextColor(Ink.muted)
@@ -241,17 +306,21 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
                 if (code == KeyEvent.KEYCODE_BACK && ev.action == KeyEvent.ACTION_UP) { releaseKeyboard(); true } else false
             }
         }
-        input.addView(et, LinearLayout.LayoutParams(0, -2, 1f))
-        val mc = button("Mic", Ink.surface2, Ink.text) { doMic() }
-        val sd = button("↑", Ink.accent, Ink.accentInk) { doSend() }
-        input.addView(mc, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })
-        input.addView(sd)
-        panel.addView(input, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        pill.addView(et, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(4) })
+        val bv = OverlayBarsView(context).apply { visibility = View.GONE }
+        pill.addView(bv, LinearLayout.LayoutParams(0, dp(30), 1f).apply { leftMargin = dp(8); rightMargin = dp(8) })
+        val mg = GlyphView(context, GlyphView.Kind.MIC).apply { ink = 0xFFFFFFFF.toInt() }
+        val mb = roundButton(mg, Ink.blue) { doMic() }
+        pill.addView(mb, LinearLayout.LayoutParams(dp(44), dp(44)).apply { leftMargin = dp(4) })
+        val tg = GlyphView(context, GlyphView.Kind.WAVE)
+        val tb = roundButton(tg, null) { doTrail() }
+        pill.addView(tb, LinearLayout.LayoutParams(dp(44), dp(44)).apply { leftMargin = dp(2) })
+        panel.addView(pill, LinearLayout.LayoutParams(-1, -2))
 
         // The whole screen is the window: a dark scrim (and, where the phone supports it, blur) behind the panel. Tapping the scrim closes it.
         val frame = FrameLayout(context).apply {
             setBackgroundColor(0x99000000.toInt())
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setPadding(dp(10), dp(8), dp(10), dp(14))
             setOnClickListener { close(false) }
         }
         panel.setOnClickListener { } // a tap on the panel itself is not a tap on the scrim
@@ -273,14 +342,19 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
             core.reportStatus("couldn't open the overlay: ${e.message ?: e.javaClass.simpleName}")
             return false
         }
-        root = frame; params = p; coreView = cv; status = st; reply = body; scroll = sc; bars = bv
+        root = frame; params = p; status = st; reply = body; replyCard = card; scroll = sc; bars = bv
         core.overlayUp = true
+        core.dictateSink = { text -> appendToBox(text) }
         startedHere = false
+        userOff = false
+        holdUntil = 0L
+        trailKind = ""
         sawActive = core.voiceOn || core.liveOn
-        approvalBox = box; approvalText = at; edit = et; mic = mc; send = sd
+        approvalBox = box; approvalText = at; edit = et; plus = pg; micBtn = mb; micGlyph = mg; trail = tb; trailGlyph = tg
         shown = ""
         handler.post(poll)
-        if (!sawActive && core.settings.chordVoice && context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+        // The mic is on by default and stays on until it is switched off here.
+        if (!sawActive && core.settings.chordVoice && micAllowed()) {
             core.startVoiceChat()
             if (core.voiceOn) { startedHere = true; sawActive = true }
         }
@@ -294,7 +368,7 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> { downY = e.rawY; true }
                 MotionEvent.ACTION_UP -> {
-                    if (downY - e.rawY > dp(60)) openApp()
+                    if (downY - e.rawY > dp(40)) openApp(false)
                     true
                 }
                 else -> true
@@ -302,10 +376,12 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         }
     }
 
-    private fun openApp() {
+    private fun openApp(live: Boolean) {
         startedHere = false // the session now belongs to the app
         try {
-            context.startActivity(android.content.Intent(context, MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+            val i = android.content.Intent(context, MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            if (live) i.putExtra(MainActivity.EXTRA_LIVE, true)
+            context.startActivity(i)
         } catch (e: Exception) {
             core.reportStatus("couldn't open the app: ${e.message ?: e.javaClass.simpleName}")
         }
@@ -333,6 +409,7 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         wm.updateViewLayout(r, p)
     }
 
+    /** Typed (or edited) text is sent as typed: its reply is not read out. */
     private fun doSend() {
         val e = edit ?: return
         val t = e.text.toString().trim()
@@ -344,24 +421,60 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         }
     }
 
-    private fun doMic() {
-        if (core.voiceOn || core.liveOn) core.toggleMute()
-        else if (core.recording) core.finishRecording()
-        else if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) core.startRecording()
-        else core.reportStatus("open the Faze app once and allow the microphone")
+    private fun doTrail() {
+        when (PillState.trailing(core.busy, edit?.text?.isNotBlank() == true)) {
+            "stop", "send" -> doSend()
+            else -> goLive()
+        }
     }
 
-    // ---- keeping the panel in step with the core
+    /** The wave: live mode, which runs in the app. */
+    private fun goLive() {
+        if (!micAllowed()) { core.reportStatus("open the Faze app once and allow the microphone"); return }
+        core.stopVoiceChat()
+        openApp(true)
+    }
+
+    /** What was dictated goes into the box after anything already typed, ready to edit. */
+    private fun appendToBox(text: String) {
+        val e = edit ?: return
+        val old = e.text.toString().trimEnd()
+        e.setText(if (old.isEmpty()) text else "$old $text")
+        e.setSelection(e.text.length)
+    }
+
+    private fun doMic() {
+        val inCall = core.voiceOn
+        when (PillState.micAction(inCall, core.hearingSpeech())) {
+            "dictate" -> { core.dictateThis(); core.reportStatus("Whatever you are saying now goes into the box") }
+            "off" -> {
+                userOff = true
+                core.settings.chordVoice = false
+                core.stopVoiceChat()
+            }
+            else -> {
+                if (!micAllowed()) { core.reportStatus("open the Faze app once and allow the microphone"); return }
+                userOff = false
+                core.settings.chordVoice = true
+                startedHere = true
+                sawActive = false
+                core.startVoiceChat()
+            }
+        }
+    }
+
+    // ---- keeping the pill in step with the core
 
     private fun refresh() {
-        coreView?.mode = core.coreMode()
-        val label = core.liveLabel()
-        val line = if (core.status.isNotEmpty()) core.status else label
+        val line = core.status.ifEmpty { if (core.voiceState.contains("Android's own") || core.voiceState.startsWith("Voice chat could not")) core.voiceState else "" }
         status?.text = line
+        status?.visibility = if (line.isEmpty()) View.GONE else View.VISIBLE
         status?.setTextColor(if (core.status.isNotEmpty() && !core.recording && !core.transcribing) Ink.bad else Ink.dim)
         val lastUser = core.messages.lastOrNull { it.role == "user" }?.text.orEmpty()
         val lastReply = core.messages.lastOrNull { it.role == "assistant" }?.text.orEmpty()
-        val text = if (lastUser.isEmpty() && lastReply.isEmpty()) "Ask me anything." else (if (lastUser.isNotEmpty()) "You: $lastUser\n\n" else "") + lastReply
+        val has = lastUser.isNotEmpty() || lastReply.isNotEmpty()
+        val text = (if (lastUser.isNotEmpty()) "You: $lastUser\n\n" else "") + lastReply
+        replyCard?.visibility = if (has) View.VISIBLE else View.GONE
         if (text != shown) {
             shown = text
             reply?.text = text
@@ -375,13 +488,30 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         }
         val inCall = core.voiceOn || core.liveOn
         if (inCall) sawActive = true
-        // A conversation this overlay started ends the overlay when it ends (said "end live", or hung up elsewhere).
-        if (startedHere && sawActive && !inCall) { close(false); return }
-        bars?.level = if (core.speaking || (core.liveOn && core.liveState == LiveSession.SPEAKING)) core.outLevel else core.micLevel
-        bars?.muted = core.micMuted
-        bars?.visibility = if (inCall) View.VISIBLE else View.GONE
-        mic?.text = if (inCall) (if (core.micMuted) "Unmute" else "Mute") else if (core.recording) "Done" else "Mic"
-        send?.text = if (core.busy) "■" else "↑"
+        // A conversation this overlay started ends the overlay when it ends (said "end live", or hung up elsewhere), but not when the mic was switched off here.
+        if (startedHere && sawActive && !inCall && !userOff) { close(false); return }
+
+        val now = SystemClock.uptimeMillis()
+        val micOn = core.voiceOn
+        if (micOn && core.hearingSpeech()) holdUntil = now + 1400
+        val listening = PillState.listening(micOn, core.hearingSpeech(), now, holdUntil)
+        edit?.visibility = if (listening) View.GONE else View.VISIBLE
+        bars?.visibility = if (listening) View.VISIBLE else View.GONE
+        trail?.visibility = if (listening) View.GONE else View.VISIBLE
+        bars?.level = if (core.speaking) core.outLevel else core.micLevel
+        micGlyph?.slashed = !micOn
+        micBtn?.background = circle(if (micOn) Ink.blue else Ink.surface2)
+        micGlyph?.ink = if (micOn) 0xFFFFFFFF.toInt() else Ink.dim
+        val kind = PillState.trailing(core.busy, edit?.text?.isNotBlank() == true)
+        if (kind != trailKind) {
+            trailKind = kind
+            trail?.removeAllViews()
+            val g = GlyphView(context, when (kind) { "stop" -> GlyphView.Kind.STOP; "send" -> GlyphView.Kind.SEND; else -> GlyphView.Kind.WAVE })
+            g.ink = if (kind == "live") Ink.text else Ink.accentInk
+            trail?.background = if (kind == "live") null else circle(Ink.accent)
+            trail?.addView(g, FrameLayout.LayoutParams(dp(26), dp(26), Gravity.CENTER))
+            trailGlyph = g
+        }
     }
 
     /** [force] is the volume-up long press: stop everything (recording, speech, the request, a pending approval) and close. */
@@ -389,6 +519,7 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         val r = root ?: return
         handler.removeCallbacks(poll)
         core.overlayUp = false
+        core.dictateSink = null
         core.cancelRecording()
         if (startedHere) { startedHere = false; core.closeLiveScreen() }
         if (force) core.stop()
@@ -398,7 +529,7 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         } catch (e: Exception) {
             // already gone
         }
-        root = null; params = null; coreView = null; status = null; reply = null; scroll = null
-        approvalBox = null; approvalText = null; edit = null; mic = null; send = null; bars = null
+        root = null; params = null; status = null; reply = null; replyCard = null; scroll = null
+        approvalBox = null; approvalText = null; edit = null; plus = null; micBtn = null; micGlyph = null; trail = null; trailGlyph = null; bars = null
     }
 }
