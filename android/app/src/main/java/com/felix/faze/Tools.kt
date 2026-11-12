@@ -63,6 +63,7 @@ class Tools(
     private val scheduler: SchedulerApi? = null,
     private val switches: Switches? = null,
     private val liveControl: LiveControl? = null,
+    private val stage: StageControl? = null,
 ) : ToolRunner {
 
     private fun tool(name: String, description: String, vararg params: Param): JSONObject {
@@ -131,6 +132,12 @@ class Tools(
                 Param("repeat_minutes", "integer", "0 to run once, otherwise how often to repeat: 60 hourly, 1440 daily. At least 15")))
             out.put(tool("list_scheduled", "Call this when the user asks what is scheduled or what reminders they have. No arguments."))
             out.put(tool("cancel_scheduled", "Cancel a scheduled task. Use list_scheduled first if you do not know its id.", Param("id", "string", "The task id, like t1")))
+        }
+        if (stage != null) {
+            out.put(tool("show_visual", "Show something on the live screen: a diagram, chart, table, illustration, code or a small interactive demo. Use it whenever seeing it helps more than hearing it (explaining how something works, comparing options, showing code or a plan). Write ONE complete self-contained HTML page: inline CSS and JavaScript only, SVG is fine, no links, no web fonts, no images from the web (data: images only). It is shown on a dark phone-sized stage, so use large readable text and a layout that fits a narrow screen. Calling it again replaces what is shown. Keep speaking short while it is shown.",
+                Param("title", "string", "A few words naming it"),
+                Param("html", "string", "The complete HTML page")))
+            out.put(tool("clear_visual", "Take the picture off the live screen when it is no longer needed. No arguments."))
         }
         if (liveControl != null) out.put(tool("end_live", "Call this when the user asks to end, stop or leave live mode or the voice chat (for example: end live, stop the call, bye). Say a short goodbye in the same reply; the conversation closes after you finish speaking. No arguments."))
         if (hands != null) {
@@ -224,6 +231,8 @@ class Tools(
                     val id = args.optString("id", "")
                     if (s.cancel(id)) ok("Cancelled $id.") else fail("there is no scheduled task $id")
                 } ?: fail("scheduling is not available")
+                "show_visual" -> stage?.show(args.optString("title", "").trim(), args.optString("html", ""))?.let { ok(it) } ?: fail("the stage is not available")
+                "clear_visual" -> stage?.let { it.clear(); ok("The stage is clear.") } ?: fail("the stage is not available")
                 "end_live" -> liveControl?.let { if (it.active()) { it.endAfterSpeech(); ok("Ending after the goodbye.") } else fail("there is no live or voice chat running") } ?: fail("not available")
                 "tap" -> hands?.let { ok(it.tap(int(args, "x"), int(args, "y"))) } ?: fail("controlling the screen is not available")
                 "long_press" -> hands?.let { ok(it.longPress(int(args, "x"), int(args, "y"))) } ?: fail("controlling the screen is not available")

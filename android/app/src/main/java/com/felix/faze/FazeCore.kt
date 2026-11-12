@@ -102,6 +102,22 @@ class FazeCore(private val app: Application) : EngineListener {
     @Volatile var appVisible = true
     @Volatile private var serviceUp = false
 
+    /** What is on the live stage now (blank: nothing). The live screen shows it in a locked webview. */
+    var stageTitle by mutableStateOf("")
+    var stageHtml by mutableStateOf("")
+
+    private val stageControl = object : StageControl {
+        override fun show(title: String, html: String): String {
+            StageHtml.problem(html)?.let { throw ToolFailure(it) }
+            main.post { stageTitle = title; stageHtml = html }
+            return if (liveOn || voiceOn) "Showing \"${title.ifBlank { "it" }}\" on the live screen." else "Put \"${title.ifBlank { "it" }}\" on the stage; the user sees it on the live screen."
+        }
+
+        override fun clear() { main.post { stageTitle = ""; stageHtml = "" } }
+    }
+
+    fun clearStage() = stageControl.clear()
+
     /** Lets the model end live mode or voice chat itself, after its goodbye has been spoken. */
     private val liveControl = object : LiveControl {
         override fun active(): Boolean = liveOn || voiceOn
@@ -170,7 +186,7 @@ class FazeCore(private val app: Application) : EngineListener {
             { settings.allowPowered },
             { PermissionPolicy.all().map { it.first }.toSet() },
         )
-        rawTools = Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app), scheduler, AndroidSwitches(), liveControl)
+        rawTools = Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app), scheduler, AndroidSwitches(), liveControl, stageControl)
         gate = GatedTools(rawTools, broker, extraTier = { name -> if (userTools.has(name)) Tier.SAFE else null }, approvalMode = { settings.approvalMode }, phoneControl = { settings.phoneControl })
         val tools: ToolRunner = gate
         gatedTools = tools
@@ -444,6 +460,7 @@ class FazeCore(private val app: Application) : EngineListener {
 
     /** The close button of the live screen: hangs up whichever conversation is going. */
     fun closeLiveScreen() {
+        stageControl.clear()
         stopLive()
         stopVoiceChat()
     }
