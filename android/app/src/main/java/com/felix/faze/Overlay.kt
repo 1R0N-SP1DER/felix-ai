@@ -422,7 +422,7 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
     }
 
     private fun doTrail() {
-        when (PillState.trail(core.busy, edit?.text?.isNotBlank() == true)) {
+        when (PillState.trailing(core.busy, edit?.text?.isNotBlank() == true)) {
             "stop", "send" -> doSend()
             else -> goLive()
         }
@@ -502,7 +502,7 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         micGlyph?.slashed = !micOn
         micBtn?.background = circle(if (micOn) Ink.blue else Ink.surface2)
         micGlyph?.ink = if (micOn) 0xFFFFFFFF.toInt() else Ink.dim
-        val kind = PillState.trail(core.busy, edit?.text?.isNotBlank() == true)
+        val kind = PillState.trailing(core.busy, edit?.text?.isNotBlank() == true)
         if (kind != trailKind) {
             trailKind = kind
             trail?.removeAllViews()
