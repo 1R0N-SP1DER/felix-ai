@@ -116,6 +116,9 @@ fun LiveScreen(core: FazeCore) {
                 Text(statusLine, color = if (core.micMuted) Palette.Warn else Palette.Dim, fontSize = 15.sp, textAlign = TextAlign.Center)
             }
         }
+        if (core.stageHtml.isNotEmpty()) {
+            StageCard(core.stageTitle, core.stageHtml, { core.clearStage() }, Modifier.fillMaxSize().statusBarsPadding().padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 132.dp))
+        }
         Row(
             modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(start = 14.dp, end = 14.dp, bottom = 22.dp),
             verticalAlignment = Alignment.CenterVertically,

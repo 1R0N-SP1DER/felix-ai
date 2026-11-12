@@ -139,6 +139,7 @@ class LiveSession(
         fun instruction(userName: String, memoryBlock: String, toolNames: List<String>): String =
             Persona.system(userName) + memoryBlock + Persona.toolNote(toolNames) +
                 "\n\nYou are talking out loud, live. Keep answers short and natural, as spoken sentences: no lists, no markdown, no symbols read aloud. " +
+                "When something is easier to see than to hear (a diagram, chart, table, code, a plan), call show_visual with a small self-contained HTML page and keep talking short while it is shown. " +
                 "When the user shares their camera or screen you receive a picture about once a second: describe or use what you see when asked, and say so if the picture is unclear."
     }
 }

@@ -31,6 +31,8 @@ object PermissionPolicy {
         "list_scheduled" to Tier.SAFE,
         "cancel_scheduled" to Tier.SAFE,
         "end_live" to Tier.SAFE,
+        "show_visual" to Tier.SAFE, // runs in a locked webview with no network, so it can only draw
+        "clear_visual" to Tier.SAFE,
         "tap" to Tier.CONFIRM,
         "long_press" to Tier.CONFIRM,
         "swipe" to Tier.CONFIRM,
