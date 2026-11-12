@@ -437,6 +437,12 @@ private fun AdvancedTab(core: FazeCore) {
         SettingRow("Gemini key") { FieldBox(gemini, true, Modifier.widthIn(max = 190.dp)) { gemini = it; s.geminiKey = it } }
         SettingRow("OpenRouter key") { FieldBox(openrouter, true, Modifier.widthIn(max = 190.dp)) { openrouter = it; s.openrouterKey = it } }
         SettingRow("OpenRouter model", "Leave blank to pick a free one automatically") { FieldBox(orModel, false, Modifier.widthIn(max = 190.dp)) { orModel = it; s.openrouterModel = it } }
+        for (info in OpenAiProviders.all.values) {
+            var pKey by remember { mutableStateOf(s.compatKey(info.id)) }
+            var pModel by remember { mutableStateOf(s.compatModel(info.id)) }
+            SettingRow("${info.label} key") { FieldBox(pKey, true, Modifier.widthIn(max = 190.dp)) { pKey = it; s.setCompatKey(info.id, it) } }
+            SettingRow("${info.label} model", "Default ${info.defaultModel}; or pick from the model button") { FieldBox(pModel, false, Modifier.widthIn(max = 190.dp)) { pModel = it; s.setCompatModel(info.id, it) } }
+        }
         var cName by remember { mutableStateOf(s.customName.let { if (it == "Custom") "" else it }) }
         var cUrl by remember { mutableStateOf(s.customUrl) }
         var cKey by remember { mutableStateOf(s.customKey) }
