@@ -86,6 +86,24 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit, onSettings: () -> Unit) {
 
     val mode = core.coreMode()
 
+    // The + menu: Photos (Android's photo picker), Camera (take a picture to send), Files (Android's file picker).
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) core.attach(uri) }
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) core.attach(uri) }
+    var cameraFile by remember { mutableStateOf<java.io.File?>(null) }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        val f = cameraFile
+        if (ok && f != null) core.attach(androidx.core.content.FileProvider.getUriForFile(context, context.packageName + ".files", f), "photo.jpg")
+    }
+    val launchCamera = {
+        val dir = java.io.File(context.cacheDir, "camera").also { it.mkdirs() }
+        val f = java.io.File(dir, "shot_${System.currentTimeMillis()}.jpg")
+        cameraFile = f
+        camera.launch(androidx.core.content.FileProvider.getUriForFile(context, context.packageName + ".files", f))
+    }
+    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) launchCamera() else core.reportStatus("Allow the camera to take a picture")
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(Palette.Bg)) {
         Column(modifier = Modifier.fillMaxSize()) {
             TopBar(core, onMenu) { modelOpen = true }
@@ -114,8 +132,8 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit, onSettings: () -> Unit) {
                 busy = core.busy,
                 onSend = {
                     if (core.busy) core.stop()
-                    else if (input.isNotBlank()) {
-                        core.send(input)
+                    else if (input.isNotBlank() || core.pending.isNotEmpty()) {
+                        core.sendWithAttachments(input)
                         input = ""
                     }
                 },
@@ -128,11 +146,21 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit, onSettings: () -> Unit) {
                 onLive = { withMic { core.startLive() } },
                 onPlus = { plusOpen = !plusOpen; toolsOpen = false; micMenuOpen = false },
                 onHeight = { composerHeight = it },
+                pending = core.pending,
+                onRemove = { core.removePending(it) },
             )
         }
 
         val menuBottom = composerHeight + 34.dp
-        PlusMenu(core, plusOpen, menuBottom, { plusOpen = false }, onThinking = { modelOpen = true }, onNew = { core.newChat() }, onSettings = onSettings)
+        PlusMenu(
+            plusOpen, menuBottom, { plusOpen = false },
+            onPhotos = { photoPicker.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            onCamera = {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchCamera()
+                else cameraPermission.launch(Manifest.permission.CAMERA)
+            },
+            onFiles = { filePicker.launch(arrayOf("*/*")) },
+        )
         MicMenu(micMenuOpen, menuBottom, { micMenuOpen = false }, onVoiceChat = { withMic { core.startVoiceChat() } }, onLive = { withMic { core.startLive() } })
         ModelSheetView(core, modelOpen) { modelOpen = false }
         core.approval?.let { ApprovalSheet(it, onAllow = { core.resolveApproval(it.id, true) }, onDeny = { core.resolveApproval(it.id, false) }) }

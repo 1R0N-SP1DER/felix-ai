@@ -27,6 +27,7 @@ interface ListenControl {
 class FazeCore(private val app: Application) : EngineListener {
     val settings = AppSettings(app)
     private val imageShelf = ImageShelf()
+    private val MAX_PENDING = 6
     val messages = mutableStateListOf<ChatMessage>()
     val chats = mutableStateListOf<ChatRecord>()
 
@@ -244,6 +245,52 @@ class FazeCore(private val app: Application) : EngineListener {
         timing = ""
         status = ""
         engine.send(text)
+    }
+
+    /** What is waiting to go with the next message: pictures and files picked with the + button. */
+    val pending = mutableStateListOf<Attachment>()
+
+    private val attachDir get() = java.io.File(app.filesDir, "attachments").also { it.mkdirs() }
+
+    private val reader: AttachmentReader by lazy {
+        val eyes = RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 900)
+        AttachmentReader(
+            vision = { jpeg, q ->
+                if (settings.groqKey.isEmpty()) "A picture was attached but it cannot be looked at: the vision model needs the Groq key."
+                else try {
+                    eyes.chat(settings.visionModel, AttachmentReader.visionMessages(q, jpeg), null, { _ -> }, { false }).content.trim().ifEmpty { "The vision model gave no description." }
+                } catch (e: RemoteError) {
+                    "The picture could not be looked at: ${e.message}"
+                }
+            },
+            pdfPages = { f -> AndroidPdf.pages(f, 4) },
+        )
+    }
+
+    /** A picked photo, file or camera picture: copied into the app (so it stays readable) and queued. Off the main thread. */
+    fun attach(uri: android.net.Uri, nameHint: String = "") {
+        if (pending.size >= MAX_PENDING) { status = "Up to $MAX_PENDING attachments per message"; return }
+        executor.execute {
+            val made = try { AndroidAttachments.copyIn(app, uri, attachDir, nameHint) } catch (e: Exception) { null }
+            main.post {
+                if (made == null) status = "Could not read that file"
+                else pending.add(made)
+            }
+        }
+    }
+
+    fun removePending(a: Attachment) { pending.remove(a) }
+
+    /** Sends the typed text together with the queued attachments. The pictures are looked at and the files read first. */
+    fun sendWithAttachments(text: String) {
+        val list = ArrayList(pending)
+        pending.clear()
+        if (list.isEmpty()) { send(text); return }
+        status = "Reading ${list.size} attachment${if (list.size == 1) "" else "s"}…"
+        executor.execute {
+            val read = list.mapIndexed { i, a -> if (a.isImage && i >= AttachmentReader.MAX_PICTURES) a.copy(context = "Not looked at: too many pictures in one message.") else reader.read(a, text) }
+            main.post { nextAloud = false; timing = ""; status = ""; engine.send(text, read) }
+        }
     }
 
     fun stop() {
