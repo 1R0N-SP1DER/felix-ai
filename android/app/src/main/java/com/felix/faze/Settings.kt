@@ -270,6 +270,25 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = text("overlay_idle").toIntOrNull()?.coerceIn(3, 60) ?: 6
         set(value) = put("overlay_idle", value.coerceIn(3, 60).toString())
 
+    /** auto: the natural Gemini voice when online, the phone's voice otherwise; device: always the phone's; gemini: natural when it can be. */
+    var voiceEngine: String
+        get() = text("voice_engine").let { if (it == "device" || it == "gemini") it else "auto" }
+        set(value) = put("voice_engine", value)
+
+    /** The phone voice picked in Settings ("" = the phone's default). */
+    var deviceVoice: String
+        get() = text("device_voice")
+        set(value) = put("device_voice", value)
+
+    /** Only offer (and fall back to) voices that work without internet. */
+    var offlineVoicesOnly: Boolean
+        get() = prefs.getBoolean("offline_voices_only", false)
+        set(value) = prefs.edit().putBoolean("offline_voices_only", value).apply()
+
+    var ttsModel: String
+        get() = text("tts_model").ifBlank { GeminiSpeech.DEFAULT_MODEL }
+        set(value) = put("tts_model", value.trim())
+
     var chordEnabled: Boolean
         get() = prefs.getBoolean("chord_on", true)
         set(value) = prefs.edit().putBoolean("chord_on", value).apply()

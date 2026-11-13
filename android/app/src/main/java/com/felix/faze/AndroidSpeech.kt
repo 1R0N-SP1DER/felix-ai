@@ -71,7 +71,11 @@ class Recorder {
 }
 
 /** Speaks sentences as they arrive, queued one after another by Android's own text to speech. */
-class Speaker(context: android.content.Context) : SpeechOut {
+/** One voice the phone can speak with. [offline] voices work without internet. */
+data class VoiceOption(val name: String, val label: String, val offline: Boolean)
+
+class Speaker(context: android.content.Context) : SpeechOut, DeviceSpeech {
+    private var voiceName = ""
     private var tts: TextToSpeech? = null
     private var ready = false
     private val waiting = ArrayList<String>()
@@ -83,25 +87,58 @@ class Speaker(context: android.content.Context) : SpeechOut {
             synchronized(this) {
                 if (status == TextToSpeech.SUCCESS) {
                     tts?.setLanguage(Locale.getDefault())
+                    applyVoice()
                     tts?.setSpeechRate(rate)
                     tts?.setPitch(pitch)
                     ready = true
-                    for (s in waiting) say(s)
+                    for (s in waiting) sayNow(s)
                 }
                 waiting.clear()
             }
         }
     }
 
-    private fun say(text: String) {
+    private fun sayNow(text: String) {
         tts?.speak(text, TextToSpeech.QUEUE_ADD, null, "faze-" + System.nanoTime())
+    }
+
+    override fun say(text: String) = speak(text)
+
+    private fun applyVoice() {
+        try {
+            val v = if (voiceName.isEmpty()) null else tts?.voices?.firstOrNull { it.name == voiceName }
+            if (v != null) tts?.voice = v
+        } catch (e: Exception) {
+            // a voice that is gone falls back to the default one
+        }
+    }
+
+    /** The voice picked in Settings ("" = the phone's default). */
+    fun setVoiceName(name: String) {
+        synchronized(this) {
+            voiceName = name
+            if (ready) applyVoice()
+        }
+    }
+
+    /** The voices installed on this phone for the current language first, offline ones before online ones. Empty until the engine has started. */
+    fun voices(): List<VoiceOption> = synchronized(this) {
+        if (!ready) return emptyList()
+        val lang = Locale.getDefault().language
+        try {
+            (tts?.voices ?: emptySet()).filter { it.locale.language == lang }
+                .sortedWith(compareBy({ it.isNetworkConnectionRequired }, { -it.quality }, { it.name }))
+                .map { VoiceOption(it.name, it.locale.displayName + "  " + it.name.substringAfterLast('-').take(24), !it.isNetworkConnectionRequired) }
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
     override fun speak(sentence: String) {
         val text = Speakable.clean(sentence)
         if (text.isEmpty()) return
         synchronized(this) {
-            if (ready) say(text) else waiting.add(text)
+            if (ready) sayNow(text) else waiting.add(text)
         }
     }
 
@@ -124,7 +161,7 @@ class Speaker(context: android.content.Context) : SpeechOut {
         }
     }
 
-    fun isSpeaking(): Boolean = synchronized(this) { waiting.isNotEmpty() || tts?.isSpeaking == true }
+    override fun isSpeaking(): Boolean = synchronized(this) { waiting.isNotEmpty() || tts?.isSpeaking == true }
 
     fun shutdown() {
         tts?.stop()
