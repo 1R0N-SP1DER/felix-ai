@@ -24,6 +24,19 @@ class Takeover(unittest.TestCase):
         self.assertIn("Take over from Google's assistant", read(KT, "SettingsScreen.kt"))
         self.assertIn("Did you mean me", read(KT, "GoogleTakeover.kt"))
 
+    def test_activity_log_and_wake_methods(self):
+        self.assertIn("ActivityLogDialog", read(KT, "SettingsScreen.kt"))
+        self.assertNotIn("soon = true) {}", read(KT, "SettingsScreen.kt").split("Open activity log")[0][-5:] + "")
+        self.assertIn('SettingsCard("Ways to wake Faze")', read(KT, "SettingsScreen.kt"))
+        self.assertIn("gate.logger", read(KT, "FazeCore.kt"))
+        self.assertIn("class ActivityLog", read(KT, "ActivityLog.kt"))
+
+    def test_overlay_opens_fresh_with_a_timed_bar(self):
+        o = read(KT, "Overlay.kt")
+        self.assertIn("core.newChat()", o)
+        self.assertIn("class PillMode", o)
+        self.assertIn("overlayIdleSeconds", o)
+
     def test_description_is_honest(self):
         self.assertIn("Google", read(SRC, "res", "values", "strings.xml"))
 

@@ -59,7 +59,7 @@ class FazeAccessibilityService : AccessibilityService() {
             ChordAction.OPEN -> {
                 restoreVolumes()
                 buzz()
-                if (o.show()) detector.overlayOpen = true
+                if (o.show()) { detector.overlayOpen = true; core.activity.add("wake", "Both volume keys held") }
             }
             ChordAction.CLOSE -> {
                 restoreVolumes()
@@ -130,6 +130,7 @@ class FazeAccessibilityService : AccessibilityService() {
         val line = GoogleTakeover.LINES[lastLine]
         if (o.show(takeoverLine = line, spoken = s.googleQuips)) {
             detector.overlayOpen = true
+            core.activity.add("wake", "Google's assistant took over ($seen)")
             // Dismiss Google's window once Faze's is up, so the swap reads as one movement.
             handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 160)
         }

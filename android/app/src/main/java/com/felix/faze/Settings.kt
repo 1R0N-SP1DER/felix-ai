@@ -265,6 +265,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = text("google_last_window")
         set(value) = put("google_last_window", value)
 
+    /** How long the overlay's listening bar waits for speech before it goes back to "Message FAZE". */
+    var overlayIdleSeconds: Int
+        get() = text("overlay_idle").toIntOrNull()?.coerceIn(3, 60) ?: 6
+        set(value) = put("overlay_idle", value.coerceIn(3, 60).toString())
+
     var chordEnabled: Boolean
         get() = prefs.getBoolean("chord_on", true)
         set(value) = prefs.edit().putBoolean("chord_on", value).apply()

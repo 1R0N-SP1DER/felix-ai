@@ -27,6 +27,9 @@ interface ListenControl {
 class FazeCore(private val app: Application) : EngineListener {
     val settings = AppSettings(app)
     private val imageShelf = ImageShelf()
+
+    /** What Faze did, for the activity log in Settings. */
+    val activity = ActivityLog(java.io.File(app.filesDir, "activity.log"))
     private val MAX_PENDING = 6
     val messages = mutableStateListOf<ChatMessage>()
     val chats = mutableStateListOf<ChatRecord>()
@@ -184,6 +187,7 @@ class FazeCore(private val app: Application) : EngineListener {
             RunwareImages(transport, { settings.runwareKey }, { settings.runwareModel }, java.io.File(app.filesDir, "images"), imageShelf),
             WebImages(transport, { settings.tavily }, imageShelf))
         gate = GatedTools(rawTools, broker, extraTier = { name -> if (userTools.has(name)) Tier.SAFE else null }, approvalMode = { settings.approvalMode }, phoneControl = { settings.phoneControl })
+        gate.logger = { line -> activity.add("tool", line) }
         val tools: ToolRunner = gate
         gatedTools = tools
         // A tool that takes over the screen waits for the assistant to finish speaking, unless the bubble keeps the conversation going outside the app.
@@ -215,6 +219,7 @@ class FazeCore(private val app: Application) : EngineListener {
     }
 
     fun markHeard(value: Boolean) {
+        if (value) activity.add("wake", "Wake word heard")
         main.post { heard = value }
     }
 

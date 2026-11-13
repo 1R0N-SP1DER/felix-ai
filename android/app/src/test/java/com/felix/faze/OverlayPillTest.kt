@@ -6,15 +6,33 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OverlayPillTest {
-    @Test fun theBarBecomesTheListeningBarOnlyWhileTheMicIsOnAndSomeoneTalks() {
-        assertTrue(PillState.listening(true, true, 1000, 0))
-        assertFalse(PillState.listening(true, false, 1000, 0))
-        assertFalse(PillState.listening(false, true, 1000, 0))
+    @Test fun theBarOpensAfterAboutASecondWhetherOrNotAnythingIsHeard() {
+        val m = PillMode()
+        m.open(0, 6000)
+        assertFalse(m.listening(true, false, 500))  // "Message FAZE" first
+        assertTrue(m.listening(true, false, 1200))  // then the bar, with nobody speaking
+        assertTrue(m.listening(true, false, 6900))
+        assertFalse(m.listening(true, false, 7100)) // nobody spoke for the idle time: back to "Message FAZE"
     }
 
-    @Test fun itStaysAMomentAfterTheLastWordSoItDoesNotFlicker() {
-        assertTrue(PillState.listening(true, false, 1000, 2400))
-        assertFalse(PillState.listening(true, false, 2500, 2400))
+    @Test fun speechShowsTheBarAtOnceAndKeepsItAMomentAfterTheLastWord() {
+        val m = PillMode()
+        m.open(0, 6000)
+        assertTrue(m.listening(true, true, 300))      // spoke during the first second
+        assertTrue(m.listening(true, false, 1300))
+        assertFalse(m.listening(true, false, 7100))
+        assertTrue(m.listening(true, true, 20000))    // speech much later brings it back
+        assertTrue(m.listening(true, false, 21000))
+        assertFalse(m.listening(true, false, 21200))
+    }
+
+    @Test fun aSwitchedOffMicNeverShowsTheBarAndSwitchingItOnRestartsIt() {
+        val m = PillMode()
+        m.open(0, 6000)
+        assertFalse(m.listening(false, true, 2000))
+        m.restart(30000, 6000)
+        assertTrue(m.listening(true, false, 30010))
+        assertFalse(m.listening(true, false, 36100))
     }
 
     @Test fun theEndButtonIsStopSendOrTheLiveWave() {

@@ -131,7 +131,16 @@ class GatedTools(
     /** Built-in tools have fixed tiers; a tool the person approved earlier (see [extraTier]) may run; anything else is refused. */
     private fun tierOf(name: String): Tier = PermissionPolicy.tier(name).let { if (it == Tier.BLOCK) extraTier(name) ?: it else it }
 
-    override fun execute(name: String, args: JSONObject): ToolResult = when (tierOf(name)) {
+    /** Called with a one-line summary after every tool the gate runs, declined ones included. */
+    @Volatile var logger: ((String) -> Unit)? = null
+
+    override fun execute(name: String, args: JSONObject): ToolResult {
+        val r = run(name, args)
+        try { logger?.invoke(ActivityLog.summary(name, args, r)) } catch (e: Exception) { /* logging never breaks a tool */ }
+        return r
+    }
+
+    private fun run(name: String, args: JSONObject): ToolResult = when (tierOf(name)) {
         Tier.SAFE -> inner.execute(name, args)
         Tier.BLOCK -> ToolResult(false, "$name is not allowed.")
         Tier.CONFIRM -> {
