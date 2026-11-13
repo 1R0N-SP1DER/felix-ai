@@ -421,6 +421,8 @@ private fun AdvancedTab(core: FazeCore) {
     val s = core.settings
     var groq by remember { mutableStateOf(s.groqKey) }
     var tavily by remember { mutableStateOf(s.tavily) }
+    var runware by remember { mutableStateOf(s.runwareKey) }
+    var runwareModel by remember { mutableStateOf(s.runwareModel) }
     var gemini by remember { mutableStateOf(s.geminiKey) }
     var openrouter by remember { mutableStateOf(s.openrouterKey) }
     var orModel by remember { mutableStateOf(s.openrouterModel) }
@@ -451,6 +453,8 @@ private fun AdvancedTab(core: FazeCore) {
         SettingRow("Custom address", "For example https://api.deepseek.com/v1 or https://api.openai.com/v1") { FieldBox(cUrl, false, Modifier.widthIn(max = 190.dp)) { cUrl = it; s.customUrl = it } }
         SettingRow("Custom key", "Optional for a server on this phone (http://127.0.0.1:port/v1)") { FieldBox(cKey, true, Modifier.widthIn(max = 190.dp)) { cKey = it; s.customKey = it } }
         SettingRow("Custom model", "The model name, or pick it from the model button after the address is set") { FieldBox(cModel, false, Modifier.widthIn(max = 190.dp)) { cModel = it; s.customModel = it } }
+        SettingRow("Runware key", "Makes pictures when you ask") { FieldBox(runware, true, Modifier.widthIn(max = 190.dp)) { runware = it; s.runwareKey = it } }
+        SettingRow("Picture model", "Runware model id, default ${RunwareImages.DEFAULT_MODEL}") { FieldBox(runwareModel, false, Modifier.widthIn(max = 190.dp)) { runwareModel = it; s.runwareModel = it } }
         SettingRow("Tavily key", "Web search") { FieldBox(tavily, true, Modifier.widthIn(max = 190.dp)) { tavily = it; s.tavily = it } }
         SettingRow("Your name") { FieldBox(user, false, Modifier.widthIn(max = 190.dp)) { user = it; s.user = it } }
         SettingRow("Default city", "For weather", last = true) { FieldBox(city, false, Modifier.widthIn(max = 190.dp)) { city = it; s.city = it } }

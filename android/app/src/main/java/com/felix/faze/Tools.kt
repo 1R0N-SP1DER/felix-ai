@@ -63,6 +63,7 @@ class Tools(
     private val scheduler: SchedulerApi? = null,
     private val switches: Switches? = null,
     private val liveControl: LiveControl? = null,
+    private val images: ImageMaker? = null,
 ) : ToolRunner {
 
     private fun tool(name: String, description: String, vararg params: Param): JSONObject {
@@ -132,6 +133,8 @@ class Tools(
             out.put(tool("list_scheduled", "Call this when the user asks what is scheduled or what reminders they have. No arguments."))
             out.put(tool("cancel_scheduled", "Cancel a scheduled task. Use list_scheduled first if you do not know its id.", Param("id", "string", "The task id, like t1")))
         }
+        if (images != null) out.put(tool("generate_image", "Call this when the user asks you to make, draw, design or generate a picture or image (an illustration, a logo idea, a poster, a photo-like scene). Describe the picture in detail in English: subject, style, colours, mood. The picture appears in the chat by itself.",
+            Param("prompt", "string", "a detailed description of the picture"), Param("shape", "string", "square, portrait or landscape")))
         if (liveControl != null) out.put(tool("end_live", "Call this when the user asks to end, stop or leave live mode or the voice chat (for example: end live, stop the call, bye). Say a short goodbye in the same reply; the conversation closes after you finish speaking. No arguments."))
         if (hands != null) {
             out.put(tool("tap", "Call this to tap the screen at a point. Read the screen first (read_screen) to get the point of the button or field. Then read it again to check what happened.",
@@ -193,6 +196,7 @@ class Tools(
                 }
                 "list_apps" -> ok(device.listApps(args.optString("search", "")))
                 "read_screen" -> ok(device.readScreen())
+                "generate_image" -> images?.let { ok(it.make(args.optString("prompt", ""), args.optString("shape", "square"))) } ?: fail("image making is not available")
                 "set_mobile_data" -> switches?.let { ok(it.mobileData(flag(args))) } ?: fail("not available")
                 "set_wifi" -> switches?.let { ok(it.wifi(flag(args))) } ?: fail("not available")
                 "set_bluetooth" -> switches?.let { ok(it.bluetooth(flag(args))) } ?: fail("not available")

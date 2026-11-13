@@ -16,6 +16,14 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = text("groq_key")
         set(value) = put("groq_key", value)
 
+    var runwareKey: String
+        get() = text("runware_key")
+        set(value) = put("runware_key", value.trim())
+
+    var runwareModel: String
+        get() = text("runware_model").ifBlank { RunwareImages.DEFAULT_MODEL }
+        set(value) = put("runware_model", value.trim())
+
     var tavily: String
         get() = text("tavily_key")
         set(value) = put("tavily_key", value)

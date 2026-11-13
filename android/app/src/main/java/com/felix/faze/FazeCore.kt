@@ -26,6 +26,7 @@ interface ListenControl {
  */
 class FazeCore(private val app: Application) : EngineListener {
     val settings = AppSettings(app)
+    private val imageShelf = ImageShelf()
     val messages = mutableStateListOf<ChatMessage>()
     val chats = mutableStateListOf<ChatRecord>()
 
@@ -178,7 +179,8 @@ class FazeCore(private val app: Application) : EngineListener {
             { settings.allowPowered },
             { PermissionPolicy.all().map { it.first }.toSet() },
         )
-        rawTools = Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app), scheduler, AndroidSwitches(), liveControl)
+        rawTools = Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app), scheduler, AndroidSwitches(), liveControl,
+            RunwareImages(transport, { settings.runwareKey }, { settings.runwareModel }, java.io.File(app.filesDir, "images"), imageShelf))
         gate = GatedTools(rawTools, broker, extraTier = { name -> if (userTools.has(name)) Tier.SAFE else null }, approvalMode = { settings.approvalMode }, phoneControl = { settings.phoneControl })
         val tools: ToolRunner = gate
         gatedTools = tools
@@ -189,6 +191,7 @@ class FazeCore(private val app: Application) : EngineListener {
             override fun memoryBlock(): String = if (settings.useMemory) memory.promptBlock(settings.user) else ""
             override fun speak(): Boolean = settings.speakReplies || nextAloud
         }, speaker, { block -> main.post { block() } }, executor, messages, this)
+        engine.takeImages = { imageShelf.take() }
         speaker.setVoice(settings.voiceRate, settings.voicePitch)
         Palette.setAccent(Accents.byName(settings.accent))
         refreshChats()

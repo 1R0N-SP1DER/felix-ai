@@ -36,6 +36,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -100,12 +101,14 @@ fun TurnView(m: ChatMessage, pending: Boolean, core: FazeCore) {
     Column(modifier = Modifier.fillMaxWidth().padding(top = if (mine) 24.dp else 0.dp, bottom = if (mine) 12.dp else 24.dp).rise(0, m.id).gutter(if (mine) "user" else if (pending) "pending" else "faze").padding(start = 16.dp)) {
         if (mine) {
             Who("YOU", false)
-            Text(m.text, color = Palette.Text, fontSize = 17.sp, fontFamily = LocalReadFont.current)
+            AttachmentRow(m.attachments)
+            if (m.text.isNotEmpty()) Text(m.text, color = Palette.Text, fontSize = 17.sp, fontFamily = LocalReadFont.current)
             if (m.text.isNotEmpty()) Acts(m.text, core)
         } else {
             Who("FAZE", true)
             for (step in m.steps) StepRow(step)
-            if (pending && m.text.isEmpty()) Skeleton() else MarkdownBody(m.text)
+            if (pending && m.text.isEmpty() && m.attachments.isEmpty()) Skeleton() else if (m.text.isNotEmpty()) MarkdownBody(m.text)
+            AttachmentRow(m.attachments)
             if (!pending && m.text.isNotEmpty()) Acts(m.text, core)
         }
     }
@@ -208,5 +211,22 @@ fun LiveBarView(core: FazeCore, mode: CoreMode) {
         CoreView(mode, 40.dp)
         Text(text, color = color, fontSize = 12.8.sp, letterSpacing = 0.3.sp, modifier = Modifier.weight(1f))
         if (core.timing.isNotEmpty()) Text(core.timing, color = Palette.Muted, fontSize = 11.sp)
+    }
+}
+
+/** Pictures show as thumbnails you can see in the chat; files show as a small named chip. */
+@Composable
+fun AttachmentRow(list: List<Attachment>) {
+    if (list.isEmpty()) return
+    Column(modifier = Modifier.padding(top = 6.dp, bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (a in list) {
+            if (a.isImage) {
+                val bmp = remember(a.path) { try { android.graphics.BitmapFactory.decodeFile(a.path, android.graphics.BitmapFactory.Options().apply { inSampleSize = 2 })?.asImageBitmap() } catch (e: Exception) { null } }
+                if (bmp != null) androidx.compose.foundation.Image(bmp, a.name, modifier = Modifier.widthIn(max = 320.dp).clip(RoundedCornerShape(14.dp)).border(1.dp, Palette.Line, RoundedCornerShape(14.dp)))
+                else Text("\u25A3 ${a.name} (picture no longer on this phone)", color = Palette.Muted, fontSize = 13.sp)
+            } else {
+                Text("\uD83D\uDCC4 ${a.name}", color = Palette.Dim, fontSize = 13.sp, modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(Palette.GlowSoft).padding(horizontal = 10.dp, vertical = 6.dp))
+            }
+        }
     }
 }
