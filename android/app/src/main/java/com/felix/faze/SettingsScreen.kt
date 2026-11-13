@@ -431,6 +431,10 @@ private fun AdvancedTab(core: FazeCore) {
     var hideDot by remember { mutableStateOf(s.hideMicDot) }
     var chord by remember { mutableStateOf(s.chordEnabled) }
     var chordVoice by remember { mutableStateOf(s.chordVoice) }
+    var gTake by remember { mutableStateOf(s.googleTakeover) }
+    var gQuips by remember { mutableStateOf(s.googleQuips) }
+    var gWords by remember { mutableStateOf(s.googleWords) }
+    var gLast by remember { mutableStateOf(s.lastGoogleWindow) }
     var note by remember { mutableStateOf("") }
     val main = remember { Handler(Looper.getMainLooper()) }
 
@@ -470,6 +474,18 @@ private fun AdvancedTab(core: FazeCore) {
         val a11yOk = (android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: "").contains("com.felix.faze/")
         SettingRow("Hold both volume keys to open", "Opens the overlay over any app. With it open, hold volume up to force-close it.") {
             FazeSwitch(chord, { chord = it; s.chordEnabled = it })
+        }
+        SettingRow("Take over from Google's assistant", "When Hey Google, the power-button hold or the corner swipe opens Google's assistant, Faze dismisses it and opens its overlay instead. Needs the accessibility service above. Keep Google as your default assistant so Hey Google keeps working.") {
+            FazeSwitch(gTake, { gTake = it; s.googleTakeover = it })
+        }
+        SettingRow("Say a line when it does", "Faze jokes about Google not being around, out loud, and listens after it.") {
+            FazeSwitch(gQuips, { gQuips = it; s.googleQuips = it })
+        }
+        SettingRow("Extra window names", "Only if it does not trigger: words from the Google window name below, separated by commas.") {
+            FieldBox(gWords, false, Modifier.widthIn(max = 190.dp)) { gWords = it; s.googleWords = it }
+        }
+        SettingRow("Last Google window seen", if (gLast.isEmpty()) "None yet. Say Hey Google, then come back here and tap Refresh." else gLast) {
+            Text("Refresh", color = Palette.Dim, fontSize = 13.sp, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { gLast = s.lastGoogleWindow }.padding(horizontal = 10.dp, vertical = 6.dp))
         }
         SettingRow("Start voice chat with it", "The overlay starts listening as soon as it opens. Swipe up on its top edge to open the full app.") {
             FazeSwitch(chordVoice, { chordVoice = it; s.chordVoice = it })

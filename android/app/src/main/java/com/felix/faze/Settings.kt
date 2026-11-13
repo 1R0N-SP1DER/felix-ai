@@ -245,6 +245,26 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         set(value) = prefs.edit().putBoolean("hide_mic_dot", value).apply()
 
     /** Both volume keys held opens the overlay (needs the accessibility service). */
+    /** When Google's assistant pops up (Hey Google, power-button hold, corner swipe), Faze takes over. */
+    var googleTakeover: Boolean
+        get() = prefs.getBoolean("google_takeover", true)
+        set(value) = prefs.edit().putBoolean("google_takeover", value).apply()
+
+    /** Faze says a short fun line when it takes over (otherwise the line is only shown). */
+    var googleQuips: Boolean
+        get() = prefs.getBoolean("google_quips", true)
+        set(value) = prefs.edit().putBoolean("google_quips", value).apply()
+
+    /** Extra window-name words to take over on, for phones where Google's assistant window has another name. */
+    var googleWords: String
+        get() = text("google_words")
+        set(value) = put("google_words", value.trim())
+
+    /** The last Google window the service saw, so the right words can be found without a computer. */
+    var lastGoogleWindow: String
+        get() = text("google_last_window")
+        set(value) = put("google_last_window", value)
+
     var chordEnabled: Boolean
         get() = prefs.getBoolean("chord_on", true)
         set(value) = prefs.edit().putBoolean("chord_on", value).apply()
