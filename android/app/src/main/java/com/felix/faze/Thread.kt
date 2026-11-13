@@ -27,6 +27,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -85,10 +91,14 @@ private fun Who(label: String, glyph: Boolean) {
 }
 
 @Composable
-private fun Acts(text: String, core: FazeCore) {
+private fun Acts(text: String, core: FazeCore, onSources: (() -> Unit)? = null) {
     val context = LocalContext.current
     Row(modifier = Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        for ((label, action) in listOf<Pair<String, () -> Unit>>("Copy" to { copyToClipboard(context, text) }, "Listen" to { core.speakText(text) })) {
+        val buttons = ArrayList<Pair<String, () -> Unit>>()
+        buttons.add("Copy" to { copyToClipboard(context, text) })
+        buttons.add("Listen" to { core.speakText(text) })
+        if (onSources != null) buttons.add("Sources" to onSources)
+        for ((label, action) in buttons) {
             Text(label, color = Palette.Dim, fontSize = 11.8.sp, fontWeight = FontWeight.Medium, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { action() }.padding(horizontal = 10.dp, vertical = 4.dp))
         }
     }
@@ -109,7 +119,10 @@ fun TurnView(m: ChatMessage, pending: Boolean, core: FazeCore) {
             for (step in m.steps) StepRow(step)
             if (pending && m.text.isEmpty() && m.attachments.isEmpty()) Skeleton() else if (m.text.isNotEmpty()) MarkdownBody(m.text)
             AttachmentRow(m.attachments)
-            if (!pending && m.text.isNotEmpty()) Acts(m.text, core)
+            var sourcesOpen by remember { mutableStateOf(false) }
+            val hasSources = m.sources.isNotEmpty() || m.attachments.any { it.isRemote }
+            if (!pending && m.text.isNotEmpty()) Acts(m.text, core, if (hasSources) ({ sourcesOpen = true }) else null)
+            if (sourcesOpen) SourcesDialog(m) { sourcesOpen = false }
         }
     }
 }
@@ -214,19 +227,119 @@ fun LiveBarView(core: FazeCore, mode: CoreMode) {
     }
 }
 
-/** Pictures show as thumbnails you can see in the chat; files show as a small named chip. */
+/** A picture from the phone or the web, fitted into its space. Shows a grey box while loading and a note if it cannot be loaded. */
+@Composable
+fun PictureView(a: Attachment, maxSide: Int, modifier: Modifier, fit: androidx.compose.ui.layout.ContentScale = androidx.compose.ui.layout.ContentScale.Fit) {
+    val state = androidx.compose.runtime.produceState<Any?>(null, a.path, a.url) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { PictureLoader.load(a, maxSide)?.asImageBitmap() ?: false }
+    }
+    when (val v = state.value) {
+        is androidx.compose.ui.graphics.ImageBitmap -> androidx.compose.foundation.Image(v, a.name, modifier = modifier, contentScale = fit)
+        false -> Box(modifier = modifier.background(Palette.GlowSoft).padding(12.dp), contentAlignment = Alignment.Center) { Text("Picture could not be loaded", color = Palette.Muted, fontSize = 12.sp) }
+        else -> Box(modifier = modifier.background(Palette.GlowSoft).height(120.dp))
+    }
+}
+
+/** Pictures show as thumbnails you can tap to enlarge; files show as a small named chip. */
 @Composable
 fun AttachmentRow(list: List<Attachment>) {
     if (list.isEmpty()) return
+    var viewing by remember { mutableStateOf<Attachment?>(null) }
     Column(modifier = Modifier.padding(top = 6.dp, bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (a in list) {
-            if (a.isImage) {
-                val bmp = remember(a.path) { try { android.graphics.BitmapFactory.decodeFile(a.path, android.graphics.BitmapFactory.Options().apply { inSampleSize = 2 })?.asImageBitmap() } catch (e: Exception) { null } }
-                if (bmp != null) androidx.compose.foundation.Image(bmp, a.name, modifier = Modifier.widthIn(max = 320.dp).clip(RoundedCornerShape(14.dp)).border(1.dp, Palette.Line, RoundedCornerShape(14.dp)))
-                else Text("\u25A3 ${a.name} (picture no longer on this phone)", color = Palette.Muted, fontSize = 13.sp)
-            } else {
-                Text("\uD83D\uDCC4 ${a.name}", color = Palette.Dim, fontSize = 13.sp, modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(Palette.GlowSoft).padding(horizontal = 10.dp, vertical = 6.dp))
+        val pics = list.filter { it.isImage }
+        if (pics.size > 1 && pics.all { it.isRemote }) {
+            Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (a in pics) PictureView(a, 640, Modifier.height(170.dp).widthIn(max = 260.dp).clip(RoundedCornerShape(14.dp)).border(1.dp, Palette.Line, RoundedCornerShape(14.dp)).clickable { viewing = a }, androidx.compose.ui.layout.ContentScale.Crop)
+            }
+        } else for (a in pics) PictureView(a, 960, Modifier.widthIn(max = 320.dp).clip(RoundedCornerShape(14.dp)).border(1.dp, Palette.Line, RoundedCornerShape(14.dp)).clickable { viewing = a })
+        for (a in list.filter { !it.isImage }) {
+            Text("\uD83D\uDCC4 ${a.name}", color = Palette.Dim, fontSize = 13.sp, modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(Palette.GlowSoft).padding(horizontal = 10.dp, vertical = 6.dp))
+        }
+    }
+    viewing?.let { PictureViewer(it) { viewing = null } }
+}
+
+/** The picture enlarged to fill the screen, with a Download button that saves it to Pictures/Faze. */
+@Composable
+fun PictureViewer(a: Attachment, onClose: () -> Unit) {
+    val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var note by remember { mutableStateOf("") }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onClose, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+            PictureView(a, 2400, Modifier.fillMaxSize().clickable { onClose() })
+            Text("\u2715", color = Color.White, fontSize = 22.sp, modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).clip(CircleShape).clickable { onClose() }.padding(12.dp))
+            Column(modifier = Modifier.align(Alignment.BottomCenter).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                if (note.isNotEmpty()) Text(note, color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(bottom = 10.dp))
+                Text(
+                    "Download", color = Color.Black, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier.clip(RoundedCornerShape(24.dp)).background(Color.White).clickable {
+                        note = "Saving…"
+                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                            val why = PictureLoader.download(context, a)
+                            note = if (why == null) "Saved to Pictures/Faze" else "Could not save: $why"
+                        }
+                    }.padding(horizontal = 28.dp, vertical = 12.dp),
+                )
             }
         }
+    }
+}
+
+/** Where the answer came from: web pages, pictures, things read on the phone, and saved notes. */
+@Composable
+fun SourcesDialog(m: ChatMessage, onClose: () -> Unit) {
+    val context = LocalContext.current
+    var viewing by remember { mutableStateOf<Attachment?>(null) }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onClose) {
+        Column(
+            modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(Palette.Bg).border(1.dp, Palette.Line, RoundedCornerShape(20.dp)).padding(18.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Sources", color = Palette.Text, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+            val pages = m.sources.filter { it.kind == Source.WEB }
+            val pics = m.attachments.filter { it.isRemote }
+            if (pages.isNotEmpty()) {
+                SourceHeading("Online")
+                for (p in pages) {
+                    Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { openLink(context, p.url) }.padding(vertical = 4.dp)) {
+                        Text(p.title, color = Palette.Text, fontSize = 14.sp)
+                        Text(p.url.removePrefix("https://").removePrefix("http://").take(60), color = Palette.Muted, fontSize = 12.sp)
+                    }
+                }
+            }
+            if (pics.isNotEmpty()) {
+                SourceHeading("Pictures from the web")
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (a in pics) PictureView(a, 320, Modifier.size(84.dp).clip(RoundedCornerShape(10.dp)).clickable { viewing = a }, androidx.compose.ui.layout.ContentScale.Crop)
+                }
+            }
+            val device = m.sources.filter { it.kind == Source.DEVICE }
+            if (device.isNotEmpty()) {
+                SourceHeading("From this phone")
+                for (d in device) Text(d.title, color = Palette.Dim, fontSize = 14.sp)
+            }
+            val memory = m.sources.filter { it.kind == Source.MEMORY }
+            if (memory.isNotEmpty()) {
+                SourceHeading("From memory")
+                for (d in memory) Text(d.title, color = Palette.Dim, fontSize = 14.sp)
+            }
+            Text("Close", color = Palette.Dim, fontSize = 14.sp, modifier = Modifier.align(Alignment.End).clip(RoundedCornerShape(10.dp)).clickable { onClose() }.padding(horizontal = 12.dp, vertical = 6.dp))
+        }
+    }
+    viewing?.let { PictureViewer(it) { viewing = null } }
+}
+
+@Composable
+private fun SourceHeading(text: String) {
+    Text(text.uppercase(), color = Palette.Muted, fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 1.sp, modifier = Modifier.padding(top = 4.dp))
+}
+
+private fun openLink(context: android.content.Context, url: String) {
+    if (!url.startsWith("https://") && !url.startsWith("http://")) return
+    try {
+        context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+    } catch (e: Exception) {
+        // no browser to open it
     }
 }

@@ -9,15 +9,25 @@ import org.junit.Test
 class ResponseStyleTest {
     private val HI = listOf("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}", "data: [DONE]")
 
-    @Test fun effortHighAndMaxAskForCheckingAndGoingBeyond() {
-        assertEquals("", Effort.directive("standard"))
-        assertEquals("", Effort.directive("nonsense"))
-        for (l in listOf("high", "max")) {
-            val d = Effort.directive(l)
-            assertTrue(d.contains("Cross-check") && d.contains("more than the bare minimum"))
-        }
-        assertFalse(Effort.reviews("high"))
+    @Test fun effortHasFiveLevelsAndEachDoesMoreThanTheLast() {
+        assertEquals(listOf("low", "medium", "high", "extra", "max"), Effort.levels.map { it.first })
+        assertEquals("", Effort.directive("low"))
+        assertEquals("low", Effort.norm("standard")) // an old saved level
+        assertTrue(Effort.directive("medium").contains("double-check"))
+        assertTrue(Effort.directive("high").contains("Cross-check"))
+        assertFalse(Effort.directive("high").contains("bare minimum"))
+        for (l in listOf("extra", "max")) assertTrue(Effort.directive(l).contains("more than the bare minimum"))
+        assertFalse(Effort.reviews("extra"))
         assertTrue(Effort.reviews("max"))
+        assertEquals(3, Effort.index("extra"))
+        assertEquals("max", Effort.at(99))
+    }
+
+    @Test fun searchesBringPicturesAndMorePagesFromMediumUp() {
+        assertFalse(Effort.enriches("low"))
+        for (l in listOf("medium", "high", "extra", "max")) assertTrue(Effort.enriches(l))
+        assertTrue(Effort.searchResults("low") < Effort.searchResults("high"))
+        assertTrue(Effort.searchResults("high") < Effort.searchResults("max"))
     }
 
     @Test fun theLengthSliderHasFiveStopsAndTheMiddleLetsTheAiChoose() {

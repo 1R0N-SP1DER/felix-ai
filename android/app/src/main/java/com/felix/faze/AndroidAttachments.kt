@@ -8,6 +8,11 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import java.io.ByteArrayOutputStream
+import android.content.ContentValues
+import android.content.Context
+import android.os.Build
+import android.provider.MediaStore
+import android.util.LruCache
 import java.io.File
 
 /** Copies a picked item into the app's own folder. Pictures are shrunk to a sensible size; files are copied as they are (up to 20 MB). */
@@ -81,5 +86,50 @@ object AndroidPdf {
             }
         }
         return out
+    }
+}
+
+/** Loads a picture for the screen: from the phone for local ones, from the web (kept only in memory) for the ones the AI found. */
+object PictureLoader {
+    private val cache = object : LruCache<String, Bitmap>(24 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    }
+    private val transport = UrlTransport()
+
+    fun load(a: Attachment, maxSide: Int): Bitmap? {
+        val key = (if (a.isRemote) a.url else a.path) + "@" + maxSide
+        cache.get(key)?.let { return it }
+        val bytes = bytes(a) ?: return null
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxSide) sample *= 2
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
+        cache.put(key, bmp)
+        return bmp
+    }
+
+    /** The picture's own bytes: read from the file, or fetched from the web (https only, size limited). */
+    fun bytes(a: Attachment): ByteArray? = try {
+        if (a.isRemote) { if (ImageUrl.allowed(a.url)) transport.getBytes(a.url, mapOf("Accept" to "image/*"), 15000, WebImages.MAX_BYTES) else null }
+        else File(a.path).takeIf { it.exists() }?.readBytes()
+    } catch (e: Exception) { null }
+
+    /** Saves the picture into the phone's Pictures/Faze folder. Returns null when it worked, otherwise why not. */
+    fun download(context: Context, a: Attachment): String? {
+        val bytes = bytes(a) ?: return "the picture could not be loaded"
+        val png = bytes.size > 8 && bytes[1] == 'P'.code.toByte() && bytes[2] == 'N'.code.toByte()
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, "faze_${System.currentTimeMillis()}" + if (png) ".png" else ".jpg")
+            put(MediaStore.Images.Media.MIME_TYPE, if (png) "image/png" else "image/jpeg")
+            if (Build.VERSION.SDK_INT >= 29) put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Faze")
+        }
+        return try {
+            val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return "Android would not create the file"
+            context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: return "Android would not open the file"
+            null
+        } catch (e: Exception) {
+            e.message ?: e.javaClass.simpleName
+        }
     }
 }

@@ -8,7 +8,10 @@ class AgentEvents(
     val onToken: (String) -> Unit,
     val onReset: () -> Unit,
     val onTool: (String, Boolean) -> Unit,
-)
+) {
+    /** Called for each place an answer drew from (a web page, something read on the phone, saved notes). */
+    var onSource: (Source) -> Unit = {}
+}
 
 /**
  * A real tool loop for an OpenAI-format model: it picks tools, their results go back to it, and it writes the answer.
@@ -76,6 +79,7 @@ class Agent(private val chat: ChatApi, private val tools: ToolRunner, private va
         if (route != null) {
             val r = tools.execute(route.tool, route.args)
             events.onTool(route.tool, r.ok)
+            for (s in SourceTracker.from(route.tool, route.args, r)) events.onSource(s)
             val declined = !r.ok && r.text.startsWith(PermissionPolicy.DECLINED)
             router?.outcome(route, r.ok || declined)
             if (r.ok || declined) {
@@ -137,6 +141,7 @@ class Agent(private val chat: ChatApi, private val tools: ToolRunner, private va
                 val text = done.getOrPut(key) {
                     val r = tools.execute(c.name, args)
                     events.onTool(c.name, r.ok)
+                    for (s in SourceTracker.from(c.name, args, r)) events.onSource(s)
                     executed.add(Triple(c.name, args, r.ok))
                     (if (r.ok) "" else "Error: ") + r.text.take(4000)
                 }

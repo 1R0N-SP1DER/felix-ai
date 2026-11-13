@@ -245,7 +245,13 @@ class Tools(
                 }
                 "search_web" -> {
                     val query = args.optString("query", "").trim()
-                    if (query.isEmpty()) fail("what should I search for?") else ok(Search.tavily(transport, settings.tavilyKey(), query))
+                    if (query.isEmpty()) fail("what should I search for?") else {
+                        val level = Effort.active
+                        val found = Search.tavily(transport, settings.tavilyKey(), query, Effort.searchResults(level))
+                        // From Medium up the answer is backed with pictures too (they appear in the chat; the AI is told so).
+                        val pics = if (Effort.enriches(level) && finder != null) try { "\n" + finder.find(query, 3) } catch (e: ToolFailure) { "" } else ""
+                        ok(found + pics)
+                    }
                 }
                 else -> if (userTools != null && userTools.has(name)) userTools.run(name, args) else fail("unknown tool: $name")
             }
