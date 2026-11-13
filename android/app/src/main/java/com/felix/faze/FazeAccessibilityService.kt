@@ -59,7 +59,7 @@ class FazeAccessibilityService : AccessibilityService() {
             ChordAction.OPEN -> {
                 restoreVolumes()
                 buzz()
-                if (o.show()) detector.overlayOpen = true
+                if (o.show()) { detector.overlayOpen = true; core.activity.add("wake", "Both volume keys held") }
             }
             ChordAction.CLOSE -> {
                 restoreVolumes()
@@ -107,7 +107,34 @@ class FazeAccessibilityService : AccessibilityService() {
         }
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    private val gate = Debounce(2500)
+    private var lastLine = -1
+
+    /**
+     * Only the package and window name of Google's own apps are looked at (never the screen's contents). When the assistant window opens,
+     * Faze dismisses it with Back and opens its own overlay, morphing from Google's look.
+     */
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null || event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        val pkg = event.packageName?.toString() ?: return
+        if (pkg !in GoogleTakeover.PACKAGES) return
+        val cls = event.className?.toString().orEmpty()
+        val seen = "$pkg / $cls"
+        val s = core.settings
+        if (s.lastGoogleWindow != seen) s.lastGoogleWindow = seen
+        if (!s.googleTakeover) return
+        if (!GoogleTakeover.matches(pkg, cls, GoogleTakeover.words(s.googleWords))) return
+        val o = overlay ?: return
+        if (o.isShowing() || !gate.allow(SystemClock.uptimeMillis())) return
+        lastLine = GoogleTakeover.pick(lastLine)
+        val line = GoogleTakeover.LINES[lastLine]
+        if (o.show(takeoverLine = line, spoken = s.googleQuips)) {
+            detector.overlayOpen = true
+            core.activity.add("wake", "Google's assistant took over ($seen)")
+            // Dismiss Google's window once Faze's is up, so the swap reads as one movement.
+            handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 160)
+        }
+    }
 
     override fun onInterrupt() {}
 

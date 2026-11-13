@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="a11y_description">Lets Faze notice the two volume buttons held together, so you can open its overlay from any app. It only watches the volume keys; it does not read the screen.</string>
+    <string name="a11y_description">Lets Faze notice the two volume buttons held together, so you can open its overlay from any app. It also notices when Google\'s assistant window opens (by its name only) so Faze can take over. It does not read the screen.</string>
 </resources>

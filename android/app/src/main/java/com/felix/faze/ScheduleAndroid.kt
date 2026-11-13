@@ -121,6 +121,7 @@ class ScheduleRunner(private val app: Context, private val core: FazeCore, priva
     }
 
     private fun notify(title: String, text: String) {
+        core.activity.add("scheduled", "$title: ${text.take(120)}")
         val nm = app.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("scheduled", "Scheduled tasks", NotificationManager.IMPORTANCE_DEFAULT))
         val open = PendingIntent.getActivity(app, 0, Intent(app, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)

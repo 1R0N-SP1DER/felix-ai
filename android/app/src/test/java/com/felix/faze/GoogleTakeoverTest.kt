@@ -1,0 +1,50 @@
+package com.felix.faze
+
+import kotlin.random.Random
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class GoogleTakeoverTest {
+    private val words = GoogleTakeover.words("")
+
+    @Test fun theAssistantWindowIsTakenOverButSearchAndOtherAppsAreNot() {
+        val g = "com.google.android.googlequicksearchbox"
+        assertTrue(GoogleTakeover.matches(g, "com.google.android.apps.search.assistant.ui.AssistantActivity", words))
+        assertTrue(GoogleTakeover.matches("com.google.android.apps.bard", "com.google.android.apps.bard.GeminiOverlay", words))
+        assertTrue(GoogleTakeover.matches(g, "com.google.android.apps.gsa.staticplugins.opa.OpaActivity", words))
+        assertFalse(GoogleTakeover.matches(g, "com.google.android.apps.gsa.searchnow.SearchActivity", words))
+        assertFalse(GoogleTakeover.matches("com.whatsapp", "com.whatsapp.AssistantSettings", words))
+        assertFalse(GoogleTakeover.matches(null, "x", words))
+        assertFalse(GoogleTakeover.matches(g, null, words))
+    }
+
+    @Test fun extraWordsLetAPhoneWithAnotherWindowNameWork() {
+        val g = "com.google.android.googlequicksearchbox"
+        assertFalse(GoogleTakeover.matches(g, "com.google.Zorp", words))
+        assertTrue(GoogleTakeover.matches(g, "com.google.Zorp", GoogleTakeover.words("zorp, ab")))
+        assertEquals(GoogleTakeover.DEFAULT_WORDS.size + 1, GoogleTakeover.words("zorp, ab").size) // two-letter scraps are ignored
+    }
+
+    @Test fun theLineIsNeverTheSameTwiceInARow() {
+        var last = -1
+        val r = Random(7)
+        repeat(200) {
+            val next = GoogleTakeover.pick(last, r)
+            assertNotEquals(last, next)
+            assertTrue(next in GoogleTakeover.LINES.indices)
+            last = next
+        }
+        assertTrue(GoogleTakeover.LINES.any { it.contains("Did you mean me") })
+    }
+
+    @Test fun oneEventPerOpeningGetsThrough() {
+        val d = Debounce(2500)
+        assertTrue(d.allow(10_000))
+        assertFalse(d.allow(10_300))
+        assertFalse(d.allow(12_400))
+        assertTrue(d.allow(12_600))
+    }
+}

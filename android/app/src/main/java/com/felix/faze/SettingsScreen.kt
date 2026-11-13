@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -431,6 +432,10 @@ private fun AdvancedTab(core: FazeCore) {
     var hideDot by remember { mutableStateOf(s.hideMicDot) }
     var chord by remember { mutableStateOf(s.chordEnabled) }
     var chordVoice by remember { mutableStateOf(s.chordVoice) }
+    var gTake by remember { mutableStateOf(s.googleTakeover) }
+    var gQuips by remember { mutableStateOf(s.googleQuips) }
+    var gWords by remember { mutableStateOf(s.googleWords) }
+    var gLast by remember { mutableStateOf(s.lastGoogleWindow) }
     var note by remember { mutableStateOf("") }
     val main = remember { Handler(Looper.getMainLooper()) }
 
@@ -462,14 +467,55 @@ private fun AdvancedTab(core: FazeCore) {
     }
 
     SettingsCard("Diagnostics") {
-        WideButton("Open activity log", soon = true) {}
+        var logOpen by remember { mutableStateOf(false) }
+        WideButton("Open activity log") { logOpen = true }
+        if (logOpen) ActivityLogDialog(core) { logOpen = false }
     }
 
-    SettingsCard("Overlay and volume buttons") {
+    SettingsCard("Ways to wake Faze") {
+        var wakeOn by remember { mutableStateOf(s.wakeEnabled) }
+        var wakeNote by remember { mutableStateOf("") }
+        SettingRow("Hold both volume keys", "Opens the overlay over any app. With it open, hold volume up to force-close it. Needs the accessibility service below.") {
+            FazeSwitch(chord, { chord = it; s.chordEnabled = it })
+        }
+        SettingRow("Google's assistant", "Hey Google, the power-button hold and the corner swipe. Faze dismisses Google's window and opens its overlay instead. Keep Google as your default assistant so Hey Google keeps working. Those three open the same window, so they switch on and off together.") {
+            FazeSwitch(gTake, { gTake = it; s.googleTakeover = it })
+        }
+        SettingRow("Wake word", "Say the phrase from the Voice tab. " + if (core.listening) "Listening now." else "Not listening.", last = true) {
+            FazeSwitch(wakeOn, { on ->
+                wakeNote = ""
+                if (!on) {
+                    wakeOn = false
+                    s.wakeEnabled = false
+                    context.stopService(Intent(context, ListenService::class.java))
+                } else if (!core.modelReady) {
+                    wakeNote = "Download the wake word model in the Voice tab first."
+                } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    wakeNote = "Allow the microphone from the Voice tab first."
+                } else {
+                    wakeOn = true
+                    s.wakeEnabled = true
+                    ContextCompat.startForegroundService(context, Intent(context, ListenService::class.java))
+                }
+            })
+        }
+        if (wakeNote.isNotEmpty()) Hint(wakeNote)
+    }
+
+    SettingsCard("Overlay") {
         val overlayOk = android.provider.Settings.canDrawOverlays(context)
         val a11yOk = (android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: "").contains("com.felix.faze/")
-        SettingRow("Hold both volume keys to open", "Opens the overlay over any app. With it open, hold volume up to force-close it.") {
-            FazeSwitch(chord, { chord = it; s.chordEnabled = it })
+        SettingRow("Listening bar waits", "After the overlay opens, the sound bar waits this long for you to speak, then goes back to Message FAZE.") {
+            SelectBox("${s.overlayIdleSeconds}", listOf("3" to "3 seconds", "6" to "6 seconds", "10" to "10 seconds", "15" to "15 seconds", "30" to "30 seconds")) { s.overlayIdleSeconds = it.toInt() }
+        }
+        SettingRow("Say a line when it does", "Faze jokes about Google not being around, out loud, and listens after it.") {
+            FazeSwitch(gQuips, { gQuips = it; s.googleQuips = it })
+        }
+        SettingRow("Extra window names", "Only if it does not trigger: words from the Google window name below, separated by commas.") {
+            FieldBox(gWords, false, Modifier.widthIn(max = 190.dp)) { gWords = it; s.googleWords = it }
+        }
+        SettingRow("Last Google window seen", if (gLast.isEmpty()) "None yet. Say Hey Google, then come back here and tap Refresh." else gLast) {
+            Text("Refresh", color = Palette.Dim, fontSize = 13.sp, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { gLast = s.lastGoogleWindow }.padding(horizontal = 10.dp, vertical = 6.dp))
         }
         SettingRow("Start voice chat with it", "The overlay starts listening as soon as it opens. Swipe up on its top edge to open the full app.") {
             FazeSwitch(chordVoice, { chordVoice = it; s.chordVoice = it })
@@ -534,5 +580,31 @@ private fun ScheduledTasksCard(core: FazeCore) {
             }
         }
         Hint("Runs when the phone wakes at the time. For exact times, allow \"Alarms & reminders\" for Faze in the phone's app settings; otherwise a task can be a few minutes late. A task that needs your approval waits for you in the app.")
+    }
+}
+
+/** What Faze did lately: tools it ran, how it was woken, scheduled tasks. Newest first. Kept on this phone only. */
+@Composable
+private fun ActivityLogDialog(core: FazeCore, onClose: () -> Unit) {
+    var items by remember { mutableStateOf(core.activity.entries()) }
+    val fmt = remember { java.text.SimpleDateFormat("d MMM HH:mm:ss", java.util.Locale.getDefault()) }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onClose) {
+        Column(modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(Palette.Bg).border(1.dp, Palette.Line, RoundedCornerShape(20.dp)).padding(16.dp)) {
+            Text("Activity log", color = Palette.Text, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+            Hint("Newest first. Stays on this phone. Text typed into other apps is never recorded.")
+            Column(modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()).padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (items.isEmpty()) Text("Nothing yet.", color = Palette.Muted, fontSize = 14.sp)
+                for (e in items) {
+                    Column {
+                        Text(fmt.format(java.util.Date(e.time)) + "  " + ActivityLog.label(e.kind), color = Palette.Muted, fontSize = 11.5.sp)
+                        Text(e.text, color = Palette.Text, fontSize = 13.5.sp)
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.align(Alignment.End)) {
+                Text("Clear", color = Palette.Dim, fontSize = 14.sp, modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { core.activity.clear(); items = emptyList() }.padding(horizontal = 12.dp, vertical = 6.dp))
+                Text("Close", color = Palette.Dim, fontSize = 14.sp, modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { onClose() }.padding(horizontal = 12.dp, vertical = 6.dp))
+            }
+        }
     }
 }

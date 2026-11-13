@@ -151,11 +151,30 @@ class GlyphView(context: Context, private val kind: Kind) : View(context) {
     }
 }
 
+/**
+ * When the pill shows the listening bar instead of the text box. On opening it shows "Message FAZE" for about a second, then the bar, whether
+ * or not anything has been heard. With no speech for the idle time it goes back to "Message FAZE". Speech at any time brings the bar back, and
+ * it stays a moment after the last word so it does not flicker.
+ */
+class PillMode(private val introMs: Long = 1000, private val holdMs: Long = 1100) {
+    private var introEnd = 0L
+    private var barUntil = 0L
+
+    /** The overlay just opened. */
+    fun open(now: Long, idleMs: Long) { introEnd = now + introMs; barUntil = introEnd + idleMs }
+
+    /** The mic was switched on again: the bar comes straight back for another idle period. */
+    fun restart(now: Long, idleMs: Long) { introEnd = now; barUntil = now + idleMs }
+
+    fun listening(micOn: Boolean, heard: Boolean, now: Long): Boolean {
+        if (!micOn) return false
+        if (heard) { barUntil = maxOf(barUntil, now + holdMs); return true }
+        return now >= introEnd && now < barUntil
+    }
+}
+
 /** What the pill shows: kept as plain functions so the rule is tested without a phone. */
 object PillState {
-    /** The bar turns into the listening bar while a phrase is being said, and stays that way a moment after, so it does not flicker. */
-    fun listening(micOn: Boolean, hearing: Boolean, nowMs: Long, holdUntilMs: Long): Boolean = micOn && (hearing || nowMs < holdUntilMs)
-
     /** The mic level above which something is being said. The voice loop confirms speech a little later; the bar should not wait for it. */
     const val LOUD = 0.35f // the level is a square root of the loudness: a quiet room sits near 0.15-0.25, speech at normal volume near 0.5 and up
 
@@ -198,7 +217,7 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
     private var startedHere = false
     private var sawActive = false
     private var userOff = false
-    private var holdUntil = 0L
+    private val mode = PillMode()
     private var trailKind = ""
 
     private val poll = object : Runnable {
@@ -241,12 +260,14 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
     private fun micAllowed() = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
     /** False if Android refused (usually: "display over other apps" is not allowed yet). */
-    fun show(): Boolean {
+    fun show(takeoverLine: String? = null, spoken: Boolean = false): Boolean {
         if (root != null) return true
         if (!canShow()) {
             core.reportStatus("allow \"display over other apps\" for Faze first")
             return false
         }
+        // Every opening starts a fresh chat, so no old window is ever there: the first reply appears once something is sent.
+        if (!core.busy && !core.liveOn && !core.voiceOn) core.newChat()
         val panel = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
         // The grab handle: a swipe up on it opens the full app.
         val grabZone = FrameLayout(context)
@@ -284,12 +305,14 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         panel.addView(box, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
         // The pill: + | text box (or listening bars) | blue mic | wave / send / stop
+        val pillBg = round(Ink.surface2, 30, true)
         val pill = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = round(Ink.surface2, 30, true)
+            background = pillBg
             setPadding(dp(8), dp(6), dp(8), dp(6))
         }
+        mode.open(SystemClock.uptimeMillis(), core.settings.overlayIdleSeconds * 1000L)
         val pg = GlyphView(context, GlyphView.Kind.PLUS)
         val pb = roundButton(pg, null) { core.reportStatus("Attachments (photos, camera, files) arrive in the next patch") }
         pill.addView(pb, LinearLayout.LayoutParams(dp(44), dp(44)))
@@ -323,6 +346,9 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         pill.addView(tb, LinearLayout.LayoutParams(dp(44), dp(44)).apply { leftMargin = dp(2) })
         panel.addView(pill, LinearLayout.LayoutParams(-1, -2))
 
+        pillDrawable = pillBg
+        panelView = panel
+
         // The whole screen is the window: a dark scrim (and, where the phone supports it, blur) behind the panel. Tapping the scrim closes it.
         val frame = FrameLayout(context).apply {
             setBackgroundColor(0x99000000.toInt())
@@ -353,19 +379,77 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         core.dictateSink = { text -> appendToBox(text) }
         startedHere = false
         userOff = false
-        holdUntil = 0L
         trailKind = ""
         sawActive = core.voiceOn || core.liveOn
         approvalBox = box; approvalText = at; edit = et; plus = pg; micBtn = mb; micGlyph = mg; trail = tb; trailGlyph = tg
         shown = ""
         handler.post(poll)
-        // The mic is on by default and stays on until it is switched off here.
+        if (takeoverLine != null) morphFromGoogle(takeoverLine, spoken)
+        // The mic is on by default and stays on until it is switched off here. After a takeover line it waits for the line to finish, so it does not hear it.
         if (!sawActive && core.settings.chordVoice && micAllowed()) {
-            core.startVoiceChat()
-            if (core.voiceOn) { startedHere = true; sawActive = true }
+            if (takeoverLine != null && spoken) startMicWhenQuiet(SystemClock.uptimeMillis() + 5000) else startMic()
         }
         return true
     }
+
+    private fun startMic() {
+        if (root == null || core.voiceOn || core.liveOn) return
+        core.startVoiceChat()
+        if (core.voiceOn) { startedHere = true; sawActive = true }
+    }
+
+    private fun startMicWhenQuiet(deadline: Long) {
+        if (root == null) return
+        if (!core.speaking && SystemClock.uptimeMillis() > spokenFrom || SystemClock.uptimeMillis() > deadline) startMic()
+        else handler.postDelayed({ startMicWhenQuiet(deadline) }, 150)
+    }
+
+    private var pillDrawable: GradientDrawable? = null
+    private var panelView: View? = null
+    private var spokenFrom = 0L
+
+    /**
+     * The opening when Google's assistant was the one that popped up: the bar starts looking like Google's (a light bar, "Ask Google") and
+     * morphs into Faze's while it slides up, and Faze says a line about it.
+     */
+    private fun morphFromGoogle(line: String, spoken: Boolean) {
+        val r = root ?: return
+        val pillBg = pillDrawable ?: return
+        val panel = panelView ?: return
+        val googleBar = 0xFFF1F3F4.toInt()
+        val googleHint = 0xFF5F6368.toInt()
+        val googleInk = 0xFF3C4043.toInt()
+        val eval = android.animation.ArgbEvaluator()
+        edit?.hint = "Ask Google"
+        edit?.setHintTextColor(googleHint)
+        pillBg.setColor(googleBar)
+        plus?.ink = googleInk
+        quip = line
+        quipUntil = SystemClock.uptimeMillis() + 7000
+        if (spoken) { spokenFrom = SystemClock.uptimeMillis() + 600; handler.postDelayed({ core.speakText(line) }, 450) }
+        panel.translationY = dp(70).toFloat()
+        panel.alpha = 0f
+        r.alpha = 0f
+        android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 620
+            interpolator = android.view.animation.DecelerateInterpolator()
+            addUpdateListener { a ->
+                val t = a.animatedFraction
+                r.alpha = minOf(1f, t * 2.2f)
+                panel.alpha = minOf(1f, t * 2.5f)
+                panel.translationY = dp(70) * (1f - t)
+                val m = ((t - 0.35f) / 0.5f).coerceIn(0f, 1f) // the colour change starts a beat after the slide
+                pillBg.setColor(eval.evaluate(m, googleBar, Ink.surface2) as Int)
+                edit?.setHintTextColor(eval.evaluate(m, googleHint, Ink.muted) as Int)
+                plus?.ink = eval.evaluate(m, googleInk, Ink.text) as Int
+                if (m >= 0.5f && edit?.hint?.toString() != "Message FAZE") edit?.hint = "Message FAZE"
+            }
+            start()
+        }
+    }
+
+    private var quip = ""
+    private var quipUntil = 0L
 
     /** A swipe up on [v] opens the full app; the conversation carries on there. */
     private fun swipeUp(v: View) {
@@ -462,6 +546,7 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
                 if (!micAllowed()) { core.reportStatus("open the Faze app once and allow the microphone"); return }
                 userOff = false
                 core.settings.chordVoice = true
+                mode.restart(SystemClock.uptimeMillis(), core.settings.overlayIdleSeconds * 1000L)
                 startedHere = true
                 sawActive = false
                 core.startVoiceChat()
@@ -472,10 +557,11 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
     // ---- keeping the pill in step with the core
 
     private fun refresh() {
-        val line = core.status.ifEmpty { if (core.voiceState.contains("Android's own") || core.voiceState.startsWith("Voice chat could not")) core.voiceState else "" }
+        val quipNow = if (SystemClock.uptimeMillis() < quipUntil && !core.busy && !core.recording) quip else ""
+        val line = core.status.ifEmpty { quipNow.ifEmpty { if (core.voiceState.contains("Android's own") || core.voiceState.startsWith("Voice chat could not")) core.voiceState else "" } }
         status?.text = line
         status?.visibility = if (line.isEmpty()) View.GONE else View.VISIBLE
-        status?.setTextColor(if (core.status.isNotEmpty() && !core.recording && !core.transcribing) Ink.bad else Ink.dim)
+        status?.setTextColor(if (core.status.isNotEmpty() && !core.recording && !core.transcribing) Ink.bad else if (quipNow.isNotEmpty() && core.status.isEmpty()) Ink.text else Ink.dim)
         val lastUser = core.messages.lastOrNull { it.role == "user" }?.text.orEmpty()
         val lastReply = core.messages.lastOrNull { it.role == "assistant" }?.text.orEmpty()
         val has = lastUser.isNotEmpty() || lastReply.isNotEmpty()
@@ -500,8 +586,7 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         val now = SystemClock.uptimeMillis()
         val micOn = core.voiceOn
         val heard = PillState.heard(core.hearingSpeech(), core.micLevel, core.speaking)
-        if (micOn && heard) holdUntil = now + 1100
-        val listening = PillState.listening(micOn, heard, now, holdUntil)
+        val listening = mode.listening(micOn, heard, now)
         edit?.visibility = if (listening) View.GONE else View.VISIBLE
         bars?.visibility = if (listening) View.VISIBLE else View.GONE
         trail?.visibility = if (listening) View.GONE else View.VISIBLE
@@ -526,6 +611,9 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         val r = root ?: return
         handler.removeCallbacks(poll)
         core.overlayUp = false
+        quip = ""
+        pillDrawable = null
+        panelView = null
         core.dictateSink = null
         core.cancelRecording()
         if (startedHere) { startedHere = false; core.closeLiveScreen() }
