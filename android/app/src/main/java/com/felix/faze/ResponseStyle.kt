@@ -1,24 +1,46 @@
 package com.felix.faze
 
-/** How much effort the AI puts into an answer. High asks it to double-check; Max also reads its own answer through once more before sending. */
+/**
+ * How much effort the AI puts into an answer, on five levels. Low is quick. Medium and up double-check, and when the AI searches the web it
+ * also looks for pictures and reads more pages. Extra goes beyond the minimum when it makes something. Max also reads its own answer back.
+ */
 object Effort {
-    val levels = listOf("standard" to "Standard", "high" to "High", "max" to "Max")
+    val levels = listOf("low" to "Low", "medium" to "Medium", "high" to "High", "extra" to "Extra", "max" to "Max")
 
-    fun norm(level: String): String = if (levels.any { it.first == level }) level else "standard"
+    /** The level of the turn being answered now, so the tools can match it. Set by the chat engine before each turn. */
+    @Volatile var active: String = "low"
+
+    fun norm(level: String): String = if (levels.any { it.first == level }) level else "low"
+
+    fun index(level: String): Int = levels.indexOfFirst { it.first == norm(level) }
+
+    fun at(index: Int): String = levels[index.coerceIn(0, levels.size - 1)].first
+
+    fun label(level: String): String = levels[index(level)].second
 
     fun directive(level: String): String = when (norm(level)) {
-        "high", "max" -> "\nEffort: be thorough. Work through the problem before answering. Cross-check facts, numbers and names, and verify what tools returned. " +
+        "medium" -> "\nEffort: take care. Think before you answer and double-check facts, names and numbers.\n"
+        "high" -> "\nEffort: be thorough. Work through the problem before answering. Cross-check facts, numbers and names, and verify what tools returned. If you are not sure of something, say so instead of guessing.\n"
+        "extra", "max" -> "\nEffort: be very thorough. Work through the problem before answering. Cross-check facts, numbers and names, and verify what tools returned. " +
             "If you are not sure of something, say so instead of guessing. When asked to make something (a piece of writing, a plan, code, a design), do more than the bare minimum: " +
             "make it complete and polished, anticipate what is needed next, and include the extras that would clearly help.\n"
         else -> ""
     }
 
+    /** From Medium up, a web search also brings back pictures and more pages. */
+    fun enriches(level: String): Boolean = index(level) >= 1
+
+    /** How many pages a web search reads. */
+    fun searchResults(level: String): Int = when (norm(level)) { "high" -> 6; "extra", "max" -> 8; else -> 5 }
+
     /** True when the answer gets a second, reviewing pass. */
     fun reviews(level: String): Boolean = norm(level) == "max"
 
     fun hint(level: String): String = when (norm(level)) {
-        "high" -> "The AI works it through, checks facts and tool results, and goes beyond the minimum when it makes something. A little slower."
-        "max" -> "Everything in High, then the AI reads its own answer back for mistakes before it replies. Slowest, and uses the most of your free limits."
+        "medium" -> "Double-checks facts. A web search also brings back pictures and pages to back the answer up."
+        "high" -> "Thorough: cross-checks facts and tool results and says when it is unsure. Searches read more pages and bring pictures."
+        "extra" -> "Everything in High, and when it makes something it goes beyond the minimum. Slower."
+        "max" -> "Everything in Extra, then the AI reads its own answer back for mistakes before it replies. Slowest, and uses the most of your free limits."
         else -> "Quick and to the point."
     }
 

@@ -333,8 +333,19 @@ fun ModelSheetView(core: FazeCore, visible: Boolean, onDismiss: () -> Unit) {
                 SelectBox(think, ModelSheet.thinkLevels, enabled = ModelSheet.thinkEnabled(core.provider), modifier = Modifier.fillMaxWidth()) { think = it; core.settings.thinkLevel = it }
                 Hint(ModelSheet.thinkHint(core.provider))
                 SheetHeading("Effort level")
-                SelectBox(effort, Effort.levels, modifier = Modifier.fillMaxWidth()) { effort = it; core.settings.effortLevel = it }
-                Hint(Effort.hint(effort))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Low", color = Palette.Muted, fontSize = 12.sp)
+                    Slider(
+                        value = Effort.index(effort).toFloat(),
+                        onValueChange = { effort = Effort.at(it.toInt()); core.settings.effortLevel = effort },
+                        valueRange = 0f..(Effort.levels.size - 1).toFloat(),
+                        steps = Effort.levels.size - 2,
+                        colors = SliderDefaults.colors(thumbColor = Palette.Accent, activeTrackColor = Palette.Accent, inactiveTrackColor = Palette.Line2),
+                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                    )
+                    Text("Max", color = Palette.Muted, fontSize = 12.sp)
+                }
+                Hint(Effort.label(effort) + ". " + Effort.hint(effort))
                 SheetHeading("Response length")
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Short", color = Palette.Muted, fontSize = 12.sp)

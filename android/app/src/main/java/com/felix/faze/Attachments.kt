@@ -8,8 +8,11 @@ import org.json.JSONObject
  * Something attached to a chat message: a picture (a photo the person sent, or one the AI made) or a file the person sent.
  * [context] is what the AI is given in its place: the text of a file, or a description of a picture. It is not shown in the chat.
  */
-data class Attachment(val name: String, val path: String, val kind: String, val context: String = "") {
+data class Attachment(val name: String, val path: String, val kind: String, val context: String = "", val url: String = "") {
     val isImage: Boolean get() = kind == IMAGE
+
+    /** A picture from the web that is shown from its address and is not kept on the phone unless it is downloaded. */
+    val isRemote: Boolean get() = url.isNotEmpty()
 
     companion object {
         const val IMAGE = "image"
@@ -17,14 +20,14 @@ data class Attachment(val name: String, val path: String, val kind: String, val 
 
         fun toJson(list: List<Attachment>): JSONArray {
             val a = JSONArray()
-            for (x in list) a.put(JSONObject().put("name", x.name).put("path", x.path).put("kind", x.kind).put("context", x.context))
+            for (x in list) a.put(JSONObject().put("name", x.name).put("path", x.path).put("kind", x.kind).put("context", x.context).put("url", x.url))
             return a
         }
 
         fun fromJson(a: JSONArray?): List<Attachment> =
             if (a == null) emptyList() else (0 until a.length()).map {
                 val o = a.getJSONObject(it)
-                Attachment(o.optString("name"), o.optString("path"), o.optString("kind", FILE), o.optString("context"))
+                Attachment(o.optString("name"), o.optString("path"), o.optString("kind", FILE), o.optString("context"), o.optString("url"))
             }
 
         /** What the AI reads for a message: the words, then each attachment's context under its name. */

@@ -182,7 +182,7 @@ class FazeCore(private val app: Application) : EngineListener {
         )
         rawTools = Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app), scheduler, AndroidSwitches(), liveControl,
             RunwareImages(transport, { settings.runwareKey }, { settings.runwareModel }, java.io.File(app.filesDir, "images"), imageShelf),
-            WebImages(transport, { settings.tavily }, java.io.File(app.filesDir, "images"), imageShelf, { b -> AndroidAttachments.shrink(b) }))
+            WebImages(transport, { settings.tavily }, imageShelf))
         gate = GatedTools(rawTools, broker, extraTier = { name -> if (userTools.has(name)) Tier.SAFE else null }, approvalMode = { settings.approvalMode }, phoneControl = { settings.phoneControl })
         val tools: ToolRunner = gate
         gatedTools = tools

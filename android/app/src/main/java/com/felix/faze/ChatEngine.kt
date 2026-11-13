@@ -3,7 +3,7 @@ package com.felix.faze
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 
-data class ChatMessage(val id: Long, val role: String, val text: String, val steps: List<String> = emptyList(), val attachments: List<Attachment> = emptyList())
+data class ChatMessage(val id: Long, val role: String, val text: String, val steps: List<String> = emptyList(), val attachments: List<Attachment> = emptyList(), val sources: List<Source> = emptyList())
 
 interface SpeechOut {
     fun speak(sentence: String)
@@ -19,7 +19,7 @@ interface EngineConfig {
     fun memoryBlock(): String = ""
 
     /** Effort level (standard, high, max) and the response length stop (0 to 4, 2 = the AI chooses). */
-    fun effort(): String = "standard"
+    fun effort(): String = "low"
     fun lengthSetting(): Int = ResponseLength.DEFAULT
 }
 
@@ -104,9 +104,11 @@ class ChatEngine(
         val shown = StringBuilder()
         val steps = ArrayList<String>()
         val effort = config.effort()
+        Effort.active = Effort.norm(effort)
         val system = Persona.system(config.userName()) + config.memoryBlock() + Persona.toolNote(agent.toolNames()) + Effort.directive(effort) + ResponseLength.directive(config.lengthSetting())
         ReplyLimit.tokens = ResponseLength.tokens(config.lengthSetting())
         val reviewing = Effort.reviews(effort)
+        val seen = ArrayList<Source>()
         val events = AgentEvents(
             onToken = { piece ->
                 shown.append(piece)
@@ -127,6 +129,13 @@ class ChatEngine(
                 ui { update(replyId) { it.copy(steps = copy, attachments = it.attachments + made) } }
             },
         )
+        events.onSource = { src ->
+            if (src !in seen) {
+                seen.add(src)
+                val copy = ArrayList(seen)
+                ui { update(replyId) { it.copy(sources = copy) } }
+            }
+        }
         try {
             var reply = agent.run(config.model(), system, history, events) { cancel.get() }
             if (reviewing && reply.length >= REVIEW_MIN && !cancel.get()) {

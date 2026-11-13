@@ -1,6 +1,5 @@
 package com.felix.faze
 
-import java.io.File
 import org.json.JSONObject
 
 /** Finds pictures on the web (Tavily's image results) and puts them in the chat. */
@@ -28,11 +27,7 @@ object ImageUrl {
 class WebImages(
     private val transport: Transport,
     private val key: () -> String,
-    private val dir: File,
     private val shelf: ImageShelf,
-    /** Checks the bytes really are a picture and returns them in a safe, smaller form (null when they are not). */
-    private val normalize: (ByteArray) -> ByteArray?,
-    private val now: () -> Long = { System.currentTimeMillis() },
 ) : ImageFinder {
     override fun find(query: String, count: Int): String {
         val q = query.trim()
@@ -48,19 +43,16 @@ class WebImages(
         val data = try { JSONObject(r.body) } catch (e: Exception) { throw ToolFailure("Tavily sent something unreadable") }
         val found = data.optJSONArray("images") ?: throw ToolFailure("no pictures found for '$q'")
         val wanted = count.coerceIn(1, MAX)
-        dir.mkdirs()
         val shown = ArrayList<String>()
+        val seen = HashSet<String>()
         for (i in 0 until found.length()) {
             if (shown.size >= wanted) break
             val item = found.opt(i)
             val url = if (item is JSONObject) item.optString("url") else item?.toString().orEmpty()
             val note = if (item is JSONObject) item.optString("description").replace(Regex("\\s+"), " ").trim().take(120) else ""
-            if (!ImageUrl.allowed(url)) continue
-            val bytes = try { transport.getBytes(url, mapOf("Accept" to "image/*"), 15000, MAX_BYTES) } catch (e: Exception) { null } ?: continue
-            val safe = normalize(bytes) ?: continue
-            val file = File(dir, "web_${now()}_${shown.size}.jpg")
-            file.writeBytes(safe)
-            shelf.add(Attachment(note.ifEmpty { "Picture of $q" }, file.absolutePath, Attachment.IMAGE))
+            // Nothing is downloaded here: the chat shows the picture from its address, and only keeps it if the person taps Download.
+            if (!ImageUrl.allowed(url) || !seen.add(url)) continue
+            shelf.add(Attachment(note.ifEmpty { "Picture of $q" }, "", Attachment.IMAGE, "", url))
             shown.add(note.ifEmpty { "a picture" })
         }
         if (shown.isEmpty()) throw ToolFailure("found no pictures that could be shown for '$q'")
