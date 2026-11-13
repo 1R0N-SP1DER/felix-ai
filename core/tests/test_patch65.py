@@ -26,7 +26,7 @@ class Takeover(unittest.TestCase):
 
     def test_activity_log_and_wake_methods(self):
         self.assertIn("ActivityLogDialog", read(KT, "SettingsScreen.kt"))
-        self.assertNotIn("soon = true) {}", read(KT, "SettingsScreen.kt").split("Open activity log")[0][-5:] + "")
+        self.assertNotIn('WideButton("Open activity log", soon = true)', read(KT, "SettingsScreen.kt"))
         self.assertIn('SettingsCard("Ways to wake Faze")', read(KT, "SettingsScreen.kt"))
         self.assertIn("gate.logger", read(KT, "FazeCore.kt"))
         self.assertIn("class ActivityLog", read(KT, "ActivityLog.kt"))
