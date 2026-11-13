@@ -156,6 +156,12 @@ object PillState {
     /** The bar turns into the listening bar while a phrase is being said, and stays that way a moment after, so it does not flicker. */
     fun listening(micOn: Boolean, hearing: Boolean, nowMs: Long, holdUntilMs: Long): Boolean = micOn && (hearing || nowMs < holdUntilMs)
 
+    /** The mic level above which something is being said. The voice loop confirms speech a little later; the bar should not wait for it. */
+    const val LOUD = 0.35f // the level is a square root of the loudness: a quiet room sits near 0.15-0.25, speech at normal volume near 0.5 and up
+
+    /** Speech is happening: the loop says so, or the mic is clearly picking up sound (and it is not Faze's own voice coming out of the speaker). */
+    fun heard(loopHearing: Boolean, level: Float, fazeSpeaking: Boolean): Boolean = loopHearing || (!fazeSpeaking && level > LOUD)
+
     /** The end button: the stop square while the AI works, the arrow once there is text, the wave (live mode) when the box is empty. */
     fun trailing(busy: Boolean, hasText: Boolean): String = if (busy) "stop" else if (hasText) "send" else "live"
 
@@ -198,7 +204,7 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
     private val poll = object : Runnable {
         override fun run() {
             refresh()
-            if (root != null) handler.postDelayed(this, 120)
+            if (root != null) handler.postDelayed(this, 50)
         }
     }
 
@@ -445,7 +451,7 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
 
     private fun doMic() {
         val inCall = core.voiceOn
-        when (PillState.micAction(inCall, core.hearingSpeech())) {
+        when (PillState.micAction(inCall, PillState.heard(core.hearingSpeech(), core.micLevel, core.speaking))) {
             "dictate" -> { core.dictateThis(); core.reportStatus("Whatever you are saying now goes into the box") }
             "off" -> {
                 userOff = true
@@ -493,8 +499,9 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
 
         val now = SystemClock.uptimeMillis()
         val micOn = core.voiceOn
-        if (micOn && core.hearingSpeech()) holdUntil = now + 1400
-        val listening = PillState.listening(micOn, core.hearingSpeech(), now, holdUntil)
+        val heard = PillState.heard(core.hearingSpeech(), core.micLevel, core.speaking)
+        if (micOn && heard) holdUntil = now + 1100
+        val listening = PillState.listening(micOn, heard, now, holdUntil)
         edit?.visibility = if (listening) View.GONE else View.VISIBLE
         bars?.visibility = if (listening) View.VISIBLE else View.GONE
         trail?.visibility = if (listening) View.GONE else View.VISIBLE

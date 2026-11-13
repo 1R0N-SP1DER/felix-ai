@@ -35,6 +35,6 @@ class CustomChat(
         val label = name().ifBlank { "Custom" }
         val base = CustomEndpoint.base(url()) ?: throw RemoteError("auth", "$label: ${CustomEndpoint.problem(url())}")
         if (model.isBlank()) throw RemoteError("model", "$label has no model set: type the model name in Settings > Advanced > Custom provider")
-        return RemoteClient(transport, base, key, label, 1000, null, keyRequired = false).chat(model, messages, tools, onToken, cancelled)
+        return RemoteClient(transport, base, key, label, RemoteClient.DEFAULT_MAX, null, keyRequired = false).chat(model, messages, tools, onToken, cancelled)
     }
 }

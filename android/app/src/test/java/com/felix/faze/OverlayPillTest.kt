@@ -38,4 +38,11 @@ class OverlayPillTest {
         assertEquals("allow the microphone for Faze first", ListenRetry.message(ListenRetry.ERROR_PERMISSIONS))
         assertTrue(ListenRetry.delayMs(ListenRetry.ERROR_NO_MATCH) < ListenRetry.delayMs(ListenRetry.ERROR_BUSY))
     }
+
+    @Test fun soundShowsTheListeningBarWithoutWaitingForTheLoop() {
+        assertTrue(PillState.heard(false, 0.6f, false))
+        assertFalse(PillState.heard(false, 0.2f, false)) // a quiet room
+        assertFalse(PillState.heard(false, 0.9f, true)) // Faze's own voice from the speaker
+        assertTrue(PillState.heard(true, 0f, true)) // the loop confirmed speech
+    }
 }

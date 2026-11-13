@@ -45,6 +45,24 @@ class Agent(private val chat: ChatApi, private val tools: ToolRunner, private va
         return sorted.entries.joinToString("&") { "${it.key}=${it.value}" }
     }
 
+    /** A second pass for Max effort: the model reads its own draft back, looks for mistakes and writes the final answer. Falls back to the draft. */
+    fun review(model: String, system: String, history: List<Pair<String, String>>, draft: String, events: AgentEvents, cancelled: () -> Boolean): String {
+        val messages = JSONArray().put(JSONObject().put("role", "system").put("content", system))
+        for ((role, text) in history) messages.put(JSONObject().put("role", role).put("content", text))
+        messages.put(JSONObject().put("role", "assistant").put("content", draft))
+        messages.put(JSONObject().put("role", "user").put("content", Effort.REVIEW_PROMPT))
+        return try {
+            var started = false
+            val result = chat.chat(model, messages, null, { piece ->
+                if (!started) { started = true; events.onReset() }
+                events.onToken(piece)
+            }, cancelled)
+            result.content.trim().ifEmpty { draft }
+        } catch (e: RemoteError) {
+            draft // the review failing never costs the person their answer
+        }
+    }
+
     fun run(model: String, system: String, history: List<Pair<String, String>>, events: AgentEvents, cancelled: () -> Boolean): String {
         val messages = JSONArray().put(JSONObject().put("role", "system").put("content", system))
         for ((role, text) in history) messages.put(JSONObject().put("role", role).put("content", text))

@@ -17,6 +17,10 @@ interface EngineConfig {
 
     /** Saved notes about the person, added to the system prompt (empty when memory is off or empty). */
     fun memoryBlock(): String = ""
+
+    /** Effort level (standard, high, max) and the response length stop (0 to 4, 2 = the AI chooses). */
+    fun effort(): String = "standard"
+    fun lengthSetting(): Int = ResponseLength.DEFAULT
 }
 
 interface EngineListener {
@@ -99,13 +103,16 @@ class ChatEngine(
         val sentences = SentenceStream()
         val shown = StringBuilder()
         val steps = ArrayList<String>()
-        val system = Persona.system(config.userName()) + config.memoryBlock() + Persona.toolNote(agent.toolNames())
+        val effort = config.effort()
+        val system = Persona.system(config.userName()) + config.memoryBlock() + Persona.toolNote(agent.toolNames()) + Effort.directive(effort) + ResponseLength.directive(config.lengthSetting())
+        ReplyLimit.tokens = ResponseLength.tokens(config.lengthSetting())
+        val reviewing = Effort.reviews(effort)
         val events = AgentEvents(
             onToken = { piece ->
                 shown.append(piece)
                 val now = shown.toString()
                 ui { update(replyId) { it.copy(text = now) } }
-                if (speaking) for (s in sentences.feed(piece)) speech.speak(s)
+                if (speaking && !reviewing) for (s in sentences.feed(piece)) speech.speak(s)
             },
             onReset = { // a tool call followed text: what was shown is dropped, and so is what was not yet spoken
                 shown.setLength(0)
@@ -121,8 +128,17 @@ class ChatEngine(
             },
         )
         try {
-            val reply = agent.run(config.model(), system, history, events) { cancel.get() }
-            if (speaking) {
+            var reply = agent.run(config.model(), system, history, events) { cancel.get() }
+            if (reviewing && reply.length >= REVIEW_MIN && !cancel.get()) {
+                ui { listener.onStatus("Checking the answer…") }
+                reply = agent.review(config.model(), system, history, reply, events) { cancel.get() }
+                ui { listener.onStatus("") }
+            }
+            if (speaking && reviewing) {
+                sentences.reset()
+                sentences.feed(reply)
+                for (s in sentences.finish()) speech.speak(s)
+            } else if (speaking) {
                 val written = shown.toString()
                 if (written.isEmpty()) { // an answer that never streamed
                     sentences.reset()
@@ -156,5 +172,6 @@ class ChatEngine(
 
     companion object {
         const val MAX_HISTORY = 20
+        const val REVIEW_MIN = 80
     }
 }

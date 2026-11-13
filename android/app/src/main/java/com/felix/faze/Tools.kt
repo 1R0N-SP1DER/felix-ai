@@ -64,6 +64,7 @@ class Tools(
     private val switches: Switches? = null,
     private val liveControl: LiveControl? = null,
     private val images: ImageMaker? = null,
+    private val finder: ImageFinder? = null,
 ) : ToolRunner {
 
     private fun tool(name: String, description: String, vararg params: Param): JSONObject {
@@ -135,6 +136,8 @@ class Tools(
         }
         if (images != null) out.put(tool("generate_image", "Call this when the user asks you to make, draw, design or generate a picture or image (an illustration, a logo idea, a poster, a photo-like scene). Describe the picture in detail in English: subject, style, colours, mood. The picture appears in the chat by itself.",
             Param("prompt", "string", "a detailed description of the picture"), Param("shape", "string", "square, portrait or landscape")))
+        if (finder != null) out.put(tool("find_images", "Call this when the user asks to see, find or show a picture or photo of something that already exists, or asks what something looks like (a place, an animal, a product, a person's work, a plant). The pictures from the web appear in the chat by themselves. To make a NEW picture, use generate_image instead.",
+            Param("query", "string", "what to find pictures of, as a short search phrase"), Param("count", "integer", "how many pictures, 1 to 4")))
         if (liveControl != null) out.put(tool("end_live", "Call this when the user asks to end, stop or leave live mode or the voice chat (for example: end live, stop the call, bye). Say a short goodbye in the same reply; the conversation closes after you finish speaking. No arguments."))
         if (hands != null) {
             out.put(tool("tap", "Call this to tap the screen at a point. Read the screen first (read_screen) to get the point of the button or field. Then read it again to check what happened.",
@@ -196,6 +199,7 @@ class Tools(
                 }
                 "list_apps" -> ok(device.listApps(args.optString("search", "")))
                 "read_screen" -> ok(device.readScreen())
+                "find_images" -> finder?.let { ok(it.find(args.optString("query", ""), if (args.has("count")) args.optInt("count", 3) else 3)) } ?: fail("finding pictures is not available")
                 "generate_image" -> images?.let { ok(it.make(args.optString("prompt", ""), args.optString("shape", "square"))) } ?: fail("image making is not available")
                 "set_mobile_data" -> switches?.let { ok(it.mobileData(flag(args))) } ?: fail("not available")
                 "set_wifi" -> switches?.let { ok(it.wifi(flag(args))) } ?: fail("not available")

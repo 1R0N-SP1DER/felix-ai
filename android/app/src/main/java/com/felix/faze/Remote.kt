@@ -76,10 +76,15 @@ class RemoteClient(
     private val base: String,
     private val key: () -> String,
     private val label: String,
-    private val maxTokens: Int = 1000,
+    private val maxTokens: Int = DEFAULT_MAX,
     private val extra: JSONObject? = null,
     private val keyRequired: Boolean = true,
 ) : ChatApi {
+    companion object {
+        /** How much a normal chat answer may write. The response length slider can lift or lower it for a turn. */
+        const val DEFAULT_MAX = 2000
+    }
+
     override fun chat(model: String, messages: JSONArray, tools: JSONArray?, onToken: (String) -> Unit, cancelled: () -> Boolean): ChatResult {
         val apiKey = key().trim()
         if (apiKey.isEmpty() && keyRequired) throw RemoteError("auth", "$label has no key (add it under Keys)")
@@ -88,7 +93,7 @@ class RemoteClient(
             .put("messages", messages)
             .put("stream", true)
             .put("temperature", 0.3)
-            .put("max_tokens", maxTokens)
+            .put("max_tokens", if (maxTokens == DEFAULT_MAX && ReplyLimit.tokens > 0) ReplyLimit.tokens else maxTokens)
         extra?.keys()?.forEach { payload.put(it, extra.get(it)) }
         if (tools != null && tools.length() > 0) {
             payload.put("tools", tools)

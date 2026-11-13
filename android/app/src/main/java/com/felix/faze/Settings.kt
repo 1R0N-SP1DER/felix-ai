@@ -207,6 +207,17 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = text("font_choice").ifEmpty { "system" }
         set(value) = put("font_choice", value)
 
+    var effortLevel: String
+        get() = Effort.norm(text("effort_level"))
+        set(value) = put("effort_level", Effort.norm(value))
+
+    var lengthStep: Int
+        get() = text("length_step").toIntOrNull()?.let { ResponseLength.norm(it) } ?: ResponseLength.DEFAULT
+        set(value) = put("length_step", ResponseLength.norm(value).toString())
+
+    override fun effort(): String = effortLevel
+    override fun lengthSetting(): Int = lengthStep
+
     /** The thinking level picked in the model sheet: auto, off, low, medium, high or max. Kept for the models that use it. */
     var thinkLevel: String
         get() = text("think_level").ifEmpty { "auto" }

@@ -24,6 +24,7 @@ object PermissionPolicy {
         "read_screen" to Tier.CONFIRM,
         "look_at_screen" to Tier.CONFIRM,
         "generate_image" to Tier.CONFIRM,
+        "find_images" to Tier.SAFE,
         "set_mobile_data" to Tier.CONFIRM,
         "set_wifi" to Tier.CONFIRM,
         "set_bluetooth" to Tier.CONFIRM,

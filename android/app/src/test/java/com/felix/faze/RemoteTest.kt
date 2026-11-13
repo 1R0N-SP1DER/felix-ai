@@ -43,7 +43,7 @@ class RemoteTest {
         val sent = JSONObject(call.body)
         assertEquals("m1", sent.getString("model"))
         assertTrue(sent.getBoolean("stream"))
-        assertEquals(1000, sent.getInt("max_tokens"))
+        assertEquals(2000, sent.getInt("max_tokens"))
         assertFalse(sent.has("tools"))
     }
 
