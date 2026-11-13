@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -44,6 +45,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -116,6 +118,7 @@ fun Composer(
     value: String, focus: FocusRequester, onValue: (String) -> Unit, recording: Boolean, busy: Boolean,
     onSend: () -> Unit, onMic: () -> Unit, onMicMenu: () -> Unit, onLive: () -> Unit,
     onPlus: () -> Unit, onHeight: (Dp) -> Unit,
+    pending: List<Attachment> = emptyList(), onRemove: (Attachment) -> Unit = {},
 ) {
     val context = LocalContext.current
     var focused by remember { mutableStateOf(false) }
@@ -132,6 +135,12 @@ fun Composer(
             .background(Palette.Glass)
             .border(1.dp, border, shape),
     ) {
+        if (pending.isNotEmpty()) Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 14.dp, end = 14.dp, top = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            for (a in pending) AttachmentChip(a) { onRemove(a) }
+        }
         Box(modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 6.dp)) {
             if (value.isEmpty()) Text("Ask FAZE anything...", color = Palette.Muted, fontSize = 17.sp)
             BasicTextField(
@@ -156,7 +165,7 @@ fun Composer(
             Spacer(Modifier.size(6.dp))
             when {
                 busy -> ActionSquare(Ico.STOP) { onSend() }
-                value.isNotBlank() -> ActionSquare(Ico.ARROW_UP) { onSend() }
+                value.isNotBlank() || pending.isNotEmpty() -> ActionSquare(Ico.ARROW_UP) { onSend() }
                 else -> Box(modifier = Modifier.size(44.dp).clip(CircleShape).clickable { onLive() }, contentAlignment = Alignment.Center) {
                     FazeIcon(Ico.WAVE, Palette.Text, 26.dp)
                 }
@@ -223,16 +232,13 @@ private fun MenuItem(label: String, value: String? = null, soon: Boolean = false
     }
 }
 
-/** The "+" menu (#menu): voice mode, thinking, activity log, new chat, settings. */
+/** The "+" menu: what can be attached to the next message. */
 @Composable
-fun PlusMenu(core: FazeCore, visible: Boolean, bottomPad: Dp, onDismiss: () -> Unit, onThinking: () -> Unit, onNew: () -> Unit, onSettings: () -> Unit) {
-    val context = LocalContext.current
-    PopMenu(visible, Alignment.BottomEnd, bottomPad, onDismiss, 220.dp) {
-        MenuItem("Voice mode", "off", soon = true) { onDismiss(); soonToast(context) }
-        MenuItem("Thinking", core.settings.thinkLevel) { onDismiss(); onThinking() }
-        MenuItem("Activity log", soon = true) { onDismiss(); soonToast(context) }
-        MenuItem("New chat") { onDismiss(); onNew() }
-        MenuItem("Settings") { onDismiss(); onSettings() }
+fun PlusMenu(visible: Boolean, bottomPad: Dp, onDismiss: () -> Unit, onPhotos: () -> Unit, onCamera: () -> Unit, onFiles: () -> Unit) {
+    PopMenu(visible, Alignment.BottomStart, bottomPad, onDismiss, 200.dp) {
+        MenuItem("Photos") { onDismiss(); onPhotos() }
+        MenuItem("Camera") { onDismiss(); onCamera() }
+        MenuItem("Files") { onDismiss(); onFiles() }
     }
 }
 
@@ -368,5 +374,21 @@ private fun ModelPicker(core: FazeCore, provider: String, query: String, onQuery
                 }
             }
         }
+    }
+}
+
+/** A queued attachment in the message box: a thumbnail (or the file name) and a cross to take it back out. */
+@Composable
+private fun AttachmentChip(a: Attachment, onRemove: () -> Unit) {
+    val shape = RoundedCornerShape(12.dp)
+    Row(
+        modifier = Modifier.clip(shape).background(Palette.Faint).border(1.dp, Palette.Line, shape).padding(start = 6.dp, top = 6.dp, bottom = 6.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        val bmp = if (a.isImage) remember(a.path) { try { android.graphics.BitmapFactory.decodeFile(a.path, android.graphics.BitmapFactory.Options().apply { inSampleSize = 8 })?.asImageBitmap() } catch (e: Exception) { null } } else null
+        if (bmp != null) androidx.compose.foundation.Image(bmp, a.name, modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)))
+        Text(a.name.take(22), color = Palette.Dim, fontSize = 12.5.sp)
+        Text("\u2715", color = Palette.Muted, fontSize = 13.sp, modifier = Modifier.clip(CircleShape).clickable { onRemove() }.padding(horizontal = 8.dp, vertical = 6.dp))
     }
 }
