@@ -3,7 +3,7 @@ package com.felix.faze
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 
-data class ChatMessage(val id: Long, val role: String, val text: String, val steps: List<String> = emptyList())
+data class ChatMessage(val id: Long, val role: String, val text: String, val steps: List<String> = emptyList(), val attachments: List<Attachment> = emptyList())
 
 interface SpeechOut {
     fun speak(sentence: String)
@@ -49,15 +49,18 @@ class ChatEngine(
 
     fun isBusy(): Boolean = busy
 
+    /** Pictures the tools made since the last look; they join the reply they belong to. */
+    var takeImages: () -> List<Attachment> = { emptyList() }
+
     /** Main thread. Ignored while a reply is still being written. */
-    fun send(text: String) {
+    fun send(text: String, attachments: List<Attachment> = emptyList()) {
         val clean = text.trim()
-        if (clean.isEmpty() || busy) return
+        if ((clean.isEmpty() && attachments.isEmpty()) || busy) return
         busy = true
         started = clock()
         nextId = maxOf(nextId, (messages.maxOfOrNull { it.id } ?: 0L) + 1) // a chat loaded from disk keeps its own ids
         cancel.set(false)
-        messages.add(ChatMessage(nextId++, "user", clean))
+        messages.add(ChatMessage(nextId++, "user", clean, attachments = attachments))
         val history = history()
         val replyId = nextId++
         messages.add(ChatMessage(replyId, "assistant", ""))
@@ -73,7 +76,7 @@ class ChatEngine(
     }
 
     private fun history(): List<Pair<String, String>> =
-        messages.filter { it.text.isNotEmpty() }.map { Pair(it.role, it.text) }.takeLast(MAX_HISTORY)
+        messages.filter { it.text.isNotEmpty() || it.attachments.any { a -> a.context.isNotBlank() } }.map { Pair(it.role, Attachment.forModel(it.text, it.attachments)) }.takeLast(MAX_HISTORY)
 
     private fun update(id: Long, change: (ChatMessage) -> ChatMessage) {
         val i = messages.indexOfFirst { it.id == id }
@@ -82,7 +85,7 @@ class ChatEngine(
 
     private fun finish(replyId: Long) {
         val i = messages.indexOfFirst { it.id == replyId }
-        if (i >= 0 && messages[i].text.isEmpty() && messages[i].steps.isEmpty()) messages.removeAt(i)
+        if (i >= 0 && messages[i].text.isEmpty() && messages[i].steps.isEmpty() && messages[i].attachments.isEmpty()) messages.removeAt(i)
         busy = false
         listener.onBusy(false)
     }
@@ -113,7 +116,8 @@ class ChatEngine(
             onTool = { name, ok ->
                 steps.add(if (ok) name else "$name (failed)")
                 val copy = ArrayList(steps)
-                ui { update(replyId) { it.copy(steps = copy) } }
+                val made = takeImages()
+                ui { update(replyId) { it.copy(steps = copy, attachments = it.attachments + made) } }
             },
         )
         try {
