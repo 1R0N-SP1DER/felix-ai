@@ -51,6 +51,16 @@ object AndroidAttachments {
     }
 }
 
+/** Re-encodes a downloaded picture as a smaller JPEG; anything that is not really a picture comes back null. */
+fun AndroidAttachments.shrink(bytes: ByteArray, maxSide: Int = 1280): ByteArray? {
+    val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+    val scale = maxSide.toFloat() / maxOf(bmp.width, bmp.height)
+    val small = if (scale < 1f) Bitmap.createScaledBitmap(bmp, (bmp.width * scale).toInt().coerceAtLeast(1), (bmp.height * scale).toInt().coerceAtLeast(1), true) else bmp
+    val out = ByteArrayOutputStream()
+    small.compress(Bitmap.CompressFormat.JPEG, 82, out)
+    return out.toByteArray()
+}
+
 /** Renders the first pages of a PDF as pictures for the vision model. */
 object AndroidPdf {
     fun pages(file: File, max: Int): List<ByteArray> {

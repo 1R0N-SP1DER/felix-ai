@@ -14,6 +14,9 @@ interface Transport {
 
     fun post(url: String, headers: Map<String, String>, body: ByteArray, contentType: String, timeoutMs: Int = 30000): HttpResult
 
+    /** The raw bytes of a picture (or null when it is not an image, is too big, or the answer is not 200). */
+    fun getBytes(url: String, headers: Map<String, String>, timeoutMs: Int = 15000, maxBytes: Int = 6_000_000): ByteArray? = null
+
     /** POST JSON and hand each response line to [onLine] until it returns false. The body is filled only for non-200. */
     fun postStream(url: String, headers: Map<String, String>, json: String, timeoutMs: Int, onLine: (String) -> Boolean): HttpResult
 }
@@ -43,6 +46,27 @@ class UrlTransport : Transport {
         try {
             val code = c.responseCode
             return HttpResult(code, headerMap(c), readAll(if (code in 200..299) c.inputStream else c.errorStream))
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    override fun getBytes(url: String, headers: Map<String, String>, timeoutMs: Int, maxBytes: Int): ByteArray? {
+        val c = open(url, "GET", headers, timeoutMs)
+        try {
+            if (c.responseCode != 200) return null
+            if (c.contentType?.lowercase()?.startsWith("image/") != true) return null
+            val out = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(16384)
+            c.inputStream.use { input ->
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n)
+                    if (out.size() > maxBytes) return null
+                }
+            }
+            return out.toByteArray()
         } finally {
             c.disconnect()
         }

@@ -30,6 +30,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -267,6 +269,8 @@ fun ModelSheetView(core: FazeCore, visible: Boolean, onDismiss: () -> Unit) {
     var query by remember { mutableStateOf("") }
     core.modelRev // reading it redraws the sheet when a model is picked
     var think by remember { mutableStateOf(core.settings.thinkLevel) }
+    var effort by remember { mutableStateOf(core.settings.effortLevel) }
+    var length by remember { mutableStateOf(core.settings.lengthStep.toFloat()) }
     val keys = ModelSheet.live.filter { core.settings.hasKey(it) }.toSet()
     val rows = ModelSheet.rows(keys, ModelSheet.live.associateWith { core.settings.modelFor(it) })
     AnimatedVisibility(visible = visible, enter = fadeIn(), exit = fadeOut()) {
@@ -328,6 +332,23 @@ fun ModelSheetView(core: FazeCore, visible: Boolean, onDismiss: () -> Unit) {
                 SheetHeading("Thinking")
                 SelectBox(think, ModelSheet.thinkLevels, enabled = ModelSheet.thinkEnabled(core.provider), modifier = Modifier.fillMaxWidth()) { think = it; core.settings.thinkLevel = it }
                 Hint(ModelSheet.thinkHint(core.provider))
+                SheetHeading("Effort level")
+                SelectBox(effort, Effort.levels, modifier = Modifier.fillMaxWidth()) { effort = it; core.settings.effortLevel = it }
+                Hint(Effort.hint(effort))
+                SheetHeading("Response length")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Short", color = Palette.Muted, fontSize = 12.sp)
+                    Slider(
+                        value = length,
+                        onValueChange = { length = it; core.settings.lengthStep = it.toInt() },
+                        valueRange = 0f..(ResponseLength.STOPS - 1).toFloat(),
+                        steps = ResponseLength.STOPS - 2,
+                        colors = SliderDefaults.colors(thumbColor = Palette.Accent, activeTrackColor = Palette.Accent, inactiveTrackColor = Palette.Line2),
+                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                    )
+                    Text("Long", color = Palette.Muted, fontSize = 12.sp)
+                }
+                Hint(ResponseLength.label(length.toInt()) + ". " + ResponseLength.hint(length.toInt()))
             }
         }
     }
