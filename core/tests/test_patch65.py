@@ -21,7 +21,7 @@ class Takeover(unittest.TestCase):
 
     def test_overlay_morphs_and_settings_exist(self):
         self.assertIn("morphFromGoogle", read(KT, "Overlay.kt"))
-        self.assertIn("Take over from Google's assistant", read(KT, "SettingsScreen.kt"))
+        self.assertIn("googleTakeover", read(KT, "SettingsScreen.kt"))
         self.assertIn("Did you mean me", read(KT, "GoogleTakeover.kt"))
 
     def test_activity_log_and_wake_methods(self):
