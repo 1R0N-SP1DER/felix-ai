@@ -449,6 +449,7 @@ private fun AdvancedTab(core: FazeCore) {
     var gQuips by remember { mutableStateOf(s.googleQuips) }
     var gWords by remember { mutableStateOf(s.googleWords) }
     var gLast by remember { mutableStateOf(s.lastGoogleWindow) }
+    var gSkip by remember { mutableStateOf(s.googleSkip) }
     var note by remember { mutableStateOf("") }
     val main = remember { Handler(Looper.getMainLooper()) }
 
@@ -526,7 +527,10 @@ private fun AdvancedTab(core: FazeCore) {
         SettingRow("Extra window names", "Only if it does not trigger: words from the Google window name below, separated by commas.") {
             FieldBox(gWords, false, Modifier.widthIn(max = 190.dp)) { gWords = it; s.googleWords = it }
         }
-        SettingRow("Last Google window seen", if (gLast.isEmpty()) "None yet. Say Hey Google, then come back here and tap Refresh." else gLast) {
+        SettingRow("Leave these alone", "Words from a window name below that Faze must not replace. To keep the full Gemini app: open it, come back, tap Refresh, and put a word from its name here.") {
+            FieldBox(gSkip, false, Modifier.widthIn(max = 190.dp)) { gSkip = it; s.googleSkip = it }
+        }
+        SettingRow("Google windows seen", if (gLast.isEmpty()) "None yet. Say Hey Google or open the Gemini app, then come back here and tap Refresh. Newest first." else gLast) {
             Text("Refresh", color = Palette.Dim, fontSize = 13.sp, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { gLast = s.lastGoogleWindow }.padding(horizontal = 10.dp, vertical = 6.dp))
         }
         SettingRow("Start voice chat with it", "The overlay starts listening as soon as it opens. Swipe up on its top edge to open the full app.") {

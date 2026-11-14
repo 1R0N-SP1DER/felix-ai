@@ -16,11 +16,19 @@ object GoogleTakeover {
     /** Extra words the person added, comma or space separated. */
     fun words(extra: String): List<String> = DEFAULT_WORDS + extra.lowercase().split(',', ' ', '\n').map { it.trim() }.filter { it.length >= 3 }
 
-    fun matches(pkg: String?, cls: String?, words: List<String>): Boolean {
+    /** Words from the person's "leave alone" box: windows whose name has one of them are never taken over (the full Gemini app, say). */
+    fun skipWords(text: String): List<String> = text.lowercase().split(',', ' ', '\n').map { it.trim() }.filter { it.length >= 3 }
+
+    fun matches(pkg: String?, cls: String?, words: List<String>, skip: List<String> = emptyList()): Boolean {
         if (pkg == null || cls == null || pkg !in PACKAGES) return false
         val c = cls.lowercase()
+        if (skip.any { c.contains(it) }) return false
         return words.any { c.contains(it) }
     }
+
+    /** The recently seen window names, newest first, no repeats. */
+    fun remember(history: String, seen: String, max: Int = 6): String =
+        (listOf(seen) + history.split('\n').filter { it.isNotBlank() && it != seen }).take(max).joinToString("\n")
 
     val LINES = listOf(
         "Nah, Google isn't around. Did you mean me?",

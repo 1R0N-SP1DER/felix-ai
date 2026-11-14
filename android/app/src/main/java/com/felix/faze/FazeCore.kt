@@ -84,6 +84,7 @@ class FazeCore(private val app: Application) : EngineListener {
         { Online.available(app) },
         { settings.geminiKey.isNotEmpty() },
         exec = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "natural-voice").also { it.isDaemon = true } },
+        onFail = { why -> activity.add("voice", "Gemini voice failed, using the phone voice for a minute: ${why.take(160)}") },
     )
 
     /** The phone's own voices, for the picker in Settings. */
@@ -321,6 +322,7 @@ class FazeCore(private val app: Application) : EngineListener {
         gate.revokeControl()
         broker.denyAll()
         engine.stop()
+        transport.abortAll() // end a request that is waiting on the network right now
     }
 
     fun resolveApproval(id: Long, allow: Boolean) = broker.resolve(id, allow)
@@ -332,8 +334,9 @@ class FazeCore(private val app: Application) : EngineListener {
         deviceSpeaker.setVoice(settings.voiceRate, settings.voicePitch)
     }
 
-    /** The stop button in the top bar: be quiet now (the request, if one is running, carries on). */
+    /** The stop button in the top bar: be quiet now and end the request if one is running. */
     fun stopSpeaking() {
+        if (busy) stop()
         speaker.stop()
     }
 

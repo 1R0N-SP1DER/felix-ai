@@ -47,4 +47,18 @@ class GoogleTakeoverTest {
         assertFalse(d.allow(12_400))
         assertTrue(d.allow(12_600))
     }
+
+    @Test fun aLeaveAloneWordKeepsAWindowOpen() {
+        val pkg = "com.google.android.apps.bard"
+        assertTrue(GoogleTakeover.matches(pkg, "com.x.GeminiActivity", GoogleTakeover.DEFAULT_WORDS))
+        assertFalse(GoogleTakeover.matches(pkg, "com.x.GeminiActivity", GoogleTakeover.DEFAULT_WORDS, GoogleTakeover.skipWords("geminiactivity")))
+        assertEquals(listOf("abc"), GoogleTakeover.skipWords("ab, abc"))
+    }
+
+    @Test fun recentWindowsAreKeptNewestFirstWithoutRepeats() {
+        var h = ""
+        for (n in listOf("a / 1", "b / 2", "a / 1", "c / 3")) h = GoogleTakeover.remember(h, n, 3)
+        assertEquals("c / 3\na / 1\nb / 2", h)
+        assertEquals(3, GoogleTakeover.remember(h, "d / 4", 3).lines().size)
+    }
 }

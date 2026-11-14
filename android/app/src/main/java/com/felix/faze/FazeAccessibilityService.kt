@@ -121,9 +121,10 @@ class FazeAccessibilityService : AccessibilityService() {
         val cls = event.className?.toString().orEmpty()
         val seen = "$pkg / $cls"
         val s = core.settings
-        if (s.lastGoogleWindow != seen) s.lastGoogleWindow = seen
+        val history = GoogleTakeover.remember(s.lastGoogleWindow, seen)
+        if (s.lastGoogleWindow != history) s.lastGoogleWindow = history
         if (!s.googleTakeover) return
-        if (!GoogleTakeover.matches(pkg, cls, GoogleTakeover.words(s.googleWords))) return
+        if (!GoogleTakeover.matches(pkg, cls, GoogleTakeover.words(s.googleWords), GoogleTakeover.skipWords(s.googleSkip))) return
         val o = overlay ?: return
         if (o.isShowing() || !gate.allow(SystemClock.uptimeMillis())) return
         lastLine = GoogleTakeover.pick(lastLine)

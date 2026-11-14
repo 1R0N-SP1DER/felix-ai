@@ -165,12 +165,14 @@ class ChatEngine(
         } catch (e: Cancelled) {
             ui { finish(replyId) }
         } catch (e: RemoteError) {
+            if (cancel.get()) { ui { finish(replyId) }; return }
             val message = describe(e)
             ui {
                 listener.onStatus(message)
                 finish(replyId)
             }
         } catch (e: Exception) {
+            if (cancel.get()) { ui { finish(replyId) }; return }
             val message = "something went wrong: ${e.message ?: e.javaClass.simpleName}"
             ui {
                 listener.onStatus(message)

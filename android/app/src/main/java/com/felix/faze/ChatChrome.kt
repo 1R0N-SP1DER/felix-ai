@@ -81,7 +81,7 @@ fun TopBar(core: FazeCore, onMenu: () -> Unit, onModel: () -> Unit) {
             for (c in chips) StatusChipView(c)
         }
         IconBox("≡") { soonToast(context) }
-        if (core.speaking) IconBox("■") { core.stopSpeaking() }
+        if (core.speaking || core.busy) IconBox("■") { core.stopSpeaking() }
     }
 }
 

@@ -19,11 +19,22 @@ interface Transport {
 
     /** POST JSON and hand each response line to [onLine] until it returns false. The body is filled only for non-200. */
     fun postStream(url: String, headers: Map<String, String>, json: String, timeoutMs: Int, onLine: (String) -> Boolean): HttpResult
+
+    /** Cuts every request that is in flight right now, so a blocked read ends at once instead of waiting for the server. */
+    fun abortAll() {}
 }
 
 class UrlTransport : Transport {
+    private val live = java.util.Collections.synchronizedSet(HashSet<HttpURLConnection>())
+
+    override fun abortAll() {
+        val all = synchronized(live) { ArrayList(live) }
+        for (c in all) try { c.disconnect() } catch (e: Exception) { /* already closed */ }
+    }
+
     private fun open(url: String, method: String, headers: Map<String, String>, timeoutMs: Int): HttpURLConnection {
         val c = URL(url).openConnection() as HttpURLConnection
+        live.add(c)
         c.requestMethod = method
         c.connectTimeout = timeoutMs
         c.readTimeout = timeoutMs
@@ -47,6 +58,7 @@ class UrlTransport : Transport {
             val code = c.responseCode
             return HttpResult(code, headerMap(c), readAll(if (code in 200..299) c.inputStream else c.errorStream))
         } finally {
+            live.remove(c)
             c.disconnect()
         }
     }
@@ -68,6 +80,7 @@ class UrlTransport : Transport {
             }
             return out.toByteArray()
         } finally {
+            live.remove(c)
             c.disconnect()
         }
     }
@@ -81,6 +94,7 @@ class UrlTransport : Transport {
             val code = c.responseCode
             return HttpResult(code, headerMap(c), readAll(if (code in 200..299) c.inputStream else c.errorStream))
         } finally {
+            live.remove(c)
             c.disconnect()
         }
     }
@@ -102,6 +116,7 @@ class UrlTransport : Transport {
             }
             return HttpResult(code, headerMap(c), "")
         } finally {
+            live.remove(c)
             c.disconnect()
         }
     }
