@@ -315,7 +315,7 @@ private fun AgentTab(core: FazeCore) {
         var casual by remember { mutableStateOf(core.settings.autoCasualModel) }
         var deep by remember { mutableStateOf(core.settings.autoDeepModel) }
         val found = core.modelLists["offline"].orEmpty()
-        val options = listOf("" to "Find by name") + found.map { it.id to it.name }
+        val options = listOf("" to "Find by name") + found.map { it.id to it.label }
         Hint("Pick Auto in the model button. Online, chat goes to Groq or OpenRouter, and code or deep questions go to Gemini. A provider that hits its limit is skipped for a while, so tasks keep going. Offline, a small model answers chat and a bigger one answers code and deep questions.")
         SettingRow("Offline chat model", "Small and quick, like LFM. Blank looks for a file with lfm in its name, then uses your offline model.") {
             SelectBox(casual, options) { casual = it; core.settings.autoCasualModel = it }
