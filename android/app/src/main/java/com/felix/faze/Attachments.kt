@@ -53,65 +53,71 @@ interface ImageMaker {
     fun make(prompt: String, shape: String): String
 }
 
-/** Runware's image API: one POST with an array of tasks, the picture comes back as base64 in the same response. */
-class RunwareImages(
+/** Gemini's picture model ("Nano Banana"): one generateContent call, the picture comes back as base64 in the reply. Uses the Gemini key. */
+class GeminiImages(
     private val transport: Transport,
     private val key: () -> String,
     private val model: () -> String,
     private val dir: File,
     private val shelf: ImageShelf,
-    private val id: () -> String = { java.util.UUID.randomUUID().toString() },
     private val now: () -> Long = { System.currentTimeMillis() },
 ) : ImageMaker {
     override fun make(prompt: String, shape: String): String {
         val text = prompt.trim()
         if (text.isEmpty()) throw ToolFailure("describe the picture to make")
-        if (key().isEmpty()) throw ToolFailure("no Runware key: add it in Settings")
-        val (w, h) = size(shape)
-        val task = id()
-        val body = JSONArray().put(
-            JSONObject().put("taskType", "imageInference").put("taskUUID", task).put("positivePrompt", text.take(2000))
-                .put("model", model().ifBlank { DEFAULT_MODEL }).put("width", w).put("height", h)
-                .put("outputType", "base64Data").put("outputFormat", "JPG").put("numberResults", 1),
-        ).toString()
+        if (key().isEmpty()) throw ToolFailure("no Gemini key: add it in Settings")
+        val name = model().ifBlank { DEFAULT_MODEL }
+        val body = JSONObject()
+            .put("contents", JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", text.take(2000))))))
+            .put("generationConfig", JSONObject()
+                .put("responseModalities", JSONArray().put("IMAGE"))
+                .put("imageConfig", JSONObject().put("aspectRatio", ratio(shape))))
+            .toString()
         val res = try {
-            transport.post(URL, mapOf("Authorization" to "Bearer ${key()}"), body.toByteArray(), "application/json", 120000)
+            transport.post("$BASE/$name:generateContent", mapOf("x-goog-api-key" to key()), body.toByteArray(), "application/json", 120000)
         } catch (e: Exception) {
-            throw ToolFailure("Runware could not be reached: ${e.message ?: e.javaClass.simpleName}")
+            throw ToolFailure("Gemini could not be reached: ${e.message ?: e.javaClass.simpleName}")
         }
         val json = try { JSONObject(res.body) } catch (e: Exception) { null }
-        if (res.status != 200 || json == null) throw ToolFailure("Runware said ${res.status}: ${problem(json) ?: res.body.take(200)}")
-        problem(json)?.let { throw ToolFailure("Runware refused: $it") }
-        val data = json.optJSONArray("data")
-        var item: JSONObject? = null
-        if (data != null) for (i in 0 until data.length()) { val o = data.optJSONObject(i); if (o != null && o.optString("taskUUID") == task) item = o }
-        if (item == null && data != null && data.length() > 0) item = data.optJSONObject(0)
-        val b64 = item?.optString("imageBase64Data").orEmpty().ifEmpty { item?.optString("imageDataURI").orEmpty().substringAfter("base64,", "") }
-        if (b64.isEmpty()) throw ToolFailure("Runware sent no picture back")
-        val bytes = try { java.util.Base64.getDecoder().decode(b64.trim()) } catch (e: Exception) { throw ToolFailure("the picture from Runware was damaged") }
+        if (res.status != 200 || json == null) throw ToolFailure("Gemini said ${res.status}: ${problem(json) ?: res.body.take(200)}")
+        val b64 = findPicture(json)
+        if (b64.isEmpty()) {
+            val why = json.optJSONObject("promptFeedback")?.optString("blockReason").orEmpty()
+            throw ToolFailure(if (why.isNotEmpty()) "Gemini would not draw that ($why)" else "Gemini sent no picture back")
+        }
+        val bytes = try { java.util.Base64.getDecoder().decode(b64.trim()) } catch (e: Exception) { throw ToolFailure("the picture from Gemini was damaged") }
         dir.mkdirs()
-        val file = File(dir, "img_${now()}.jpg")
+        val file = File(dir, "img_${now()}.png")
         file.writeBytes(bytes)
         shelf.add(Attachment("Generated picture", file.absolutePath, Attachment.IMAGE))
         return "The picture was made and is shown in the chat. Do not describe a link; say something short about it."
     }
 
-    private fun problem(json: JSONObject?): String? {
-        val errors = json?.optJSONArray("errors") ?: return null
-        if (errors.length() == 0) return null
-        val e = errors.optJSONObject(0)
-        return e?.optString("message")?.ifEmpty { null } ?: e?.optString("code")?.ifEmpty { null } ?: "unknown error"
+    private fun findPicture(json: JSONObject): String {
+        val cands = json.optJSONArray("candidates") ?: return ""
+        for (i in 0 until cands.length()) {
+            val parts = cands.optJSONObject(i)?.optJSONObject("content")?.optJSONArray("parts") ?: continue
+            for (j in 0 until parts.length()) {
+                val p = parts.optJSONObject(j) ?: continue
+                val inline = p.optJSONObject("inlineData") ?: p.optJSONObject("inline_data") ?: continue
+                val data = inline.optString("data")
+                if (data.isNotEmpty()) return data
+            }
+        }
+        return ""
     }
 
-    companion object {
-        const val URL = "https://api.runware.ai/v1"
-        const val DEFAULT_MODEL = "runware:101@1"
+    private fun problem(json: JSONObject?): String? =
+        json?.optJSONObject("error")?.optString("message")?.ifEmpty { null }
 
-        /** Runware wants multiples of 64. */
-        fun size(shape: String): Pair<Int, Int> = when (shape.trim().lowercase()) {
-            "portrait", "tall" -> 832 to 1216
-            "landscape", "wide" -> 1216 to 832
-            else -> 1024 to 1024
+    companion object {
+        const val BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+        const val DEFAULT_MODEL = "gemini-2.5-flash-image"
+
+        fun ratio(shape: String): String = when (shape.trim().lowercase()) {
+            "portrait", "tall" -> "2:3"
+            "landscape", "wide" -> "3:2"
+            else -> "1:1"
         }
     }
 }

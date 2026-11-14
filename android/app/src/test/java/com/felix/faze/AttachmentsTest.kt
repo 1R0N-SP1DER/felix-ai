@@ -15,24 +15,21 @@ class AttachmentsTest {
     private val png = Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3, 4, 5))
 
     private fun maker(t: FakeTransport, shelf: ImageShelf, key: String = "rk", d: File = dir()) =
-        RunwareImages(t, { key }, { "" }, d, shelf, { "task-1" }, { 42L })
+        GeminiImages(t, { key }, { "" }, d, shelf, { 42L })
 
     @Test fun aPictureIsRequestedAndSavedAndShelved() {
         val t = FakeTransport()
-        t.onPost = { _, _ -> HttpResult(200, emptyMap(), """{"data":[{"taskType":"imageInference","taskUUID":"task-1","imageBase64Data":"$png"}]}""") }
+        t.onPost = { _, _ -> HttpResult(200, emptyMap(), """{"candidates":[{"content":{"parts":[{"text":"ok"},{"inlineData":{"mimeType":"image/png","data":"$png"}}]}}]}""") }
         val shelf = ImageShelf()
         val d = dir()
         val told = maker(t, shelf, d = d).make("a red fox", "landscape")
         assertTrue(told.contains("shown in the chat"))
         val call = t.calls.single()
-        assertEquals("https://api.runware.ai/v1", call.url)
-        assertEquals("Bearer rk", call.headers["Authorization"])
-        val task = org.json.JSONArray(call.body).getJSONObject(0)
-        assertEquals("imageInference", task.getString("taskType"))
-        assertEquals("a red fox", task.getString("positivePrompt"))
-        assertEquals(1216, task.getInt("width"))
-        assertEquals(832, task.getInt("height"))
-        assertEquals(RunwareImages.DEFAULT_MODEL, task.getString("model"))
+        assertEquals("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent", call.url)
+        assertEquals("rk", call.headers["x-goog-api-key"])
+        val body = org.json.JSONObject(call.body)
+        assertEquals("a red fox", body.getJSONArray("contents").getJSONObject(0).getJSONArray("parts").getJSONObject(0).getString("text"))
+        assertEquals("3:2", body.getJSONObject("generationConfig").getJSONObject("imageConfig").getString("aspectRatio"))
         val got = shelf.take().single()
         assertTrue(got.isImage)
         assertEquals(5, File(got.path).length())
@@ -43,7 +40,7 @@ class AttachmentsTest {
         val shelf = ImageShelf()
         try { maker(FakeTransport(), shelf, key = "").make("x", "square"); fail() } catch (e: ToolFailure) { assertTrue(e.message!!.contains("Settings")) }
         val t = FakeTransport()
-        t.onPost = { _, _ -> HttpResult(200, emptyMap(), """{"errors":[{"message":"out of credits"}]}""") }
+        t.onPost = { _, _ -> HttpResult(429, emptyMap(), """{"error":{"message":"out of credits"}}""") }
         try { maker(t, shelf).make("x", "square"); fail() } catch (e: ToolFailure) { assertTrue(e.message!!.contains("out of credits")) }
         t.onPost = { _, _ -> HttpResult(401, emptyMap(), "{}") }
         try { maker(t, shelf).make("x", "square"); fail() } catch (e: ToolFailure) { assertTrue(e.message!!.contains("401")) }

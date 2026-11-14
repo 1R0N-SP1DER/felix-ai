@@ -16,13 +16,9 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = text("groq_key")
         set(value) = put("groq_key", value)
 
-    var runwareKey: String
-        get() = text("runware_key")
-        set(value) = put("runware_key", value.trim())
-
-    var runwareModel: String
-        get() = text("runware_model").ifBlank { RunwareImages.DEFAULT_MODEL }
-        set(value) = put("runware_model", value.trim())
+    var imageModel: String
+        get() = text("image_model").ifBlank { GeminiImages.DEFAULT_MODEL }
+        set(value) = put("image_model", value.trim())
 
     var tavily: String
         get() = text("tavily_key")
@@ -145,7 +141,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = OfflineLimits.threads(text("offline_threads").toIntOrNull())
         set(value) = put("offline_threads", OfflineLimits.threads(value).toString())
 
-    /** Key and model of DeepSeek and NVIDIA, stored per provider id. */
+    /** Key and model of NVIDIA, stored per provider id. */
     fun compatKey(id: String): String = text("${id}_key")
     fun setCompatKey(id: String, value: String) = put("${id}_key", value.trim())
     fun compatModel(id: String): String = text("${id}_model").ifBlank { OpenAiProviders.all[id]?.defaultModel.orEmpty() }

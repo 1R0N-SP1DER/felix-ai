@@ -8,7 +8,7 @@ data class Attempt(val provider: String, val model: String)
 object Fallbacks {
     /** Other model ids to try on the same provider when the chosen one is overloaded or gone. */
     val alternates = mapOf("gemini" to listOf("gemini-flash-lite-latest", "gemini-2.5-flash-lite"))
-    private val order = listOf("groq", "gemini", "openrouter", "deepseek", "nvidia", "custom")
+    private val order = listOf("groq", "gemini", "openrouter", "nvidia", "custom")
 
     /**
      * What to try, in order: the chosen model, its same-provider alternates, then every other provider that has a key.

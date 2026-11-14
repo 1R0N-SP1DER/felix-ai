@@ -12,7 +12,7 @@ def read(n):
 
 class Providers(unittest.TestCase):
     def test_registry_and_wiring(self):
-        self.assertIn("https://api.deepseek.com", read("OpenAiProviders.kt"))
+        self.assertNotIn("deepseek", read("OpenAiProviders.kt"))
         self.assertIn("https://integrate.api.nvidia.com/v1", read("OpenAiProviders.kt"))
         self.assertIn("OpenAiProviders.all.values.map", read("FazeCore.kt"))
         self.assertIn("in OpenAiProviders.all -> compatKey(provider)", read("Settings.kt"))
