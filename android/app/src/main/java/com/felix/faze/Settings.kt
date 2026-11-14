@@ -92,7 +92,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
 
     /** Which online model answers: groq, gemini or openrouter. */
     var provider: String
-        get() = text("provider").let { if (it == "gemini" || it == "openrouter" || it == "offline" || it == "custom" || it in OpenAiProviders.all) it else "groq" }
+        get() = text("provider").let { if (it == "auto" || it == "gemini" || it == "openrouter" || it == "offline" || it == "custom" || it in OpenAiProviders.all) it else "groq" }
         set(value) = put("provider", value)
 
     var geminiKey: String
@@ -132,6 +132,15 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
     var offlineModel: String
         get() = text("offline_model")
         set(value) = put("offline_model", value)
+
+    /** Auto mode's offline models: one for chat (LFM) and one for code and deep work (Qwen). Blank means find one by name. */
+    var autoCasualModel: String
+        get() = text("auto_casual_model")
+        set(value) = put("auto_casual_model", value)
+
+    var autoDeepModel: String
+        get() = text("auto_deep_model")
+        set(value) = put("auto_deep_model", value)
 
     var offlineBinary: String
         get() = text("offline_binary")
@@ -183,6 +192,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
 
     fun hasKey(provider: String): Boolean = when (provider) {
         "offline" -> true // no key: it runs on the phone
+        "auto" -> true // it uses whatever is there
         "gemini" -> geminiKey.isNotEmpty()
         "openrouter" -> openrouterKey.isNotEmpty()
         "custom" -> CustomEndpoint.base(customUrl) != null // the key is optional; an address is what it needs

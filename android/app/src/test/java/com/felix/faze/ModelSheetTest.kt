@@ -16,7 +16,7 @@ class ModelSheetTest {
         val models = mapOf("groq" to "openai/gpt-oss-120b", "gemini" to "gemini-3.1-flash-lite", "openrouter" to "openai/gpt-oss-120b:free")
         val rows = ModelSheet.rows(setOf("groq", "gemini"), models)
         assertEquals(7, rows.size)
-        assertEquals(listOf("custom", "gemini", "groq", "nvidia", "offline", "openrouter"), rows.filter { it.available }.map { it.id }.sorted())
+        assertEquals(listOf("auto", "custom", "gemini", "groq", "nvidia", "offline", "openrouter"), rows.filter { it.available }.map { it.id }.sorted())
         assertEquals("gpt-oss-120b", rows.first { it.id == "groq" }.sub)
         assertEquals("gemini-3.1-flash-lite", rows.first { it.id == "gemini" }.sub)
         assertEquals("ok", rows.first { it.id == "gemini" }.dot)

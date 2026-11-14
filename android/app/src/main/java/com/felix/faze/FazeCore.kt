@@ -76,6 +76,23 @@ class FazeCore(private val app: Application) : EngineListener {
     private val executor = Executors.newSingleThreadExecutor()
     private val transport = UrlTransport()
     private val deviceSpeaker = Speaker(app)
+    private val limits = ProviderLimits()
+
+    /** Auto mode: chooses the models for this request (see [AutoMode]). */
+    private fun autoPlan(messages: org.json.JSONArray): List<Attempt> {
+        val text = AutoMode.lastUserText(messages)
+        val task = AutoMode.kindOf(text, Effort.norm(settings.effortLevel))
+        val scanned = modelLists["offline"].orEmpty().map { it.id }
+        val keys = listOf("groq", "gemini", "openrouter", "nvidia", "custom").filter { settings.hasKey(it) }.toSet()
+        val plan = AutoMode.plan(
+            task, Online.available(app), keys, { limits.isResting(it) }, { settings.modelFor(it) },
+            AutoMode.offlineFor(Task.CASUAL, settings.autoCasualModel, settings.autoDeepModel, scanned, settings.offlineModel),
+            AutoMode.offlineFor(task.let { if (it == Task.CASUAL) Task.DEEP else it }, settings.autoCasualModel, settings.autoDeepModel, scanned, settings.offlineModel),
+        )
+        activity.add("auto", "${task.name.lowercase()} request: ${plan.take(3).joinToString(", ") { it.provider }}")
+        return plan
+    }
+
     private val voiceLines = VoiceLines(
         java.io.File(app.filesDir, "voice_lines"),
         GeminiSpeech(transport, { settings.geminiKey }, { settings.ttsModel }, { settings.liveVoice }),
@@ -201,6 +218,8 @@ class FazeCore(private val app: Application) : EngineListener {
             ),
             { Fallbacks.plan(settings.provider, listOf("groq", "gemini", "openrouter", "nvidia", "custom").filter { settings.hasKey(it) }.toSet()) { settings.modelFor(it) } },
             { text -> main.post { status = text } },
+            planFor = { messages -> if (settings.provider == "auto") autoPlan(messages) else null },
+            onLimit = { p, e -> limits.note(p, e); activity.add("auto", "${ModelSheet.label(p)} is out of allowance for a while: ${(e.message ?: "").take(100)}") },
         )
         val userTools = UserTools(
             toolStore,
@@ -431,6 +450,7 @@ class FazeCore(private val app: Application) : EngineListener {
     }
 
     fun useProvider(id: String) {
+        if (id == "auto") loadModels("offline") // so LFM and Qwen can be found by name (does nothing without root)
         val was = provider
         settings.provider = id
         provider = settings.provider
