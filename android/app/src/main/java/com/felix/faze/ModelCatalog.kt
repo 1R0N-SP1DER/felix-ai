@@ -84,7 +84,7 @@ class ModelCatalog(private val transport: Transport, private val customUrl: () -
         }
         if (res.status != 200) throw classify(res.status, res.body, res.headers)
         val list = try {
-            when (provider) { "groq" -> ModelLists.groq(res.body); "gemini" -> ModelLists.gemini(res.body); "custom", "deepseek", "nvidia" -> ModelLists.openai(res.body); else -> ModelLists.openrouter(res.body) }
+            when (provider) { "groq" -> ModelLists.groq(res.body); "gemini" -> ModelLists.gemini(res.body); "custom", "nvidia" -> ModelLists.openai(res.body); else -> ModelLists.openrouter(res.body) }
         } catch (e: Exception) {
             throw RemoteError("server", "${ModelSheet.label(provider)} sent a model list I could not read")
         }

@@ -10,13 +10,13 @@ def read(n):
         return f.read()
 
 
-class Runware(unittest.TestCase):
+class Images(unittest.TestCase):
     def test_tool_and_settings(self):
         self.assertIn("generate_image", read("Tools.kt"))
         self.assertIn("generate_image", read("Permissions.kt"))
-        self.assertIn("runwareKey", read("Settings.kt"))
-        self.assertIn("Runware key", read("SettingsScreen.kt"))
-        self.assertIn("https://api.runware.ai/v1", read("Attachments.kt"))
+        self.assertIn("imageModel", read("Settings.kt"))
+        self.assertIn("Picture model", read("SettingsScreen.kt"))
+        self.assertIn("generateContent", read("Attachments.kt"))
 
     def test_messages_carry_attachments(self):
         self.assertIn("attachments: List<Attachment>", read("ChatEngine.kt"))

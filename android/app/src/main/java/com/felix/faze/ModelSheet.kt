@@ -7,13 +7,13 @@ data class StatusChip(val text: String, val kind: String)
 
 /** What the model sheet, the model chip and the thinking list say: the same names, order and wording as the web UI (app.js). */
 object ModelSheet {
-    val names = linkedMapOf("auto" to "Auto", "offline" to "Offline", "gemini" to "Gemini", "groq" to "Groq", "openrouter" to "OpenRouter", "deepseek" to "DeepSeek", "nvidia" to "NVIDIA", "custom" to "Custom")
+    val names = linkedMapOf("auto" to "Auto", "offline" to "Offline", "gemini" to "Gemini", "groq" to "Groq", "openrouter" to "OpenRouter", "nvidia" to "NVIDIA", "custom" to "Custom")
     val thinkLevels = listOf("auto" to "Auto", "off" to "Off", "low" to "Low", "medium" to "Medium", "high" to "High", "max" to "Max")
     const val NOT_YET = "not in the app yet"
 
     fun label(mode: String): String = names[mode] ?: mode
 
-    val live = listOf("groq", "gemini", "openrouter", "deepseek", "nvidia", "custom", "offline")
+    val live = listOf("groq", "gemini", "openrouter", "nvidia", "custom", "offline")
 
     /** Every model of the web sheet in its order; Groq, Gemini and OpenRouter run in the app. [keys] are the providers that have a key. */
     fun rows(keys: Set<String>, models: Map<String, String>): List<ModelRow> = names.map { (id, name) ->
@@ -26,7 +26,7 @@ object ModelSheet {
     fun thinkEnabled(mode: String): Boolean = mode != "lfm" && mode != "groq" && mode != "openrouter" && mode != "offline" && mode != "custom" && mode !in OpenAiProviders.all
 
     fun thinkHint(mode: String): String = when (mode) {
-        "groq", "openrouter", "custom", "deepseek", "nvidia" -> "This online model has no thinking setting yet. It still applies when Qwen or Gemini answers."
+        "groq", "openrouter", "custom", "nvidia" -> "This online model has no thinking setting yet. It still applies when Qwen or Gemini answers."
         "offline" -> "Offline models have no thinking setting, and they can't use tools yet."
         "lfm" -> "LFM cannot think, so this does nothing while LFM is forced. It still applies when Qwen or Gemini answers."
         else -> "Applies to whichever model answers."

@@ -191,7 +191,7 @@ class FazeCore(private val app: Application) : EngineListener {
                     { settings.openrouterModel = it },
                 ),
             ),
-            { Fallbacks.plan(settings.provider, listOf("groq", "gemini", "openrouter", "deepseek", "nvidia", "custom").filter { settings.hasKey(it) }.toSet()) { settings.modelFor(it) } },
+            { Fallbacks.plan(settings.provider, listOf("groq", "gemini", "openrouter", "nvidia", "custom").filter { settings.hasKey(it) }.toSet()) { settings.modelFor(it) } },
             { text -> main.post { status = text } },
         )
         val userTools = UserTools(
@@ -201,7 +201,7 @@ class FazeCore(private val app: Application) : EngineListener {
             { PermissionPolicy.all().map { it.first }.toSet() },
         )
         rawTools = Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app), scheduler, AndroidSwitches(), liveControl,
-            RunwareImages(transport, { settings.runwareKey }, { settings.runwareModel }, java.io.File(app.filesDir, "images"), imageShelf),
+            GeminiImages(transport, { settings.geminiKey }, { settings.imageModel }, java.io.File(app.filesDir, "images"), imageShelf),
             WebImages(transport, { settings.tavily }, imageShelf))
         gate = GatedTools(rawTools, broker, extraTier = { name -> if (userTools.has(name)) Tier.SAFE else null }, approvalMode = { settings.approvalMode }, phoneControl = { settings.phoneControl })
         gate.logger = { line -> activity.add("tool", line) }
