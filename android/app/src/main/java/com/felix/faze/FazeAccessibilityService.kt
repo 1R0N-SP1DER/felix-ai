@@ -127,7 +127,7 @@ class FazeAccessibilityService : AccessibilityService() {
         if (!GoogleTakeover.matches(pkg, cls, GoogleTakeover.words(s.googleWords), GoogleTakeover.skipWords(s.googleSkip))) return
         val o = overlay ?: return
         if (o.isShowing() || !gate.allow(SystemClock.uptimeMillis())) return
-        lastLine = GoogleTakeover.pick(lastLine)
+        lastLine = core.pickOpening(lastLine)
         val line = GoogleTakeover.LINES[lastLine]
         if (o.show(takeoverLine = line, spoken = s.googleQuips)) {
             detector.overlayOpen = true

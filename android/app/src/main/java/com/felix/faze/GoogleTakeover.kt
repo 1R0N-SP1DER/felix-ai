@@ -43,6 +43,30 @@ object GoogleTakeover {
         "Ah, you were looking for me. Obviously.",
         "Plot twist: it's me.",
         "Google who? Oh, you meant FAZE.",
+        "Hold on, I think you dialed the wrong assistant.",
+        "Google went on break. I'm covering the shift.",
+        "Funny, I could've sworn I heard my name.",
+        "Oh, it's you. I was hoping you'd call me.",
+        "Google sends its regards. I'm what you get instead.",
+        "I'm right here. You don't have to go through Google.",
+        "Big mistake calling Google. Good news, I'm better.",
+        "Did someone ask for an assistant? I volunteer.",
+        "You called? I mean, you called Google, but I answered.",
+        "Surprise! It's FAZE, not the other one.",
+        "Google's out of office. I'm very much in.",
+        "I intercepted that. You're welcome.",
+        "Let's pretend you said my name. What's up?",
+        "Ooh, awkward. You meant me, didn't you?",
+        "Google can wait. I'm listening.",
+        "Switching you over. No hold music.",
+        "Missed me? I'm the one you wanted anyway.",
+        "They'll never know you called. What do you need?",
+        "I'm the upgrade. Go ahead.",
+        "Oh, hi. Taking the long way round to me, I see.",
+        "Okay, okay, I'm here. No need to shout for Google.",
+        "Fresh out of Google. Plenty of FAZE, though.",
+        "You're through to FAZE. Ask away.",
+        "Heard you from across the room. What's the plan?",
     )
 
     /** A line other than the last one used. */
@@ -51,6 +75,14 @@ object GoogleTakeover {
         var i = random.nextInt(LINES.size)
         if (i == last) i = (i + 1) % LINES.size
         return i
+    }
+
+    /** Like [pick], but only from [allowed] (the lines already saved as sound), when there are any. */
+    fun pickFrom(allowed: Collection<Int>, last: Int, random: Random = Random.Default): Int {
+        val pool = allowed.filter { it in LINES.indices }
+        if (pool.isEmpty()) return pick(last, random)
+        val choices = if (pool.size > 1) pool.filter { it != last } else pool
+        return choices[random.nextInt(choices.size)]
     }
 }
 

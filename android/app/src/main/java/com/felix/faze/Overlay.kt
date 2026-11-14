@@ -426,7 +426,7 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         plus?.ink = googleInk
         quip = line
         quipUntil = SystemClock.uptimeMillis() + 7000
-        if (spoken) { spokenFrom = SystemClock.uptimeMillis() + 600; handler.postDelayed({ core.speakText(line) }, 450) }
+        if (spoken) { spokenFrom = SystemClock.uptimeMillis() + 600; handler.postDelayed({ core.speakOpening(line) }, 450) }
         panel.translationY = dp(70).toFloat()
         panel.alpha = 0f
         r.alpha = 0f

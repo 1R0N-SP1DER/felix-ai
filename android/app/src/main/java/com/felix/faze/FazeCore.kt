@@ -76,6 +76,13 @@ class FazeCore(private val app: Application) : EngineListener {
     private val executor = Executors.newSingleThreadExecutor()
     private val transport = UrlTransport()
     private val deviceSpeaker = Speaker(app)
+    private val voiceLines = VoiceLines(
+        java.io.File(app.filesDir, "voice_lines"),
+        GeminiSpeech(transport, { settings.geminiKey }, { settings.ttsModel }, { settings.liveVoice }),
+        GoogleTakeover.LINES,
+        { "${settings.liveVoice}-${settings.ttsModel}" },
+    )
+
     private val speaker = SmartSpeaker(
         deviceSpeaker,
         AndroidLiveSpeaker { l -> main.post { outLevel = l } },
@@ -345,6 +352,38 @@ class FazeCore(private val app: Application) : EngineListener {
         speaker.stop()
         for (sentence in Speakable.split(Speakable.clean(text), true).first) speaker.speak(sentence)
     }
+
+    /** The overlay's opening line: the saved sound when there is one (works offline, costs nothing), else the usual voice. */
+    fun speakOpening(line: String) {
+        val i = GoogleTakeover.LINES.indexOf(line)
+        val pcm = if (i >= 0 && settings.voiceEngine != "device") voiceLines.pcm(i) else null
+        if (pcm != null) speaker.playClip(pcm) else speakText(line)
+    }
+
+    /** Which opening line to use next: one that is saved as sound when any are, so it can play offline. */
+    fun pickOpening(last: Int): Int = GoogleTakeover.pickFrom(if (settings.voiceEngine == "device") emptyList() else voiceLines.saved(), last)
+
+    var linesStatus by mutableStateOf("")
+        private set
+
+    fun linesSaved(): Int = voiceLines.saved().size
+
+    /** Settings > Voice: makes the opening lines with the Gemini voice now, once, and keeps them. */
+    fun downloadLines() {
+        if (linesBusy) return
+        linesBusy = true
+        linesStatus = "Starting…"
+        Thread {
+            val (n, why) = voiceLines.download({ false }) { done, total -> main.post { linesStatus = "Saved $done of $total…" } }
+            main.post {
+                linesBusy = false
+                linesStatus = if (why == null) "All $n lines saved. They play offline and use no credits."
+                else "Saved $n of ${GoogleTakeover.LINES.size}. Stopped: ${why.take(120)}. Tap again later to continue."
+                activity.add("voice", linesStatus)
+            }
+        }.also { it.isDaemon = true; it.name = "voice-lines" }.start()
+    }
+    private var linesBusy = false
 
     fun testVoice() {
         speaker.stop()

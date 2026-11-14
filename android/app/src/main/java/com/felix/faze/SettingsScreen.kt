@@ -32,6 +32,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -223,6 +224,12 @@ private fun VoiceTab(core: FazeCore) {
         val voices = core.deviceVoices()
         SettingRow("Phone voice", if (voices.isEmpty()) "Voices load a moment after the app starts, or none are installed for your language." else "Used offline, and when the engine is set to Phone.") {
             SelectBox(deviceVoice, listOf("" to "Default") + voices.map { it.name to (it.label + if (it.offline) "" else " (online)") }) { deviceVoice = it; core.setDeviceVoice(it) }
+        }
+        var savedLines by remember { mutableStateOf(core.linesSaved()) }
+        val linesNote = core.linesStatus
+        LaunchedEffect(linesNote) { savedLines = core.linesSaved() }
+        SettingRow("Opening lines", if (linesNote.isNotEmpty()) linesNote else "$savedLines of ${GoogleTakeover.LINES.size} saved as sound for your Gemini voice. Saved once, they play offline and use no credits. Changing the voice means downloading again.") {
+            Text(if (savedLines == GoogleTakeover.LINES.size) "Saved" else "Download", color = Palette.Dim, fontSize = 13.sp, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { core.downloadLines() }.padding(horizontal = 10.dp, vertical = 6.dp))
         }
         WideButton("Get better phone voices") {
             try {
