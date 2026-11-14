@@ -209,14 +209,28 @@ private fun VoiceTab(core: FazeCore) {
 
     SettingsCard("Voice") {
         SettingRow("Speak replies aloud") { FazeSwitch(speak, { speak = it; s.speakReplies = it }) }
+        var engine by remember { mutableStateOf(s.voiceEngine) }
+        var offlineOnly by remember { mutableStateOf(s.offlineVoicesOnly) }
+        var deviceVoice by remember { mutableStateOf(s.deviceVoice) }
         Column(modifier = Modifier.padding(vertical = 10.dp)) {
             Text("Voice engine", color = Palette.Text)
-            Text("Gemini voices sound natural but need internet", color = Palette.Muted, fontSize = 12.5.sp, modifier = Modifier.padding(bottom = 8.dp))
-            Seg(listOf("system" to "Device", "gemini" to "Gemini"), "system", small = true, soonValues = setOf("gemini")) {}
+            Text("Auto uses the natural Gemini voice (the same voices as live chat, picked under Voice chat) when you are online, and the phone's own voice when you are not.", color = Palette.Muted, fontSize = 12.5.sp, modifier = Modifier.padding(bottom = 8.dp))
+            Seg(listOf("auto" to "Auto", "gemini" to "Gemini", "device" to "Phone"), engine, small = true) { engine = it; s.voiceEngine = it }
         }
-        WideButton("Browse voices", soon = true) {}
-        SettingRow("Device voice", soon = true) { SelectBox("", emptyList(), soon = true) {} }
-        SettingRow("Offline voices only", soon = true) { FazeSwitch(false, {}, enabled = false) }
+        SettingRow("Offline voices only", "Only offer phone voices that work without internet.") {
+            FazeSwitch(offlineOnly, { offlineOnly = it; s.offlineVoicesOnly = it })
+        }
+        val voices = core.deviceVoices()
+        SettingRow("Phone voice", if (voices.isEmpty()) "Voices load a moment after the app starts, or none are installed for your language." else "Used offline, and when the engine is set to Phone.") {
+            SelectBox(deviceVoice, listOf("" to "Default") + voices.map { it.name to (it.label + if (it.offline) "" else " (online)") }) { deviceVoice = it; core.setDeviceVoice(it) }
+        }
+        WideButton("Get better phone voices") {
+            try {
+                context.startActivity(Intent("com.android.settings.TTS_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (e: Exception) {
+                note = "Open Android Settings > System > Languages > Text-to-speech output and install voice data."
+            }
+        }
         Column(modifier = Modifier.padding(vertical = 10.dp)) {
             Row { Text("Speed ", color = Palette.Text); Text("%.2f".format(rate), color = Palette.Muted, fontSize = 12.5.sp) }
             VoiceSlider(rate) { rate = it; core.setVoice(rate, pitch) }

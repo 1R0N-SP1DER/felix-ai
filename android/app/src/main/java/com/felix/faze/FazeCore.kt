@@ -75,7 +75,24 @@ class FazeCore(private val app: Application) : EngineListener {
     private val main = Handler(Looper.getMainLooper())
     private val executor = Executors.newSingleThreadExecutor()
     private val transport = UrlTransport()
-    private val speaker = Speaker(app)
+    private val deviceSpeaker = Speaker(app)
+    private val speaker = SmartSpeaker(
+        deviceSpeaker,
+        AndroidLiveSpeaker { l -> main.post { outLevel = l } },
+        GeminiSpeech(transport, { settings.geminiKey }, { settings.ttsModel }, { settings.liveVoice }),
+        { settings.voiceEngine },
+        { Online.available(app) },
+        { settings.geminiKey.isNotEmpty() },
+        exec = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "natural-voice").also { it.isDaemon = true } },
+    )
+
+    /** The phone's own voices, for the picker in Settings. */
+    fun deviceVoices(): List<VoiceOption> = deviceSpeaker.voices().let { all -> if (settings.offlineVoicesOnly) all.filter { it.offline } else all }
+
+    fun setDeviceVoice(name: String) {
+        settings.deviceVoice = name
+        deviceSpeaker.setVoiceName(name)
+    }
     private lateinit var rawTools: Tools
     val scheduler = AndroidScheduler(app, ScheduleStore(File(app.filesDir, "schedule.json")))
     private val scheduleRunner = ScheduleRunner(app, this, scheduler)
@@ -198,7 +215,8 @@ class FazeCore(private val app: Application) : EngineListener {
             override fun speak(): Boolean = settings.speakReplies || nextAloud
         }, speaker, { block -> main.post { block() } }, executor, messages, this)
         engine.takeImages = { imageShelf.take() }
-        speaker.setVoice(settings.voiceRate, settings.voicePitch)
+        deviceSpeaker.setVoice(settings.voiceRate, settings.voicePitch)
+        deviceSpeaker.setVoiceName(settings.deviceVoice)
         Palette.setAccent(Accents.byName(settings.accent))
         refreshChats()
         main.post(object : Runnable {
@@ -311,7 +329,7 @@ class FazeCore(private val app: Application) : EngineListener {
     fun setVoice(rate: Float, pitch: Float) {
         settings.voiceRate = rate
         settings.voicePitch = pitch
-        speaker.setVoice(settings.voiceRate, settings.voicePitch)
+        deviceSpeaker.setVoice(settings.voiceRate, settings.voicePitch)
     }
 
     /** The stop button in the top bar: be quiet now (the request, if one is running, carries on). */
