@@ -211,7 +211,7 @@ class FazeCore(private val app: Application) : EngineListener {
         rawTools = Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app), scheduler, AndroidSwitches(), liveControl,
             GeminiImages(transport, { settings.geminiKey }, { settings.imageModel }, java.io.File(app.filesDir, "images"), imageShelf),
             WebImages(transport, { settings.tavily }, imageShelf))
-        gate = GatedTools(rawTools, broker, extraTier = { name -> if (userTools.has(name)) Tier.SAFE else null }, approvalMode = { settings.approvalMode }, phoneControl = { settings.phoneControl })
+        gate = GatedTools(rawTools, broker, extraTier = { name -> if (userTools.has(name)) Tier.SAFE else null }, approvalMode = { settings.approvalMode }, phoneControl = { settings.phoneControl }, locked = { settings.limitWhenLocked && LockOverlayActivity.isLocked(app) })
         gate.logger = { line -> activity.add("tool", line) }
         val tools: ToolRunner = gate
         gatedTools = tools
@@ -219,7 +219,7 @@ class FazeCore(private val app: Application) : EngineListener {
         val speakingNow = { speaker.isSpeaking() || (live?.isSpeaking() ?: false) }
         liveTools = SpeechAwareTools(tools, { true }, speakingNow, { bubbleReady() })
         engine = ChatEngine(Agent(client, SpeechAwareTools(tools, { voiceActive }, speakingNow, { bubbleReady() }), router = router), object : EngineConfig by settings {
-            override fun memoryBlock(): String = if (settings.useMemory) memory.promptBlock(settings.user) else ""
+            override fun memoryBlock(): String = if (settings.useMemory && !(settings.limitWhenLocked && LockOverlayActivity.isLocked(app))) memory.promptBlock(settings.user) else ""
             override fun speak(): Boolean = settings.speakReplies || nextAloud
         }, speaker, { block -> main.post { block() } }, executor, messages, this)
         engine.takeImages = { imageShelf.take() }

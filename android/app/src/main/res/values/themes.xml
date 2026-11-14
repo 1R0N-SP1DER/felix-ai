@@ -5,4 +5,11 @@
         <item name="android:statusBarColor">#11131A</item>
         <item name="android:navigationBarColor">#11131A</item>
     </style>
+    <style name="Theme.Faze.Lock" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
 </resources>
