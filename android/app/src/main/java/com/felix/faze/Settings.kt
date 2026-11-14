@@ -256,7 +256,12 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = text("google_words")
         set(value) = put("google_words", value.trim())
 
-    /** The last Google window the service saw, so the right words can be found without a computer. */
+    /** Window-name words that Faze must leave alone, so the full Gemini app can still open. */
+    var googleSkip: String
+        get() = text("google_skip")
+        set(value) = put("google_skip", value.trim())
+
+    /** The last Google windows the service saw, so the right words can be found without a computer. */
     var lastGoogleWindow: String
         get() = text("google_last_window")
         set(value) = put("google_last_window", value)

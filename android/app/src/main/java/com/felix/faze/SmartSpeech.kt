@@ -91,6 +91,7 @@ class SmartSpeaker(
     private val now: () -> Long = { System.currentTimeMillis() },
     private val exec: Executor,
     private val onVoiceChange: () -> Unit = {},
+    private val onFail: (String) -> Unit = {},
 ) : SpeechOut {
     private val lock = Object()
     private val pending = ArrayList<String>()
@@ -135,6 +136,7 @@ class SmartSpeaker(
                 if (synchronized(lock) { gen == generation }) out.play(pcm)
             } catch (e: Exception) {
                 restUntil = now() + 60_000L
+                onFail(e.message ?: e.javaClass.simpleName)
                 if (synchronized(lock) { gen == generation }) device.say(chunk)
             }
         }
