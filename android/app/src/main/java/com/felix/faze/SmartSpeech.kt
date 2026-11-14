@@ -148,6 +148,12 @@ class SmartSpeaker(
         device.stop()
     }
 
+    /** Plays ready-made sound (a saved line), cutting off anything being said. */
+    fun playClip(pcm: ByteArray) {
+        stop()
+        out.play(pcm)
+    }
+
     fun isSpeaking(): Boolean = synchronized(lock) { pending.isNotEmpty() || working } || out.isBusy() || device.isSpeaking()
 }
 
