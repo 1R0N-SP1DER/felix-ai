@@ -17,7 +17,7 @@ fun interface Synth {
 }
 
 /** Pulls the raw sound out of a WAV file (or passes raw PCM through). */
-object Wav {
+object WavReader {
     fun pcm(bytes: ByteArray): ByteArray {
         if (bytes.size < 12 || String(bytes, 0, 4, Charsets.ISO_8859_1) != "RIFF") return bytes
         var i = 12
@@ -49,7 +49,7 @@ class GeminiSpeech(
         val r = transport.post(URL, mapOf("x-goog-api-key" to key()), body.toByteArray(Charsets.UTF_8), "application/json", 30000)
         if (r.status != 200) throw ToolFailure("Gemini voice answered ${r.status}")
         val b64 = audio(r.body) ?: throw ToolFailure("Gemini voice sent no sound")
-        val pcm = Wav.pcm(java.util.Base64.getDecoder().decode(b64))
+        val pcm = WavReader.pcm(java.util.Base64.getDecoder().decode(b64))
         if (pcm.isEmpty()) throw ToolFailure("Gemini voice sent empty sound")
         return pcm
     }

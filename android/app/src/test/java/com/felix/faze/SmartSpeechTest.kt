@@ -114,7 +114,7 @@ class SmartSpeechTest {
     }
 
     @Test fun rawSoundPassesThroughAndErrorsBecomeFailures() {
-        assertEquals(listOf<Byte>(1, 2, 3), Wav.pcm(byteArrayOf(1, 2, 3)).toList())
+        assertEquals(listOf<Byte>(1, 2, 3), WavReader.pcm(byteArrayOf(1, 2, 3)).toList())
         val t = FakeTransport()
         t.onPost = { _, _ -> HttpResult(429, emptyMap(), "{}") }
         try { GeminiSpeech(t, { "gk" }, { "" }, { "Kore" }).synth("x"); org.junit.Assert.fail() } catch (e: ToolFailure) { assertTrue(e.message!!.contains("429")) }
