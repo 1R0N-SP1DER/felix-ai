@@ -311,6 +311,22 @@ private fun AgentTab(core: FazeCore) {
         Seg(OfflineLimits.CTX.map { it.toString() to it.toString() }, ctxSize, small = true) { ctxSize = it; core.settings.offlineCtx = it.toInt() }
         Hint("Applies the next time the offline model starts: switch to another model and back, or restart the app. Pick the model itself from the model button in the chat.")
     }
+    SettingsCard("Auto mode") {
+        var casual by remember { mutableStateOf(core.settings.autoCasualModel) }
+        var deep by remember { mutableStateOf(core.settings.autoDeepModel) }
+        val found = core.modelLists["offline"].orEmpty()
+        val options = listOf("" to "Find by name") + found.map { it.id to it.label }
+        Hint("Pick Auto in the model button. Online, chat goes to Groq or OpenRouter, and code or deep questions go to Gemini. A provider that hits its limit is skipped for a while, so tasks keep going. Offline, a small model answers chat and a bigger one answers code and deep questions.")
+        SettingRow("Offline chat model", "Small and quick, like LFM. Blank looks for a file with lfm in its name, then uses your offline model.") {
+            SelectBox(casual, options) { casual = it; core.settings.autoCasualModel = it }
+        }
+        SettingRow("Offline code and deep model", "Bigger, like Qwen. Blank looks for a file with qwen in its name, then uses your offline model.") {
+            SelectBox(deep, options) { deep = it; core.settings.autoDeepModel = it }
+        }
+        SettingRow("Model files", if (found.isEmpty()) "Not loaded yet. Needs root, and loads when you pick Auto." else "${found.size} found", last = true) {
+            Text("Load", color = Palette.Dim, fontSize = 13.sp, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { core.loadModels("offline", true) }.padding(horizontal = 10.dp, vertical = 6.dp))
+        }
+    }
     SettingsCard("Vision model") {
         var vision by remember { mutableStateOf(core.settings.visionModel) }
         SettingRow("Model", "The Groq model that looks at screenshots (look at screen). Leave blank for the default: ${ScreenEyes.DEFAULT_MODEL}", last = true) {

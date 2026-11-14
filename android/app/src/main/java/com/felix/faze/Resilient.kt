@@ -36,6 +36,8 @@ class ResilientChat(
     private val sleep: (Long) -> Unit = { Thread.sleep(it) },
     private val retries: Int = 1,
     private val pauseMs: Long = 2500,
+    private val planFor: ((JSONArray) -> List<Attempt>?)? = null,
+    private val onLimit: (String, RemoteError) -> Unit = { _, _ -> },
 ) : ChatApi {
     private val retryKinds = setOf("server", "rate_limit", "network")
     private val fallbackKinds = setOf("server", "rate_limit", "network", "model", "tool_failed", "empty", "auth")
@@ -53,7 +55,7 @@ class ResilientChat(
     override fun chat(model: String, messages: JSONArray, tools: JSONArray?, onToken: (String) -> Unit, cancelled: () -> Boolean): ChatResult {
         var last: RemoteError? = null
         var previous: Attempt? = null
-        for (a in plan()) {
+        for (a in (planFor?.invoke(messages) ?: plan())) {
             val api = chats[a.provider] ?: continue
             var tries = 0
             while (true) {
@@ -71,6 +73,7 @@ class ResilientChat(
                         tries++
                         continue
                     }
+                    onLimit(a.provider, e)
                     break
                 }
             }

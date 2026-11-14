@@ -198,7 +198,7 @@ class OfflineChat(
     private val notice: (String) -> Unit,
 ) : ChatApi {
     override fun chat(model: String, messages: JSONArray, tools: JSONArray?, onToken: (String) -> Unit, cancelled: () -> Boolean): ChatResult {
-        val path = this.model()
+        val path = if (model.endsWith(".gguf")) model else this.model()
         if (path.isEmpty()) throw RemoteError("model", "pick an offline model first (model picker > Offline)")
         server.ensure(path, notice)?.let { throw RemoteError("model", it) }
         if (cancelled()) throw Cancelled()
