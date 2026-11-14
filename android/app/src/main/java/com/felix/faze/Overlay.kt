@@ -193,7 +193,14 @@ object PillState {
  * Tapping outside closes it; a swipe up on the handle opens the app. + attaches, the blue mic listens (and sends by itself after a
  * pause), the wave opens live mode in the app. The keyboard works because the window only becomes focusable while the text box is used.
  */
-class OverlayWindow(private val context: Context, private val core: FazeCore) {
+/** Where the overlay's view lives when it is not a floating window: the lock-screen activity. */
+interface OverlayHost {
+    fun attach(view: View)
+    fun detach(view: View)
+    fun finish()
+}
+
+class OverlayWindow(private val context: Context, private val core: FazeCore, private val host: OverlayHost? = null) {
     private val wm = context.getSystemService(WindowManager::class.java)
     private val imm = context.getSystemService(InputMethodManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
@@ -262,7 +269,7 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
     /** False if Android refused (usually: "display over other apps" is not allowed yet). */
     fun show(takeoverLine: String? = null, spoken: Boolean = false): Boolean {
         if (root != null) return true
-        if (!canShow()) {
+        if (host == null && !canShow()) {
             core.reportStatus("allow \"display over other apps\" for Faze first")
             return false
         }
@@ -369,7 +376,7 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
             if (Build.VERSION.SDK_INT >= 31) blurBehindRadius = dp(18) // needs a phone whose compositor supports window blur; harmless otherwise
         }
         try {
-            wm.addView(frame, p)
+            if (host != null) host.attach(frame) else wm.addView(frame, p)
         } catch (e: Exception) {
             core.reportStatus("couldn't open the overlay: ${e.message ?: e.javaClass.simpleName}")
             return false
@@ -481,6 +488,11 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
     // ---- the keyboard: the window is only focusable while the text box is being used
 
     private fun takeKeyboard() {
+        if (host != null) { // an activity window is already focusable
+            edit?.requestFocus()
+            handler.postDelayed({ edit?.let { imm.showSoftInput(it, InputMethodManager.SHOW_IMPLICIT) } }, 120)
+            return
+        }
         val r = root ?: return
         val p = params ?: return
         if (p.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE == 0) return
@@ -491,6 +503,7 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
     }
 
     private fun releaseKeyboard() {
+        if (host != null) { edit?.let { imm.hideSoftInputFromWindow(it.windowToken, 0) }; edit?.clearFocus(); return }
         val r = root ?: return
         val p = params ?: return
         edit?.let { imm.hideSoftInputFromWindow(it.windowToken, 0) }
@@ -620,11 +633,12 @@ class OverlayWindow(private val context: Context, private val core: FazeCore) {
         if (force) core.stop()
         try {
             edit?.let { imm.hideSoftInputFromWindow(it.windowToken, 0) }
-            wm.removeView(r)
+            if (host != null) host.detach(r) else wm.removeView(r)
         } catch (e: Exception) {
             // already gone
         }
         root = null; params = null; status = null; reply = null; replyCard = null; scroll = null
         approvalBox = null; approvalText = null; edit = null; plus = null; micBtn = null; micGlyph = null; trail = null; trailGlyph = null; bars = null
+        host?.finish()
     }
 }

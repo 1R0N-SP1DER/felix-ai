@@ -118,6 +118,7 @@ class GatedTools(
     private val approvalMode: () -> String = { "ask" },
     private val phoneControl: () -> String = { "ask" },
     private val extraTier: (String) -> Tier? = { null },
+    private val locked: () -> Boolean = { false },
 ) : ToolRunner {
     @Volatile private var controlUntil = 0L
 
@@ -140,7 +141,9 @@ class GatedTools(
         return r
     }
 
-    private fun run(name: String, args: JSONObject): ToolResult = when (tierOf(name)) {
+    private fun run(name: String, args: JSONObject): ToolResult = if (locked() && !LockPolicy.allows(name)) ToolResult(false, LockPolicy.REFUSAL) else runUnlocked(name, args)
+
+    private fun runUnlocked(name: String, args: JSONObject): ToolResult = when (tierOf(name)) {
         Tier.SAFE -> inner.execute(name, args)
         Tier.BLOCK -> ToolResult(false, "$name is not allowed.")
         Tier.CONFIRM -> {

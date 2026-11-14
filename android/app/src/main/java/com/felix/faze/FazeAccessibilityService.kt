@@ -41,7 +41,7 @@ class FazeAccessibilityService : AccessibilityService() {
         if (event.keyCode != KeyEvent.KEYCODE_VOLUME_UP && event.keyCode != KeyEvent.KEYCODE_VOLUME_DOWN) return false
         if (!core.settings.chordEnabled) return false
         val down = event.action == KeyEvent.ACTION_DOWN
-        detector.overlayOpen = overlay?.isShowing() == true
+        detector.overlayOpen = overlayIsOpen()
         if (down && event.repeatCount == 0 && !detector.anyHeld()) rememberVolumes()
         val result = detector.onKey(event.keyCode, down, event.repeatCount, SystemClock.uptimeMillis())
         act(result.action)
@@ -53,18 +53,42 @@ class FazeAccessibilityService : AccessibilityService() {
         return result.consume
     }
 
+    /** On the lock screen a floating window would be hidden, so the overlay opens as a see-through screen above it instead. */
+    private fun openOverlay(line: String? = null, spoken: Boolean = false): Boolean {
+        if (LockOverlayActivity.isLocked(this)) {
+            if (LockOverlayActivity.current != null) return true
+            return try {
+                startActivity(android.content.Intent(this, LockOverlayActivity::class.java)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                    .putExtra(LockOverlayActivity.EXTRA_LINE, line).putExtra(LockOverlayActivity.EXTRA_SPOKEN, spoken))
+                true
+            } catch (e: Exception) {
+                core.reportStatus("couldn't open over the lock screen: ${e.message ?: e.javaClass.simpleName}")
+                false
+            }
+        }
+        val o = overlay ?: return false
+        return o.show(takeoverLine = line, spoken = spoken)
+    }
+
+    private fun overlayIsOpen(): Boolean = overlay?.isShowing() == true || LockOverlayActivity.current != null
+
+    private fun closeOverlay() {
+        LockOverlayActivity.current?.closeNow(true)
+        overlay?.close(true)
+    }
+
     private fun act(action: ChordAction) {
-        val o = overlay ?: return
         when (action) {
             ChordAction.OPEN -> {
                 restoreVolumes()
                 buzz()
-                if (o.show()) { detector.overlayOpen = true; core.activity.add("wake", "Both volume keys held") }
+                if (openOverlay()) { detector.overlayOpen = true; core.activity.add("wake", if (LockOverlayActivity.isLocked(this)) "Both volume keys held (lock screen)" else "Both volume keys held") }
             }
             ChordAction.CLOSE -> {
                 restoreVolumes()
                 buzz()
-                o.close(true)
+                closeOverlay()
                 detector.overlayOpen = false
             }
             ChordAction.NONE -> {}
@@ -125,11 +149,18 @@ class FazeAccessibilityService : AccessibilityService() {
         if (s.lastGoogleWindow != history) s.lastGoogleWindow = history
         if (!s.googleTakeover) return
         if (!GoogleTakeover.matches(pkg, cls, GoogleTakeover.words(s.googleWords), GoogleTakeover.skipWords(s.googleSkip))) return
-        val o = overlay ?: return
-        if (o.isShowing() || !gate.allow(SystemClock.uptimeMillis())) return
+        if (overlayIsOpen() || !gate.allow(SystemClock.uptimeMillis())) return
         lastLine = core.pickOpening(lastLine)
         val line = GoogleTakeover.LINES[lastLine]
-        if (o.show(takeoverLine = line, spoken = s.googleQuips)) {
+        if (LockOverlayActivity.isLocked(this)) {
+            // Over the lock screen our own screen would take the Back press, so Google's window is dismissed first.
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            handler.postDelayed({
+                if (openOverlay(line, s.googleQuips)) { detector.overlayOpen = true; core.activity.add("wake", "Google's assistant took over on the lock screen ($seen)") }
+            }, 300)
+            return
+        }
+        if (openOverlay(line, s.googleQuips)) {
             detector.overlayOpen = true
             core.activity.add("wake", "Google's assistant took over ($seen)")
             // Dismiss Google's window once Faze's is up, so the swap reads as one movement.

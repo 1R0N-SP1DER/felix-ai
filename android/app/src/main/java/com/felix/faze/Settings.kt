@@ -304,6 +304,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = PermissionPolicy.phoneMode(text("phone_control"))
         set(value) = put("phone_control", PermissionPolicy.phoneMode(value))
 
+    /** While the phone is locked, Faze only uses harmless tools and does not use memories. */
+    var limitWhenLocked: Boolean
+        get() = prefs.getBoolean("limit_locked", true)
+        set(value) = prefs.edit().putBoolean("limit_locked", value).apply()
+
     /** The volume-key overlay also starts a voice chat (needs the microphone allowed and a Groq key). */
     var chordVoice: Boolean
         get() = prefs.getBoolean("chord_voice", true)

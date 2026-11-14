@@ -452,6 +452,7 @@ private fun AdvancedTab(core: FazeCore) {
     var hideDot by remember { mutableStateOf(s.hideMicDot) }
     var chord by remember { mutableStateOf(s.chordEnabled) }
     var chordVoice by remember { mutableStateOf(s.chordVoice) }
+    var limitLocked by remember { mutableStateOf(s.limitWhenLocked) }
     var gTake by remember { mutableStateOf(s.googleTakeover) }
     var gQuips by remember { mutableStateOf(s.googleQuips) }
     var gWords by remember { mutableStateOf(s.googleWords) }
@@ -539,6 +540,9 @@ private fun AdvancedTab(core: FazeCore) {
         }
         SettingRow("Google windows seen", if (gLast.isEmpty()) "None yet. Say Hey Google or open the Gemini app, then come back here and tap Refresh. Newest first." else gLast) {
             Text("Refresh", color = Palette.Dim, fontSize = 13.sp, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { gLast = s.lastGoogleWindow }.padding(horizontal = 10.dp, vertical = 6.dp))
+        }
+        SettingRow("Limit Faze on the lock screen", "While the phone is locked, Faze can still talk, search and tell the time, but won't use your memories or act on your phone until you unlock.") {
+            FazeSwitch(limitLocked, { limitLocked = it; s.limitWhenLocked = it })
         }
         SettingRow("Start voice chat with it", "The overlay starts listening as soon as it opens. Swipe up on its top edge to open the full app.") {
             FazeSwitch(chordVoice, { chordVoice = it; s.chordVoice = it })

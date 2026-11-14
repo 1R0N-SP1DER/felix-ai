@@ -46,6 +46,17 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".LockOverlayActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Faze.Lock"
+            android:launchMode="singleInstance"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:windowSoftInputMode="adjustResize" />
+
         <receiver
             android:name=".ScheduleReceiver"
             android:exported="false">
