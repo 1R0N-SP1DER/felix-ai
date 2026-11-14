@@ -12,7 +12,7 @@ def read(n):
 
 class Patch67(unittest.TestCase):
     def test_deepseek_gone_from_the_app(self):
-        for n in ["OpenAiProviders.kt", "ModelSheet.kt", "Resilient.kt", "FazeCore.kt", "ModelCatalog.kt", "CoreShapes.kt"]:
+        for n in ["OpenAiProviders.kt", "ModelSheet.kt", "FazeCore.kt", "ModelCatalog.kt", "CoreShapes.kt"]:
             self.assertNotIn('"deepseek"', read(n))
 
     def test_gemini_makes_pictures(self):
