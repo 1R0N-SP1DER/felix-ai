@@ -328,6 +328,28 @@ fun ModelSheetView(core: FazeCore, visible: Boolean, onDismiss: () -> Unit) {
                     }
                     if (expanded == row.id) ModelPicker(core, row.id, query, { query = it }) { id -> core.pickModel(row.id, id); expanded = null; onDismiss() }
                 }
+                if (core.pcConnected) {
+                    androidx.compose.runtime.LaunchedEffect(visible) { if (visible) core.loadPcModels() }
+                    SheetHeading("Your PC")
+                    if (core.pcModelsLoading) Text("Looking for models on your PC…", color = Palette.Muted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 6.dp))
+                    else if (core.pcModels.isEmpty()) Text(core.pcModelsError.ifEmpty { "No models yet." }, color = if (core.pcModelsError.isEmpty()) Palette.Muted else Palette.Bad, fontSize = 13.sp, modifier = Modifier.padding(bottom = 6.dp))
+                    for (name in core.pcModels) {
+                        val on = core.provider == "pc" && core.settings.modelFor("pc") == name
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp).clip(RoundedCornerShape(14.dp)).background(if (on) Palette.GlowSoft else Palette.Faint)
+                                .border(1.dp, if (on) Palette.Accent else Palette.Line, RoundedCornerShape(14.dp)).clickable { core.usePcModel(name); onDismiss() }
+                                .padding(horizontal = 12.dp, vertical = 11.dp),
+                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Box(Modifier.size(9.dp).clip(CircleShape).background(Palette.Ok))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(name, color = Palette.Text)
+                                Text("runs on your PC, no key needed", color = Palette.Muted, fontSize = 12.5.sp)
+                            }
+                            if (on) Text("✓", color = Palette.Accent)
+                        }
+                    }
+                }
                 Hint("Tap a model to stay on it until you turn it off. Tap the ✓ or arrow to pick how long instead.")
                 SheetHeading("Thinking")
                 SelectBox(think, ModelSheet.thinkLevels, enabled = ModelSheet.thinkEnabled(core.provider), modifier = Modifier.fillMaxWidth()) { think = it; core.settings.thinkLevel = it }

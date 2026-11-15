@@ -12,7 +12,7 @@ class PcChat(private val ask: (JSONObject, Long, () -> Boolean) -> JSONObject, p
     override fun chat(model: String, messages: JSONArray, tools: JSONArray?, onToken: (String) -> Unit, cancelled: () -> Boolean): ChatResult {
         val deep = AutoMode.kindOf(AutoMode.lastUserText(messages)) != Task.CASUAL
         val reply = try {
-            ask(JSONObject().put("t", "pc_chat").put("messages", messages).put("deep", deep), timeoutMs, cancelled)
+            ask(JSONObject().put("t", "pc_chat").put("messages", messages).put("deep", deep).apply { if (model.isNotBlank() && model != "ollama") put("model", model) }, timeoutMs, cancelled)
         } catch (e: Cancelled) {
             throw e
         } catch (e: Exception) {

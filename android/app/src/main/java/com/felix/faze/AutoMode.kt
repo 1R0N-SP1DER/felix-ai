@@ -47,8 +47,8 @@ object AutoMode {
         return found ?: fallback
     }
 
-    private val casualOrder = listOf("groq", "openrouter", "gemini", "nvidia", "custom")
-    private val heavyOrder = listOf("gemini", "groq", "openrouter", "nvidia", "custom")
+    private val casualOrder = listOf("groq", "openrouter", "gemini", "nvidia")
+    private val heavyOrder = listOf("gemini", "groq", "openrouter", "nvidia")
 
     /**
      * What to try, in order. Online: chat prefers Groq and OpenRouter, code and deep work prefers Gemini, and a provider that is out of

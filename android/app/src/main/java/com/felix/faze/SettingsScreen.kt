@@ -488,14 +488,6 @@ private fun AdvancedTab(core: FazeCore) {
             SettingRow("${info.label} key") { FieldBox(pKey, true, Modifier.widthIn(max = 190.dp)) { pKey = it; s.setCompatKey(info.id, it) } }
             SettingRow("${info.label} model", "Default ${info.defaultModel}; or pick from the model button") { FieldBox(pModel, false, Modifier.widthIn(max = 190.dp)) { pModel = it; s.setCompatModel(info.id, it) } }
         }
-        var cName by remember { mutableStateOf(s.customName.let { if (it == "Custom") "" else it }) }
-        var cUrl by remember { mutableStateOf(s.customUrl) }
-        var cKey by remember { mutableStateOf(s.customKey) }
-        var cModel by remember { mutableStateOf(s.customModel) }
-        SettingRow("Custom provider name", "Any service that speaks the OpenAI chat format") { FieldBox(cName, false, Modifier.widthIn(max = 190.dp)) { cName = it; s.customName = it } }
-        SettingRow("Custom address", "For example https://api.mistral.ai/v1 or https://api.openai.com/v1") { FieldBox(cUrl, false, Modifier.widthIn(max = 190.dp)) { cUrl = it; s.customUrl = it } }
-        SettingRow("Custom key", "Optional for a server on this phone (http://127.0.0.1:port/v1)") { FieldBox(cKey, true, Modifier.widthIn(max = 190.dp)) { cKey = it; s.customKey = it } }
-        SettingRow("Custom model", "The model name, or pick it from the model button after the address is set") { FieldBox(cModel, false, Modifier.widthIn(max = 190.dp)) { cModel = it; s.customModel = it } }
         SettingRow("Picture model", "Makes pictures when you ask, using your Gemini key. Default ${GeminiImages.DEFAULT_MODEL}") { FieldBox(imageModel, false, Modifier.widthIn(max = 190.dp)) { imageModel = it; s.imageModel = it } }
         SettingRow("Tavily key", "Web search") { FieldBox(tavily, true, Modifier.widthIn(max = 190.dp)) { tavily = it; s.tavily = it } }
         SettingRow("Your name") { FieldBox(user, false, Modifier.widthIn(max = 190.dp)) { user = it; s.user = it } }

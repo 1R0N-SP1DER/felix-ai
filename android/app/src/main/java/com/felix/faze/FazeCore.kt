@@ -42,6 +42,34 @@ class FazeCore(private val app: Application) : EngineListener {
         Thread { try { if (on) link.start() else link.stop() } catch (e: Exception) { main.post { status = "Could not open the link: " + (e.message ?: "") } }; main.post { linkTick++ } }.start()
     }
 
+    /** The models the connected computer's Ollama has, for the model sheet. Empty when no computer is connected. */
+    var pcModels by mutableStateOf<List<String>>(emptyList())
+        private set
+    var pcModelsLoading by mutableStateOf(false)
+        private set
+    var pcModelsError by mutableStateOf("")
+        private set
+
+    val pcConnected: Boolean get() { linkTick; return link.connected().isNotEmpty() }
+
+    fun loadPcModels() {
+        if (pcModelsLoading || link.connected().isEmpty()) return
+        pcModelsLoading = true
+        pcModelsError = ""
+        Thread {
+            try {
+                val r = link.ask(link.connected().first(), JSONObject().put("t", "pc_models"), 8000)
+                val names = PcModels.parse(r)
+                main.post { pcModels = names; pcModelsError = if (names.isEmpty()) r.optString("message", "Ollama on the PC has no models. Is it running?") else ""; pcModelsLoading = false }
+            } catch (e: Exception) {
+                main.post { pcModelsError = "could not reach the PC: ${e.message ?: ""}"; pcModelsLoading = false }
+            }
+        }.start()
+    }
+
+    /** Use one of the PC's models straight up, until another is chosen. */
+    fun usePcModel(name: String) { settings.setModelFor("pc", name); modelRev++; useProvider("pc") }
+
     fun startPairing() { linkCode = link.openPairing(); linkTick++ }
 
     fun stopPairing() { link.closePairing(); linkCode = ""; linkTick++ }
@@ -109,7 +137,7 @@ class FazeCore(private val app: Application) : EngineListener {
         val text = AutoMode.lastUserText(messages)
         val task = AutoMode.kindOf(text, Effort.norm(settings.effortLevel))
         val scanned = modelLists["offline"].orEmpty().map { it.id }
-        val keys = listOf("groq", "gemini", "openrouter", "nvidia", "custom").filter { settings.hasKey(it) }.toSet()
+        val keys = listOf("groq", "gemini", "openrouter", "nvidia").filter { settings.hasKey(it) }.toSet()
         val plan = AutoMode.plan(
             task, Online.available(app), keys, { limits.isResting(it) }, { settings.modelFor(it) },
             AutoMode.offlineFor(Task.CASUAL, settings.autoCasualModel, settings.autoDeepModel, scanned, settings.offlineModel),
@@ -249,14 +277,13 @@ class FazeCore(private val app: Application) : EngineListener {
                 ),
                 *OpenAiProviders.all.values.map { info -> info.id to (RemoteClient(transport, info.base, { settings.compatKey(info.id) }, info.label) as ChatApi) }.toTypedArray(),
                 "pc" to PcChat({ msg, ms, cancelled -> link.ask(link.connected().first(), msg, ms, cancelled) }),
-                "custom" to CustomChat(transport, { settings.customUrl }, { settings.customKey }, { settings.customName }),
                 "openrouter" to OpenRouterChat(
                     RemoteClient(transport, OpenRouter.BASE, { settings.openrouterKey }, "OpenRouter"),
                     { transport.get("${OpenRouter.BASE}/models", emptyMap(), 15000).body },
                     { settings.openrouterModel = it },
                 ),
             ),
-            { Fallbacks.plan(settings.provider, listOf("groq", "gemini", "openrouter", "nvidia", "custom").filter { settings.hasKey(it) }.toSet()) { settings.modelFor(it) } },
+            { Fallbacks.plan(settings.provider, listOf("groq", "gemini", "openrouter", "nvidia").filter { settings.hasKey(it) }.toSet()) { settings.modelFor(it) } },
             { text -> main.post { status = text } },
             planFor = { messages -> if (settings.provider == "auto") autoPlan(messages) else null },
             onLimit = { p, e -> limits.note(p, e); activity.add("auto", "${ModelSheet.label(p)} is out of allowance for a while: ${(e.message ?: "").take(100)}") },
