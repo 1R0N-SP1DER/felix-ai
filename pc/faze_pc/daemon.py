@@ -28,7 +28,7 @@ class Daemon:
         self.in_task = False
         self.chat_lock = threading.Lock()  # one conversation at a time on the engine
         self.listeners = set()
-        self.peer = PeerRequests(self.config, runner=self.run_task)
+        self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log)
         self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_request=lambda pid, msg: self.peer.handle(pid, msg), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
 
     def ask_phone(self, task):

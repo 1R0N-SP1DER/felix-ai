@@ -43,3 +43,9 @@ Handing over tasks
 PC models
   Phone asks PC: {"t":"pc_models","rid":n} -> {"t":"pc_models_ok","models":["name",..],"re":n} (Ollama's installed models) or {"t":"error","message","re":n}
   pc_chat may carry "model": that Ollama model is used instead of the chat/deep default. The phone's model sheet shows these under "Your PC" while a PC is connected.
+
+Shared folders (read only; phone asks, PC answers)
+  {"t":"fs_roots"}                            -> {"t":"fs_roots_ok","roots":[{"id","name"}]}      the folders listed in the PC settings that exist
+  {"t":"fs_list","root","path"}               -> {"t":"fs_list_ok","entries":[{"name","dir","size","mtime"}]}   folders first, up to 2000, links that leave the folder are hidden
+  {"t":"fs_read","root","path","offset","len"} -> {"t":"fs_read_ok","data":base64,"size","eof"}   up to 512 KiB a time
+A path is resolved with symlinks and must stay inside its folder. The phone shows these in its Files picker under "Your PC".
