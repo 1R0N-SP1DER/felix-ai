@@ -74,6 +74,8 @@ fun DevicesScreen(core: FazeCore, onBack: () -> Unit) {
                 SettingRow("Allow computers", "Opens a port on this phone so a paired computer can connect. Everything after pairing is encrypted.", last = !on) {
                     FazeSwitch(on, { core.setLink(it) })
                 }
+                var screen by remember { mutableStateOf(core.settings.linkScreen) }
+                if (on) SettingRow("Allow screen view and control", "Lets a paired computer see this screen and tap, swipe and type on it. Needs root, and never works while the phone is locked.") { FazeSwitch(screen, { screen = it; core.settings.linkScreen = it }) }
                 if (on) {
                     if (core.linkCode.isEmpty()) {
                         WideButton("Show a pairing code") { core.startPairing() }
