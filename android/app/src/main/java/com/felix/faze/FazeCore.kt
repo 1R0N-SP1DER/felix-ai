@@ -35,7 +35,7 @@ class FazeCore(private val app: Application) : EngineListener {
         private set
     var linkCode by mutableStateOf("")
         private set
-    val link = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = "" } })
+    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = "" } })
 
     fun setLink(on: Boolean) {
         settings.linkOn = on
