@@ -46,7 +46,7 @@ class PcFiles(private val ask: (String, JSONObject) -> JSONObject) {
             while (true) {
                 val r = checked(ask(pc, JSONObject().put("t", "fs_read").put("root", folder).put("path", path).put("offset", offset).put("len", 524288)), "fs_read_ok")
                 if (r.optLong("size") > MAX_DOWNLOAD) throw IOException("that file is too big to open from the computer (limit 200 MB)")
-                val bytes = android.util.Base64.decode(r.getString("data"), android.util.Base64.DEFAULT)
+                val bytes = java.util.Base64.getDecoder().decode(r.getString("data"))
                 out.write(bytes)
                 offset += bytes.size
                 if (r.getBoolean("eof")) return
