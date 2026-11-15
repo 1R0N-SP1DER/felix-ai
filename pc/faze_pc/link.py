@@ -126,6 +126,10 @@ class Session:
 
     def close(self):
         try:
+            self.sock.shutdown(socket.SHUT_RDWR)  # wakes a thread that is waiting to read
+        except OSError:
+            pass
+        try:
             self.sock.close()
         except OSError:
             pass

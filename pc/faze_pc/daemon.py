@@ -11,6 +11,7 @@ from . import link
 from .linkmanager import LinkManager
 from .engine import Engine
 from .store import Store
+from .peer import PeerRequests
 from .sync import Syncer
 
 
@@ -24,7 +25,8 @@ class Daemon:
         self.store = store or Store(cfg.data_dir())
         self.engine = engine or Engine(self.config, self.store)
         self.listeners = set()
-        self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
+        self.peer = PeerRequests(self.config)
+        self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_request=lambda pid, msg: self.peer.handle(pid, msg), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
 
     def broadcast(self, ev):
         for emit in list(self.listeners):

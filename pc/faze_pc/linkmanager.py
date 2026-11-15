@@ -1,5 +1,6 @@
 """Keeps the PC connected to its paired phone: finds it (saved address, the default gateway for USB or Bluetooth tethering, then a
 broadcast on the network), reconnects when it drops, and lets the rest of the daemon send it requests."""
+import queue
 import threading
 import time
 
@@ -7,7 +8,7 @@ from . import link
 
 
 class LinkManager:
-    def __init__(self, devices, connect=link.connect, discover=link.discover, gateway=link.gateway, interval=5.0, keepalive=10.0, pair_fn=link.pair, syncer=None, sync_every=30.0, on_synced=None):
+    def __init__(self, devices, connect=link.connect, discover=link.discover, gateway=link.gateway, interval=5.0, keepalive=10.0, pair_fn=link.pair, syncer=None, sync_every=30.0, on_synced=None, on_request=None):
         self.devices = devices
         self._connect = connect
         self._discover = discover
@@ -21,7 +22,11 @@ class LinkManager:
         self.keepalive = keepalive
         self.sessions = {}   # phone id -> Session
         self.errors = {}     # phone id -> last problem, shown in the Devices list
-        self.locks = {}      # phone id -> lock: one request at a time per phone
+        self.send_locks = {}  # phone id -> lock: one message written at a time
+        self.pending = {}     # (phone id, request number) -> queue waiting for the answer
+        self.on_request = on_request  # called with (phone id, message) for what the phone asks; returns the reply
+        self._lock = threading.Lock()
+        self._rid = 0
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread = None
@@ -36,9 +41,6 @@ class LinkManager:
         self._wake.set()
         for s in list(self.sessions.values()):
             s.close()
-
-    def _lock(self, pid):
-        return self.locks.setdefault(pid, threading.Lock())
 
     # --- what the window shows
     def list(self):
@@ -55,9 +57,9 @@ class LinkManager:
         return phone
 
     def forget(self, pid):
-        s = self.sessions.pop(pid, None)
+        s = self.sessions.get(pid)
         if s:
-            s.close()
+            self._drop(pid, "forgotten", s)
         self.errors.pop(pid, None)
         return self.devices.forget(pid)
 
@@ -68,26 +70,78 @@ class LinkManager:
             targets.append(gw)
         return self._discover(targets=tuple(targets))
 
-    # --- talking to a connected phone
+    # --- talking to a connected phone. The link is two-way: either side can ask. A message with "rid" is answered with the same number in "re".
     def request(self, pid, msg, timeout=15):
-        """Sends one message and returns the reply. Raises LinkError if the phone is not connected or does not answer."""
+        """Asks the phone something and returns its answer. Raises LinkError if it is not connected or does not answer."""
         sess = self.sessions.get(pid)
         if not sess:
             raise link.LinkError("the phone is not connected")
-        with self._lock(pid):
+        with self._lock:
+            self._rid += 1
+            rid = self._rid
+        q = queue.Queue()
+        self.pending[(pid, rid)] = q
+        try:
+            self._send(pid, sess, dict(msg, rid=rid))
             try:
-                sess.sock.settimeout(timeout)
-                sess.send(msg)
-                return sess.recv()
-            except Exception as e:
-                self._drop(pid, "lost the connection: %s" % e)
+                reply = q.get(timeout=timeout)
+            except queue.Empty:
+                raise link.LinkError("the phone did not answer in time")
+            if reply is None:
                 raise link.LinkError("lost the connection to the phone")
+            return reply
+        finally:
+            self.pending.pop((pid, rid), None)
 
-    def _drop(self, pid, why):
-        s = self.sessions.pop(pid, None)
-        if s:
-            s.close()
+    def _send(self, pid, sess, msg):
+        try:
+            with self.send_locks.setdefault(pid, threading.Lock()):
+                sess.send(msg)
+        except Exception as e:
+            self._drop(pid, "lost the connection: %s" % e, sess)
+            raise link.LinkError("lost the connection to the phone")
+
+    def _drop(self, pid, why, sess=None):
+        cur = self.sessions.get(pid)
+        if cur is None or (sess is not None and cur is not sess):
+            return  # already dropped, or a newer connection replaced it
+        self.sessions.pop(pid, None)
+        cur.close()
         self.errors[pid] = why
+        for (p, rid), q in list(self.pending.items()):
+            if p == pid:
+                q.put(None)
+
+    def _read(self, pid, sess):
+        """Reads everything the phone sends: answers go to whoever asked, and questions go to on_request."""
+        while True:
+            try:
+                msg = sess.recv()
+            except Exception as e:
+                self._drop(pid, "lost the connection: %s" % e, sess)
+                return
+            if "re" in msg:
+                q = self.pending.get((pid, msg["re"]))
+                if q:
+                    q.put(msg)
+            else:
+                threading.Thread(target=self._answer, args=(pid, sess, msg), daemon=True).start()
+
+    def _answer(self, pid, sess, msg):
+        if msg.get("t") == "ping":
+            reply = {"t": "pong"}
+        else:
+            try:
+                reply = self.on_request(pid, msg) if self.on_request else None
+            except Exception as e:
+                reply = {"t": "error", "message": str(e)[:200]}
+        if reply is not None:
+            if "rid" in msg:
+                reply = dict(reply, re=msg["rid"])
+            try:
+                self._send(pid, sess, reply)
+            except link.LinkError:
+                pass
 
     # --- the background loop
     def _addresses(self, pid, p):
@@ -111,6 +165,7 @@ class LinkManager:
                 last = "%s: %s" % (addr, e)
                 continue
             self.sessions[pid] = sess
+            threading.Thread(target=self._read, args=(pid, sess), daemon=True, name="link-read").start()
             self.errors.pop(pid, None)
             self.devices.remember_address(pid, addr, port)
             return
