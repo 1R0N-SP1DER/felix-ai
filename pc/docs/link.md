@@ -39,3 +39,7 @@ Handing over tasks
     The PC runs it as a new chat ("(From your phone) ..."). Approval cards show in the PC windows. One chat at a time: a busy PC answers with an error.
   PC asks phone:  {"t":"phone_task","task":text,"rid":n} -> {"t":"phone_task_ok","note","re":n} or {"t":"error","message","re":n}
     The phone starts a new chat with the task and answers at once; the result is in that chat, which syncs back. The phone's own approvals apply.
+
+PC models
+  Phone asks PC: {"t":"pc_models","rid":n} -> {"t":"pc_models_ok","models":["name",..],"re":n} (Ollama's installed models) or {"t":"error","message","re":n}
+  pc_chat may carry "model": that Ollama model is used instead of the chat/deep default. The phone's model sheet shows these under "Your PC" while a PC is connected.
