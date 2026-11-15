@@ -166,7 +166,13 @@ def run_ui(floating=False):
     shot = os.environ.get("FAZE_SCREENSHOT")
     if shot:
         def grab():
-            root.grabWindow().save(shot)
+            try:
+                ok = root.grabWindow().save(shot)
+                sys.stderr.write("screenshot %s: %s\n" % (shot, "saved" if ok else "failed"))
+            except Exception as e:  # a failure here must end the run, not hang it
+                import traceback
+                traceback.print_exc()
+                sys.stderr.write("screenshot failed: %s\n" % e)
             app.quit()
         QTimer.singleShot(1500, grab)
     return app.exec()

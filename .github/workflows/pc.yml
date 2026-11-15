@@ -11,6 +11,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: pc
@@ -35,8 +36,8 @@ jobs:
           FAZE_DEMO: "1"
         run: |
           mkdir -p shots
-          FAZE_SCREENSHOT=shots/desktop.png python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(False))"
-          FAZE_SCREENSHOT=shots/floating.png python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(True))"
+          FAZE_SCREENSHOT=shots/desktop.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(False))"
+          FAZE_SCREENSHOT=shots/floating.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(True))"
           ls -l shots
 
       - uses: actions/upload-artifact@v4
