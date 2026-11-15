@@ -56,12 +56,36 @@ class LinkServer(
     @Volatile private var tries = 0
     private val live = Collections.synchronizedMap(HashMap<String, Socket>())
     private val kinds = Collections.synchronizedMap(HashMap<String, String>())
+    private val sessions = Collections.synchronizedMap(HashMap<String, LinkSession>())
+    private val waiting = Collections.synchronizedMap(HashMap<String, java.util.concurrent.ArrayBlockingQueue<JSONObject>>())
+    private val rids = java.util.concurrent.atomic.AtomicLong(1)
 
     val running: Boolean get() = server != null
     val boundPort: Int get() = server?.localPort ?: -1
 
     /** How a connected computer reaches the phone: Wi-Fi, USB, Bluetooth, hotspot. */
     fun connectionOf(id: String): String = kinds[id] ?: ""
+
+    /** Asks a connected computer to do something and waits for its answer. Either side can ask: a message with "rid" is answered with the same number in "re". */
+    fun ask(id: String, msg: JSONObject, timeoutMs: Long, cancelled: () -> Boolean = { false }): JSONObject {
+        val s = sessions[id] ?: throw java.io.IOException("that computer is not connected")
+        val rid = rids.getAndIncrement()
+        val key = "$id#$rid"
+        val q = java.util.concurrent.ArrayBlockingQueue<JSONObject>(1)
+        waiting[key] = q
+        try {
+            s.send(JSONObject(msg.toString()).put("rid", rid))
+            var left = timeoutMs
+            while (left > 0) {
+                if (cancelled()) throw Cancelled()
+                q.poll(minOf(left, 100L), java.util.concurrent.TimeUnit.MILLISECONDS)?.let { return it }
+                left -= 100
+            }
+            throw java.io.IOException("the computer did not answer in time")
+        } finally {
+            waiting.remove(key)
+        }
+    }
 
     fun connected(): Set<String> = synchronized(live) { live.keys.toSet() }
 
@@ -99,11 +123,12 @@ class LinkServer(
         discovery = null
         closePairing()
         synchronized(live) { live.values.forEach { try { it.close() } catch (e: Exception) {} }; live.clear() }
+        sessions.clear()
         onChange()
     }
 
     /** Drops a computer's connection (used when it is removed). */
-    fun drop(id: String) { synchronized(live) { live.remove(id) }?.let { try { it.close() } catch (e: Exception) {} }; onChange() }
+    fun drop(id: String) { sessions.remove(id); synchronized(live) { live.remove(id) }?.let { try { it.close() } catch (e: Exception) {} }; onChange() }
 
     private fun answerLoop(d: DatagramSocket) {
         val buf = ByteArray(256)
@@ -191,16 +216,21 @@ class LinkServer(
         s.send(JSONObject().put("t", "ready").put("id", deviceId).put("name", deviceName()))
         kinds[id] = LinkNet.kindOf(c.localAddress)
         synchronized(live) { live.put(id, c)?.let { try { it.close() } catch (e: Exception) {} } }
+        sessions[id] = s
         onChange()
         c.soTimeout = 0
         try {
             while (true) {
                 val msg = s.recv()
+                if (msg.has("re")) { // an answer to something this phone asked
+                    waiting["$id#${msg.optLong("re")}"]?.offer(msg)
+                    continue
+                }
                 val reply = if (msg.optString("t") == "ping") JSONObject().put("t", "pong") else handler(id, msg)
-                if (reply != null) s.send(reply)
+                if (reply != null) s.send(if (msg.has("rid")) reply.put("re", msg.optLong("rid")) else reply)
             }
         } finally {
-            synchronized(live) { if (live[id] === c) live.remove(id) }
+            synchronized(live) { if (live[id] === c) { live.remove(id); sessions.remove(id) } }
             onChange()
         }
     }

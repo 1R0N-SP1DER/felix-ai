@@ -114,6 +114,7 @@ class FazeCore(private val app: Application) : EngineListener {
             task, Online.available(app), keys, { limits.isResting(it) }, { settings.modelFor(it) },
             AutoMode.offlineFor(Task.CASUAL, settings.autoCasualModel, settings.autoDeepModel, scanned, settings.offlineModel),
             AutoMode.offlineFor(task.let { if (it == Task.CASUAL) Task.DEEP else it }, settings.autoCasualModel, settings.autoDeepModel, scanned, settings.offlineModel),
+            pc = link.connected().isNotEmpty(),
         )
         activity.add("auto", "${task.name.lowercase()} request: ${plan.take(3).joinToString(", ") { it.provider }}")
         return plan
@@ -237,6 +238,7 @@ class FazeCore(private val app: Application) : EngineListener {
                     localServer, { settings.offlineModel }, { text -> main.post { status = text } },
                 ),
                 *OpenAiProviders.all.values.map { info -> info.id to (RemoteClient(transport, info.base, { settings.compatKey(info.id) }, info.label) as ChatApi) }.toTypedArray(),
+                "pc" to PcChat({ msg, ms, cancelled -> link.ask(link.connected().first(), msg, ms, cancelled) }),
                 "custom" to CustomChat(transport, { settings.customUrl }, { settings.customKey }, { settings.customName }),
                 "openrouter" to OpenRouterChat(
                     RemoteClient(transport, OpenRouter.BASE, { settings.openrouterKey }, "OpenRouter"),

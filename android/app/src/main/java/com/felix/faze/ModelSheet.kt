@@ -11,7 +11,7 @@ object ModelSheet {
     val thinkLevels = listOf("auto" to "Auto", "off" to "Off", "low" to "Low", "medium" to "Medium", "high" to "High", "max" to "Max")
     const val NOT_YET = "not in the app yet"
 
-    fun label(mode: String): String = names[mode] ?: mode
+    fun label(mode: String): String = names[mode] ?: if (mode == "pc") "Your PC" else mode
 
     val live = listOf("auto", "groq", "gemini", "openrouter", "nvidia", "custom", "offline")
 
