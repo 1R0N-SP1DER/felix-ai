@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import platform
 import secrets
 import socket
 import struct
@@ -141,7 +142,7 @@ def pair(address, code, pc_id, pc_name, port=PORT, timeout=8):
     s = socket.create_connection((address, port), timeout=timeout)
     try:
         nc = secrets.token_bytes(16)
-        send_json(s, {"t": "pair", "v": VERSION, "id": pc_id, "name": pc_name, "nonce": nc.hex()})
+        send_json(s, {"t": "pair", "v": VERSION, "id": pc_id, "name": pc_name, "os": platform.system().lower(), "nonce": nc.hex()})
         r = recv_json(s)
         if r.get("t") == "error":
             raise LinkError(r.get("message", "the phone refused"))
@@ -166,7 +167,7 @@ def connect(address, secret_hex, pc_id, port=PORT, timeout=8):
     s = socket.create_connection((address, port), timeout=timeout)
     try:
         nc = secrets.token_bytes(16)
-        send_json(s, {"t": "hello", "v": VERSION, "id": pc_id, "nonce": nc.hex()})
+        send_json(s, {"t": "hello", "v": VERSION, "id": pc_id, "os": platform.system().lower(), "nonce": nc.hex()})
         r = recv_json(s)
         if r.get("t") == "error":
             raise LinkError(r.get("message", "the phone refused"))

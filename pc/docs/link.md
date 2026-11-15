@@ -7,7 +7,7 @@ Frames: 4 bytes big-endian length, then the payload (max 1 MiB). Handshake messa
 
 Pairing (the phone is showing a 10-character code from the alphabet ABCDEFGHJKLMNPQRSTUVWXYZ23456789, open for 3 minutes, 5 tries):
   K = PBKDF2-HMAC-SHA256(code, salt "faze-pair-v1", 100000 rounds, 32 bytes)
-  PC    -> {"t":"pair","v":1,"id":pcId,"name":..,"nonce":nc(16 bytes hex)}
+  PC    -> {"t":"pair","v":1,"id":pcId,"name":..,"os":"linux","nonce":nc(16 bytes hex)}
   phone -> {"t":"pair_ok","nonce":np,"proof":HMAC(K, "phone"|nc|np)}
   PC    -> {"t":"pair_confirm","proof":HMAC(K, "pc"|np|nc)}
   phone -> {"t":"secret","id":phoneId,"name":..,"ct":AES-GCM(K, nonce "SECRET"+6 zero bytes, S)}   S = 32 random bytes, kept by both sides
