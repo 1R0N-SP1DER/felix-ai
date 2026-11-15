@@ -383,6 +383,8 @@ ApplicationWindow {
                         }
                     }
                 }
+                Text { text: "Folders shared with your phone (read only, comma separated)"; color: win.dim; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                TextField { Layout.fillWidth: true; text: win.cfg.share_folders || ""; onEditingFinished: bridge.setSetting("share_folders", text) }
                 Text { text: "Ollama chat model"; color: win.dim; font.pixelSize: 12 }
                 TextField { Layout.fillWidth: true; text: win.cfg.ollama_chat_model || ""; onEditingFinished: bridge.setSetting("ollama_chat_model", text) }
                 Text { text: "Ollama code and deep model"; color: win.dim; font.pixelSize: 12 }

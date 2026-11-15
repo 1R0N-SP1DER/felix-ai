@@ -23,6 +23,7 @@ DEFAULTS = {
     "ollama_deep_model": "qwen2.5:1.5b",
     "effort": "medium",
     "ollama_tools": False,
+    "share_folders": "~/Documents, ~/Downloads, ~/Pictures",
 }
 
 

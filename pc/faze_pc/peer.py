@@ -3,6 +3,7 @@ import json
 import urllib.request
 
 from . import providers
+from .fs import FsError, Shares
 
 
 def clean(messages):
@@ -20,7 +21,9 @@ def clean(messages):
 
 
 class PeerRequests:
-    def __init__(self, config, streamer=providers.stream_chat, runner=None, lister=None):
+    def __init__(self, config, streamer=providers.stream_chat, runner=None, lister=None, log=None):
+        self.shares = Shares(config)
+        self.log = log or (lambda kind, text: None)
         self.lister = lister or self._ollama_models
         self.config = config
         self.streamer = streamer
@@ -30,6 +33,8 @@ class PeerRequests:
         t = msg.get("t")
         if t == "pc_chat":
             return self.chat(msg)
+        if t in ("fs_roots", "fs_list", "fs_read"):
+            return self.files(msg)
         if t == "pc_models":
             try:
                 return {"t": "pc_models_ok", "models": self.lister()}
@@ -42,6 +47,20 @@ class PeerRequests:
             ok, text = self.runner(task)
             return {"t": "pc_task_ok" if ok else "error", "text": text, "message": text}
         return {"t": "error", "message": "this PC does not know %r" % t}
+
+    def files(self, msg):
+        t = msg["t"]
+        try:
+            if t == "fs_roots":
+                return {"t": "fs_roots_ok", "roots": [{"id": rid, "name": name} for rid, name, _ in self.shares.roots()]}
+            if t == "fs_list":
+                return {"t": "fs_list_ok", "entries": self.shares.list(str(msg.get("root", "")), msg.get("path", ""))}
+            offset = int(msg.get("offset", 0))
+            if offset == 0:
+                self.log("share", "phone reads %s/%s" % (msg.get("root", ""), msg.get("path", "")))
+            return dict(self.shares.read(str(msg.get("root", "")), msg.get("path", ""), offset, msg.get("len", 0) or 524288), t="fs_read_ok")
+        except (FsError, ValueError, TypeError) as e:
+            return {"t": "error", "message": str(e)}
 
     def _ollama_models(self):
         url = providers.base_for(self.config, "ollama").rsplit("/v1", 1)[0] + "/api/tags"
