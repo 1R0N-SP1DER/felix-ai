@@ -37,8 +37,8 @@ ApplicationWindow {
     ListModel { id: msgs }
     ListModel { id: activityModel }
 
-    function addMsg(role, text, reqId) { msgs.append({ "role": role, "text": text, "reqId": reqId || "", "state": "pending" }); list.positionViewAtEnd() }
-    function settle(reqId, state) { for (var i = 0; i < msgs.count; i++) if (msgs.get(i).reqId === reqId) msgs.setProperty(i, "state", state) }
+    function addMsg(role, text, reqId) { msgs.append({ "role": role, "text": text, "reqId": reqId || "", "stage": "pending" }); list.positionViewAtEnd() }
+    function settle(reqId, state) { for (var i = 0; i < msgs.count; i++) if (msgs.get(i).reqId === reqId) msgs.setProperty(i, "stage", state) }
 
     Connections {
         target: bridge
@@ -60,7 +60,7 @@ ApplicationWindow {
         function onChatsChanged(c) { win.chats = c }
         function onConfigChanged(c) { win.cfg = c }
         function onChatChanged(id) { win.currentChat = id; if (id === "") msgs.clear() }
-        function onHistoryLoaded(h) { msgs.clear(); for (var i = 0; i < h.length; i++) msgs.append({ "role": h[i].role, "text": h[i].content, "reqId": "", "state": "" }); list.positionViewAtEnd() }
+        function onHistoryLoaded(h) { msgs.clear(); for (var i = 0; i < h.length; i++) msgs.append({ "role": h[i].role, "text": h[i].content, "reqId": "", "stage": "" }); list.positionViewAtEnd() }
     }
 
     Shortcut { sequence: "Escape"; enabled: win.floating; onActivated: win.hide() }
@@ -178,7 +178,7 @@ ApplicationWindow {
                             id: bubble
                             anchors.right: mine ? parent.right : undefined
                             anchors.left: mine ? undefined : parent.left
-                            width: Math.min(body.implicitWidth + 28, list.width * 0.82)
+                            width: Math.min(Math.max(body.implicitWidth + 28, role === "approve" ? 230 : 0), list.width * 0.82)
                             height: body.implicitHeight + 22 + (role === "approve" ? 48 : 0)
                             radius: 18
                             color: role === "user" ? "#2482AFFF" : (role === "error" ? "#22FF7A8A" : (role === "approve" ? "#1AFFC857" : win.surface))
@@ -190,18 +190,18 @@ ApplicationWindow {
                                 anchors.leftMargin: 14; anchors.bottomMargin: 10
                                 spacing: 8
                                 Rectangle {
-                                    visible: state === "pending"
+                                    visible: stage === "pending"
                                     width: 84; height: 30; radius: 15; color: win.accent
                                     Text { anchors.centerIn: parent; text: "Allow"; color: win.ink; font.bold: true }
                                     MouseArea { anchors.fill: parent; onClicked: { bridge.answer(reqId, true); win.settle(reqId, "allowed") } }
                                 }
                                 Rectangle {
-                                    visible: state === "pending"
+                                    visible: stage === "pending"
                                     width: 84; height: 30; radius: 15; color: "#10FFFFFF"; border.width: 1; border.color: win.line
                                     Text { anchors.centerIn: parent; text: "Deny"; color: win.dim }
                                     MouseArea { anchors.fill: parent; onClicked: { bridge.answer(reqId, false); win.settle(reqId, "denied") } }
                                 }
-                                Text { visible: state !== "pending"; text: state === "allowed" ? "Allowed" : "Denied"; color: win.muted; font.pixelSize: 12; height: 30; verticalAlignment: Text.AlignVCenter }
+                                Text { visible: stage !== "pending"; text: stage === "allowed" ? "Allowed" : "Denied"; color: win.muted; font.pixelSize: 12; height: 30; verticalAlignment: Text.AlignVCenter }
                             }
                             Text {
                                 id: body
