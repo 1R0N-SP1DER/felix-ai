@@ -314,6 +314,19 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = PermissionPolicy.phoneMode(text("phone_control"))
         set(value) = put("phone_control", PermissionPolicy.phoneMode(value))
 
+    /** Whether computers may connect to this phone (Settings > Devices). Off until asked for: it opens a port. */
+    var linkOn: Boolean
+        get() = prefs.getBoolean("link_on", false)
+        set(value) = prefs.edit().putBoolean("link_on", value).apply()
+
+    var linkPeers: String
+        get() = text("link_peers")
+        set(value) = prefs.edit().putString("link_peers", value).apply()
+
+    /** This phone's identity on the link, made once. */
+    val linkId: String
+        get() = text("link_id").ifBlank { LinkCrypto.hex(LinkCrypto.randomBytes(8)).also { put("link_id", it) } }
+
     /** While the phone is locked, Faze only uses harmless tools and does not use memories. */
     var limitWhenLocked: Boolean
         get() = prefs.getBoolean("limit_locked", true)

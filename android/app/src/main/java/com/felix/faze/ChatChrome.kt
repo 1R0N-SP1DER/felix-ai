@@ -59,7 +59,7 @@ import androidx.compose.ui.unit.sp
 
 /** The top bar of the web UI (#topbar): menu, model chip, status chips on the right, activity log and stop-speaking buttons. */
 @Composable
-fun TopBar(core: FazeCore, onMenu: () -> Unit, onModel: () -> Unit) {
+fun TopBar(core: FazeCore, onMenu: () -> Unit, onActivity: () -> Unit, onModel: () -> Unit) {
     val context = LocalContext.current
     val chips = ModelSheet.chips(core.provider, core.settings.hasKey(core.provider), core.settings.wakeEnabled, core.modelReady)
     Row(
@@ -80,7 +80,7 @@ fun TopBar(core: FazeCore, onMenu: () -> Unit, onModel: () -> Unit) {
         Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End), verticalAlignment = Alignment.CenterVertically) {
             for (c in chips) StatusChipView(c)
         }
-        IconBox("≡") { soonToast(context) }
+        IconBox("≡") { onActivity() }
         if (core.speaking || core.busy) IconBox("■") { core.stopSpeaking() }
     }
 }
