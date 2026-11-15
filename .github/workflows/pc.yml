@@ -41,6 +41,10 @@ jobs:
           FAZE_SCREENSHOT=shots/floating.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(True))"
           ls -l shots
 
+      - name: Print the screenshots into the log, so they can be read without downloading
+        run: |
+          for f in shots/*.png; do echo "BEGIN64 $f"; base64 -w0 "$f"; echo; echo "END64 $f"; done
+
       - uses: actions/upload-artifact@v4
         with:
           name: pc-screenshots
