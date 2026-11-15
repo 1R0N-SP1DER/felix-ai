@@ -62,7 +62,7 @@ private fun startOfToday(): Long = Calendar.getInstance().apply {
  * Width is min(86% of the screen, 330 dp), as on the page for phones.
  */
 @Composable
-fun ChatDrawer(core: FazeCore, onNew: () -> Unit, onOpen: (String) -> Unit, onSettings: () -> Unit, onClose: () -> Unit) {
+fun ChatDrawer(core: FazeCore, onNew: () -> Unit, onOpen: (String) -> Unit, onSettings: () -> Unit, onClose: () -> Unit, onDevices: () -> Unit = {}, onActivity: () -> Unit = {}) {
     val context = LocalContext.current
     val cfg = LocalConfiguration.current
     var query by remember { mutableStateOf("") }
@@ -158,8 +158,15 @@ fun ChatDrawer(core: FazeCore, onNew: () -> Unit, onOpen: (String) -> Unit, onSe
             ) {
                 Text("Settings", color = Palette.Dim, modifier = Modifier.clip(RoundedCornerShape(14.dp)).clickable { onSettings() }.padding(horizontal = 12.dp, vertical = 9.dp))
                 Box(modifier = Modifier.weight(1f))
+                var menu by remember { mutableStateOf(false) }
+                Box {
+                androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    androidx.compose.material3.DropdownMenuItem(text = { Text("Devices") }, onClick = { menu = false; onDevices() })
+                    androidx.compose.material3.DropdownMenuItem(text = { Text("Activity log") }, onClick = { menu = false; onActivity() })
+                    androidx.compose.material3.DropdownMenuItem(text = { Text("Settings") }, onClick = { menu = false; onSettings() })
+                }
                 Row(
-                    modifier = Modifier.widthIn(max = 150.dp).clip(RoundedCornerShape(50)).clickable { onSettings() }.padding(start = 4.dp, end = 10.dp, top = 4.dp, bottom = 4.dp),
+                    modifier = Modifier.widthIn(max = 150.dp).clip(RoundedCornerShape(50)).clickable { menu = true }.padding(start = 4.dp, end = 10.dp, top = 4.dp, bottom = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -167,6 +174,7 @@ fun ChatDrawer(core: FazeCore, onNew: () -> Unit, onOpen: (String) -> Unit, onSe
                         Text(name.take(1).uppercase(), color = Palette.AccentInk, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     }
                     Text(name, color = Palette.Dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
                 }
             }
         }

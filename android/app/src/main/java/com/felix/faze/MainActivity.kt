@@ -84,8 +84,10 @@ fun FazeRoot(vm: ChatViewModel = viewModel()) {
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var settings by remember { mutableStateOf(false) }
+    var page by remember { mutableStateOf("") } // "devices" or "activity", each its own full screen
+    val shown = settings || page.isNotEmpty()
 
-    BackHandler(enabled = settings) { settings = false }
+    BackHandler(enabled = shown) { if (page.isNotEmpty()) page = "" else settings = false }
 
     // The look from Settings > General: text size scales everything (the page's --fs), the font is for chat text, motion gates animations.
     val density = LocalDensity.current
@@ -101,19 +103,23 @@ fun FazeRoot(vm: ChatViewModel = viewModel()) {
     ModalNavigationDrawer(
         drawerState = drawer,
         scrimColor = Palette.Scrim,
-        gesturesEnabled = !settings,
+        gesturesEnabled = !shown,
         drawerContent = {
             ChatDrawer(
                 core = core,
                 onNew = { core.newChat(); scope.launch { drawer.close() } },
                 onOpen = { id -> core.openChat(id); scope.launch { drawer.close() } },
                 onSettings = { settings = true; scope.launch { drawer.close() } },
+                onDevices = { page = "devices"; scope.launch { drawer.close() } },
+                onActivity = { page = "activity"; scope.launch { drawer.close() } },
                 onClose = { scope.launch { drawer.close() } },
             )
         },
     ) {
-        if (settings) SettingsScreen(core) { settings = false }
-        else ChatScreen(core, onMenu = { scope.launch { drawer.open() } }, onSettings = { settings = true })
+        if (page == "devices") DevicesScreen(core) { page = "" }
+        else if (page == "activity") ActivityScreen(core) { page = "" }
+        else if (settings) SettingsScreen(core) { settings = false }
+        else ChatScreen(core, onMenu = { scope.launch { drawer.open() } }, onSettings = { settings = true }, onActivity = { page = "activity" })
     }
     if (core.liveOn || core.voiceOn) LiveScreen(core)
     }

@@ -51,7 +51,7 @@ import androidx.core.content.ContextCompat
 private val Pill = RoundedCornerShape(28.dp)
 
 @Composable
-fun ChatScreen(core: FazeCore, onMenu: () -> Unit, onSettings: () -> Unit) {
+fun ChatScreen(core: FazeCore, onMenu: () -> Unit, onSettings: () -> Unit, onActivity: () -> Unit = {}) {
     val context = LocalContext.current
     var input by remember { mutableStateOf("") }
     var insertTick by remember { mutableStateOf(0) }
@@ -106,7 +106,7 @@ fun ChatScreen(core: FazeCore, onMenu: () -> Unit, onSettings: () -> Unit) {
 
     Box(modifier = Modifier.fillMaxSize().background(Palette.Bg)) {
         Column(modifier = Modifier.fillMaxSize()) {
-            TopBar(core, onMenu) { modelOpen = true }
+            TopBar(core, onMenu, onActivity) { modelOpen = true }
 
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 if (core.messages.isEmpty()) {

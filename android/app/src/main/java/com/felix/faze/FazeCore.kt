@@ -29,6 +29,32 @@ class FazeCore(private val app: Application) : EngineListener {
     private val imageShelf = ImageShelf()
 
     /** What Faze did, for the activity log in Settings. */
+    /** The computers (and later other devices) linked to this phone. The phone is the hub: any number of them can pair. */
+    val linkPeers = LinkPeers({ settings.linkPeers }, { settings.linkPeers = it })
+    var linkTick by androidx.compose.runtime.mutableIntStateOf(0)
+        private set
+    var linkCode by mutableStateOf("")
+        private set
+    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = "" } })
+
+    fun setLink(on: Boolean) {
+        settings.linkOn = on
+        Thread { try { if (on) link.start() else link.stop() } catch (e: Exception) { main.post { status = "Could not open the link: " + (e.message ?: "") } }; main.post { linkTick++ } }.start()
+    }
+
+    fun startPairing() { linkCode = link.openPairing(); linkTick++ }
+
+    fun stopPairing() { link.closePairing(); linkCode = ""; linkTick++ }
+
+    fun removeDevice(id: String) { linkPeers.remove(id); link.drop(id); linkTick++ }
+
+    /** What the Devices screen lists: each paired device, whether it is connected, and how. */
+    fun deviceRows(): List<DeviceRow> {
+        linkTick
+        val on = link.connected()
+        return linkPeers.all().map { DeviceRow(it.id, it.name, it.os, it.id in on, link.connectionOf(it.id)) }.sortedByDescending { it.connected }
+    }
+
     val activity = ActivityLog(java.io.File(app.filesDir, "activity.log"))
     private val MAX_PENDING = 6
     val messages = mutableStateListOf<ChatMessage>()
@@ -200,6 +226,7 @@ class FazeCore(private val app: Application) : EngineListener {
     )
 
     init {
+        if (settings.linkOn) Thread { try { link.start() } catch (e: Exception) { /* the port may be taken */ } }.start()
         val client = ResilientChat(
             mapOf(
                 "groq" to RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq"),
@@ -871,3 +898,5 @@ class FazeCore(private val app: Application) : EngineListener {
         }.start()
     }
 }
+
+data class DeviceRow(val id: String, val name: String, val os: String, val connected: Boolean, val connection: String)
