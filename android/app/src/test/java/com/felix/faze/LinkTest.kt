@@ -70,7 +70,7 @@ class LinkTest {
     private fun put(s: Socket, o: JSONObject) = LinkCrypto.writeFrame(s.getOutputStream(), o.toString().toByteArray())
 
     /** The computer's half of pairing, as the PC code does it. Returns the secret, or null when the phone refused. */
-    private fun pair(port: Int, code: String, id: String = "pc1"): ByteArray? {
+    private fun pair(port: Int, code: String, id: String = "pc1", attacker: Boolean = false): ByteArray? {
         val k = LinkCrypto.codeKey(code)
         Socket("127.0.0.1", port).use { s ->
             val nc = LinkCrypto.randomBytes(16)
@@ -78,7 +78,7 @@ class LinkTest {
             val r = json(s)
             if (r.optString("t") != "pair_ok") return null
             val np = LinkCrypto.unhex(r.getString("nonce"))
-            assertTrue(LinkCrypto.same(LinkCrypto.unhex(r.getString("proof")), LinkCrypto.proof(k, "phone", nc, np)))
+            if (!LinkCrypto.same(LinkCrypto.unhex(r.getString("proof")), LinkCrypto.proof(k, "phone", nc, np)) && !attacker) return null // the PC stops here, and the phone counts nothing
             put(s, JSONObject().put("t", "pair_confirm").put("proof", LinkCrypto.hex(LinkCrypto.proof(k, "pc", np, nc))))
             val last = json(s)
             if (last.optString("t") != "secret") return null
@@ -115,7 +115,7 @@ class LinkTest {
         val peers = LinkPeers({ store }, { store = it })
         val srv = server(peers)
         srv.openPairing()
-        repeat(5) { assertNull(pair(srv.boundPort, "AAAAAAAAAA")) }
+        repeat(5) { assertNull(pair(srv.boundPort, "AAAAAAAAAA", attacker = true)) }
         assertFalse(srv.pairingOpen())
         assertTrue(peers.all().isEmpty())
     }
