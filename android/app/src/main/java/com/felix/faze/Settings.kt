@@ -319,6 +319,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getBoolean("link_on", false)
         set(value) = prefs.edit().putBoolean("link_on", value).apply()
 
+    /** Whether a paired computer may view and control the screen. Separate from pairing, off until asked for. */
+    var linkScreen: Boolean
+        get() = prefs.getBoolean("link_screen", false)
+        set(value) = prefs.edit().putBoolean("link_screen", value).apply()
+
     var linkPeers: String
         get() = text("link_peers")
         set(value) = prefs.edit().putString("link_peers", value).apply()
