@@ -14,6 +14,7 @@ from .store import Store
 from . import tools as toolbox
 from .peer import PeerRequests
 from .sync import Syncer
+from .voice import Voice, VoiceError
 
 
 def socket_path():
@@ -21,15 +22,23 @@ def socket_path():
 
 
 class Daemon:
-    def __init__(self, config=None, store=None, engine=None, links=None):
+    def __init__(self, config=None, store=None, engine=None, links=None, voice=None):
         self.config = config or cfg.Config()
         self.store = store or Store(cfg.data_dir())
         self.engine = engine or Engine(self.config, self.store, tools=toolbox.Tools(self.config, self.store, phone=self.ask_phone))
         self.in_task = False
         self.chat_lock = threading.Lock()  # one conversation at a time on the engine
         self.listeners = set()
+        self.voice = voice or Voice(self.config)
         self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log)
         self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_request=lambda pid, msg: self.peer.handle(pid, msg), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
+
+    def say(self, text, emit):
+        """Speaks a reply when "Speak replies" is on. A voice problem is shown once, never stops the chat."""
+        try:
+            self.voice.speak(text)
+        except VoiceError as e:
+            emit({"t": "error", "message": str(e)})
 
     def ask_phone(self, task):
         """The ask_phone tool: hands a task to the first connected phone. The phone has its own approvals."""
@@ -89,9 +98,34 @@ class Daemon:
         elif op == "chat":
             chat_id = req.get("chat") or self.store.new_chat()
             emit({"t": "chat", "id": chat_id})
+            said = []
+
+            def watch(ev):
+                if ev.get("t") == "done" and not ev.get("stopped"):
+                    said.append(ev.get("text", ""))
+                emit(ev)
+
             with self.chat_lock:
-                self.engine.chat(chat_id, req.get("text", ""), emit)
+                self.engine.chat(chat_id, req.get("text", ""), watch)
+            if said and self.config.data.get("speak"):
+                threading.Thread(target=self.say, args=(said[-1], emit), daemon=True).start()
+        elif op == "listen":
+            try:
+                self.voice.stop_speaking()
+                self.voice.start_listening()
+                emit({"t": "listening"})
+            except VoiceError as e:
+                emit({"t": "error", "message": str(e)})
+        elif op == "listen_stop":
+            try:
+                emit({"t": "heard", "text": self.voice.stop_listening()})
+            except VoiceError as e:
+                emit({"t": "error", "message": str(e)})
+        elif op == "listen_cancel":
+            self.voice.cancel_listening()
+            emit({"t": "ok"})
         elif op == "stop":
+            self.voice.stop_speaking()
             self.engine.stop()
             emit({"t": "ok"})
         elif op == "approve":

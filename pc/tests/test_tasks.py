@@ -17,6 +17,9 @@ class FakeEngine:
     def __init__(self, store, reply="done it", fail=False):
         self.store, self.reply, self.fail, self.seen = store, reply, fail, []
 
+    def stop(self):
+        pass
+
     def chat(self, chat_id, text, emit):
         self.seen.append(text)
         self.store.add(chat_id, "user", text)
