@@ -67,6 +67,35 @@ class Store:
             out.append({"id": cid, "title": first.strip().replace("\n", " ")[:48], "t": real[-1]["t"]})
         return sorted(out, key=lambda c: c["t"], reverse=True)
 
+    # --- sync helpers (see sync.py)
+    def chat_lines(self, chat_id):
+        return [(m["role"], m["content"]) for m in self.history(chat_id) if m.get("content")]
+
+    def changed_chats(self, since):
+        """Ids of chats with a message of our own newer than `since`."""
+        out = []
+        d = os.path.join(self.root, "chats")
+        for name in os.listdir(d):
+            if name.endswith(".jsonl"):
+                msgs = [m for m in self._read(os.path.join(d, name)) if m.get("role") in ("user", "assistant") and m.get("dev") != "sync"]  # lines that came from a sync are already on the phone
+                if msgs and max(m.get("t", 0) for m in msgs) > since:
+                    out.append(name[:-6])
+        return out
+
+    def import_chat(self, chat_id, messages, t):
+        """Adds the (role, text) pairs this chat does not have yet, after the ones it has. Returns how many were added."""
+        path = self._chat_path(chat_id)
+        if not os.path.exists(path):
+            self._append(path, {"id": _id(), "t": t, "dev": "sync", "role": "meta", "content": "chat started"})
+        have = set(self.chat_lines(chat_id))
+        added = 0
+        for role, text in messages:
+            if role in ("user", "assistant") and text and (role, text) not in have:
+                have.add((role, text))
+                self._append(path, {"id": _id(), "t": t, "dev": "sync", "role": role, "content": text})
+                added += 1
+        return added
+
     def log(self, kind, text):
         self._append(os.path.join(self.root, "activity.jsonl"), {"t": self.now(), "kind": kind, "text": text[:300]})
 

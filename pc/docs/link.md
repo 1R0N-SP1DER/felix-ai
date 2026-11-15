@@ -20,3 +20,11 @@ Connecting (paired):
 Encrypted frames: nonce = 4-byte direction tag ("PCPC" for PC to phone, "PHON" for phone to PC) + 8-byte big-endian counter starting at 0.
 A frame whose counter is not the next one fails to decrypt and the connection is dropped.
 Messages after ready: {"t":"ping"} answered by {"t":"pong",...}. More come in later patches.
+
+Sync (PC asks, phone answers; the phone is the source of truth)
+  {"t":"sync_list","since":ms}   -> {"t":"sync_list_ok","now":ms,"facts":[{"text","category"}],"chats":[{"id","title","updated"}]}  (chats changed since, by the phone's clock)
+  {"t":"sync_get","id"}          -> {"t":"sync_chat","chat":{"id","title","updated","messages":[{"role","text"}]}}
+  {"t":"sync_put_chat","chat":{"id","messages":[..]}} -> {"t":"ok","added":n}
+  {"t":"sync_put_facts","facts":["text",..]}          -> {"t":"ok","added":n}
+Chats merge message by message (same role and text is the same message); notes by their text. Nothing is deleted by a sync. Only text travels.
+The PC syncs when it connects and every 30 seconds while connected.
