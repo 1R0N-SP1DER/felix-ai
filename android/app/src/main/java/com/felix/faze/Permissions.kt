@@ -33,6 +33,7 @@ object PermissionPolicy {
         "list_scheduled" to Tier.SAFE,
         "cancel_scheduled" to Tier.SAFE,
         "end_live" to Tier.SAFE,
+        "ask_computer" to Tier.CONFIRM,
         "tap" to Tier.CONFIRM,
         "long_press" to Tier.CONFIRM,
         "swipe" to Tier.CONFIRM,
@@ -75,6 +76,7 @@ object PermissionPolicy {
     }
 
     fun summary(tool: String, args: JSONObject): String = when (tool) {
+        "ask_computer" -> "Ask your computer to do this: " + args.optString("task", "").replace('\n', ' ').take(160)
         "read_clipboard" -> "Read what is on your clipboard and show it to the model"
         "tap", "long_press", "swipe", "type_text", "press_key" -> "Control your screen for $CONTROL_MINUTES minutes (tap, swipe, type, press keys). First: " + when (tool) {
             "tap" -> "tap at ${args.optInt("x")},${args.optInt("y")}"
