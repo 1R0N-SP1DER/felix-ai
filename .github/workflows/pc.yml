@@ -33,6 +33,7 @@ jobs:
       - name: Draw both windows offscreen and take screenshots
         env:
           QT_QPA_PLATFORM: offscreen
+          QT_QUICK_BACKEND: software
           FAZE_DEMO: "1"
         run: |
           mkdir -p shots

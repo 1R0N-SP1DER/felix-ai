@@ -169,8 +169,17 @@ def run_ui(floating=False):
     bridge.start()
     shot = os.environ.get("FAZE_SCREENSHOT")
     if shot:
-        # The page itself saves the picture (a QML window is drawn by QML), then asks the app to quit.
-        root.setProperty("shotPath", shot)
-        QTimer.singleShot(1500, lambda: QMetaObject.invokeMethod(root, "shoot"))
+        def grab():
+            try:
+                from PySide6.QtQuick import QQuickWindow
+                import shiboken6
+                w = root if hasattr(root, "grabWindow") else shiboken6.wrapInstance(shiboken6.getCppPointer(root)[0], QQuickWindow)
+                ok = w.grabWindow().save(shot)
+                sys.stderr.write("screenshot %s: %s\n" % (shot, "saved" if ok else "could not be saved"))
+            except Exception:
+                import traceback
+                traceback.print_exc()
+            app.quit()
+        QTimer.singleShot(1500, grab)
         QTimer.singleShot(20000, app.quit)  # never hang if the picture cannot be taken
     return app.exec()

@@ -34,16 +34,6 @@ ApplicationWindow {
         if (visible) hide(); else { show(); raise(); requestActivate(); input.forceActiveFocus() }
     }
 
-    property string shotPath: ""
-
-    function shoot() {
-        contentItem.grabToImage(function (r) {
-            var ok = r.saveToFile(win.shotPath)
-            console.log("screenshot", win.shotPath, ok ? "saved" : "failed")
-            bridge.quit()
-        })
-    }
-
     ListModel { id: msgs }
 
     function addMsg(role, text) { msgs.append({ "role": role, "text": text }); list.positionViewAtEnd() }
