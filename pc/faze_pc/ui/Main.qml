@@ -125,6 +125,7 @@ ApplicationWindow {
                 // Top bar, as on the phone: the model chip on the left, a few actions on the right.
                 RowLayout {
                     Layout.fillWidth: true
+                    Layout.preferredHeight: 36
                     Layout.margins: 14
                     spacing: 8
                     Rectangle {
@@ -136,7 +137,7 @@ ApplicationWindow {
                         implicitWidth: chip.implicitWidth + 24
                         Text { id: chip; anchors.centerIn: parent; text: "●  " + win.routeText; color: win.dim; font.pixelSize: 12 }
                     }
-                    Item { Layout.fillWidth: true; Layout.fillHeight: true; DragHandler { enabled: win.floating; onActiveChanged: if (active) win.startSystemMove() } }
+                    Item { Layout.fillWidth: true; Layout.preferredHeight: 32; DragHandler { enabled: win.floating; onActiveChanged: if (active) win.startSystemMove() } }
                     Button {
                         visible: win.floating
                         text: "+"
