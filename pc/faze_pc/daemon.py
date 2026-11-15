@@ -42,6 +42,11 @@ class Daemon:
         elif op == "stop":
             self.engine.stop()
             emit({"t": "ok"})
+        elif op == "approve":
+            self.engine.approver.answer(req.get("id"), bool(req.get("ok")))
+            emit({"t": "ok"})
+        elif op == "activity":
+            emit({"t": "activity", "rows": self.store.activity()})
         elif op == "ping":
             emit({"t": "pong"})
         else:

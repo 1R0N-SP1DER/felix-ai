@@ -90,11 +90,14 @@ def classify(status, body, headers):
     return ProviderError("bad_request", label)
 
 
-def stream_chat(base, key, model, messages, on_token, abort=None, timeout=60, max_tokens=None):
+def stream_chat(base, key, model, messages, on_token, abort=None, timeout=60, max_tokens=None, tools=None, calls=None):
     """Sends the conversation and calls on_token for each piece of the answer. Returns the whole answer."""
     body = {"model": model, "messages": messages, "stream": True}
     if max_tokens:
         body["max_tokens"] = max_tokens
+    if tools:
+        body["tools"] = tools
+    partial = {}
     headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
     if key:
         headers["Authorization"] = "Bearer " + key
@@ -125,10 +128,20 @@ def stream_chat(base, key, model, messages, on_token, abort=None, timeout=60, ma
             if "error" in j:
                 raise ProviderError("server", _problem(data))
             for choice in j.get("choices", []):
-                piece = (choice.get("delta") or {}).get("content")
+                delta = choice.get("delta") or {}
+                piece = delta.get("content")
                 if piece:
                     out.append(piece)
                     on_token(piece)
+                for tc in delta.get("tool_calls") or []:
+                    slot = partial.setdefault(tc.get("index", 0), {"id": "", "name": "", "args": ""})
+                    if tc.get("id"):
+                        slot["id"] = tc["id"]
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        slot["name"] += fn["name"]
+                    if fn.get("arguments"):
+                        slot["args"] += fn["arguments"]
     except ProviderError:
         raise
     except Exception as e:
@@ -140,4 +153,9 @@ def stream_chat(base, key, model, messages, on_token, abort=None, timeout=60, ma
             resp.close()
         except Exception:
             pass
+    if calls is not None:
+        for i in sorted(partial):
+            s = partial[i]
+            if s["name"]:
+                calls.append({"id": s["id"] or "call_%d" % i, "type": "function", "function": {"name": s["name"], "arguments": s["args"] or "{}"}})
     return "".join(out)

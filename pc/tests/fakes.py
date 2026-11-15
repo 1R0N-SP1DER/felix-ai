@@ -37,7 +37,8 @@ class FakeProvider:
                         if p == "__HANG__":
                             time.sleep(30)
                             continue
-                        self.wfile.write(("data: %s\n\n" % json.dumps({"choices": [{"delta": {"content": p}}]})).encode())
+                        delta = p if isinstance(p, dict) else {"content": p}
+                        self.wfile.write(("data: %s\n\n" % json.dumps({"choices": [{"delta": delta}]})).encode())
                         self.wfile.flush()
                     self.wfile.write(b"data: [DONE]\n\n")
                 except OSError:

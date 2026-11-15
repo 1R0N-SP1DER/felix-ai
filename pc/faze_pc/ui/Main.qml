@@ -35,8 +35,10 @@ ApplicationWindow {
     }
 
     ListModel { id: msgs }
+    ListModel { id: activityModel }
 
-    function addMsg(role, text) { msgs.append({ "role": role, "text": text }); list.positionViewAtEnd() }
+    function addMsg(role, text, reqId) { msgs.append({ "role": role, "text": text, "reqId": reqId || "", "stage": "pending" }); list.positionViewAtEnd() }
+    function settle(reqId, state) { for (var i = 0; i < msgs.count; i++) if (msgs.get(i).reqId === reqId) msgs.setProperty(i, "stage", state) }
 
     Connections {
         target: bridge
@@ -48,6 +50,9 @@ ApplicationWindow {
         function onAssistantDone(stopped) {}
         function onRoute(r) { win.routeText = r }
         function onNote(m) { win.addMsg("note", m) }
+        function onApproval(id, tool, summary) { win.addMsg("approve", summary, id) }
+        function onToolUsed(summary, ok) { win.addMsg("note", (ok ? "✓ " : "✗ ") + summary) }
+        function onActivityLoaded(rows) { activityModel.clear(); for (var i = 0; i < rows.length; i++) activityModel.append({ "kind": rows[i].kind, "text": rows[i].text }); activity.open() }
         function onFailed(m) {
             if (msgs.count > 0 && msgs.get(msgs.count - 1).role === "assistant" && msgs.get(msgs.count - 1).text === "") msgs.remove(msgs.count - 1)
             win.addMsg("error", m)
@@ -55,7 +60,7 @@ ApplicationWindow {
         function onChatsChanged(c) { win.chats = c }
         function onConfigChanged(c) { win.cfg = c }
         function onChatChanged(id) { win.currentChat = id; if (id === "") msgs.clear() }
-        function onHistoryLoaded(h) { msgs.clear(); for (var i = 0; i < h.length; i++) msgs.append({ "role": h[i].role, "text": h[i].content }); list.positionViewAtEnd() }
+        function onHistoryLoaded(h) { msgs.clear(); for (var i = 0; i < h.length; i++) msgs.append({ "role": h[i].role, "text": h[i].content, "reqId": "", "stage": "" }); list.positionViewAtEnd() }
     }
 
     Shortcut { sequence: "Escape"; enabled: win.floating; onActivated: win.hide() }
@@ -173,15 +178,36 @@ ApplicationWindow {
                             id: bubble
                             anchors.right: mine ? parent.right : undefined
                             anchors.left: mine ? undefined : parent.left
-                            width: Math.min(body.implicitWidth + 28, list.width * 0.82)
-                            height: body.implicitHeight + 22
+                            width: Math.min(Math.max(body.implicitWidth + 28, role === "approve" ? 230 : 0), list.width * 0.82)
+                            height: body.implicitHeight + 22 + (role === "approve" ? 48 : 0)
                             radius: 18
-                            color: role === "user" ? "#2482AFFF" : (role === "error" ? "#22FF7A8A" : win.surface)
+                            color: role === "user" ? "#2482AFFF" : (role === "error" ? "#22FF7A8A" : (role === "approve" ? "#1AFFC857" : win.surface))
                             border.width: 1
                             border.color: role === "error" ? win.bad : win.line
+                            Row {
+                                visible: role === "approve"
+                                anchors.left: parent.left; anchors.bottom: parent.bottom
+                                anchors.leftMargin: 14; anchors.bottomMargin: 10
+                                spacing: 8
+                                Rectangle {
+                                    visible: stage === "pending"
+                                    width: 84; height: 30; radius: 15; color: win.accent
+                                    Text { anchors.centerIn: parent; text: "Allow"; color: win.ink; font.bold: true }
+                                    MouseArea { anchors.fill: parent; onClicked: { bridge.answer(reqId, true); win.settle(reqId, "allowed") } }
+                                }
+                                Rectangle {
+                                    visible: stage === "pending"
+                                    width: 84; height: 30; radius: 15; color: "#10FFFFFF"; border.width: 1; border.color: win.line
+                                    Text { anchors.centerIn: parent; text: "Deny"; color: win.dim }
+                                    MouseArea { anchors.fill: parent; onClicked: { bridge.answer(reqId, false); win.settle(reqId, "denied") } }
+                                }
+                                Text { visible: stage !== "pending"; text: stage === "allowed" ? "Allowed" : "Denied"; color: win.muted; font.pixelSize: 12; height: 30; verticalAlignment: Text.AlignVCenter }
+                            }
                             Text {
                                 id: body
-                                anchors.centerIn: parent
+                                anchors.top: parent.top
+                                anchors.topMargin: 11
+                                anchors.horizontalCenter: parent.horizontalCenter
                                 width: Math.min(implicitWidth, list.width * 0.82 - 28)
                                 text: model.text === "" ? "…" : model.text
                                 color: role === "note" ? win.muted : (role === "error" ? win.bad : win.text)
@@ -237,6 +263,25 @@ ApplicationWindow {
     }
 
     Popup {
+        id: activity
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(560, win.width - 40)
+        height: Math.min(520, win.height - 40)
+        padding: 16
+        background: Rectangle { radius: 20; color: win.surface; border.width: 1; border.color: win.line }
+        contentItem: ColumnLayout {
+            Text { text: "Activity log"; color: win.text; font.pixelSize: 18; font.bold: true }
+            ListView {
+                Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 6
+                model: activityModel
+                delegate: Text { width: ListView.view.width; text: kind + "   " + model.text; color: win.dim; font.pixelSize: 12; wrapMode: Text.Wrap }
+            }
+            Button { text: "Close"; onClicked: activity.close(); Layout.alignment: Qt.AlignRight }
+        }
+    }
+
+    Popup {
         id: settings
         modal: true
         anchors.centerIn: Overlay.overlay
@@ -258,7 +303,7 @@ ApplicationWindow {
                     onActivated: bridge.setSetting("provider", currentText)
                 }
                 Repeater {
-                    model: [["groq", "Groq key"], ["gemini", "Gemini key"], ["openrouter", "OpenRouter key"], ["nvidia", "NVIDIA key"]]
+                    model: [["groq", "Groq key"], ["gemini", "Gemini key"], ["openrouter", "OpenRouter key"], ["nvidia", "NVIDIA key"], ["tavily", "Search key (Tavily)"]]
                     delegate: ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 4
@@ -277,7 +322,12 @@ ApplicationWindow {
                 TextField { Layout.fillWidth: true; text: win.cfg.ollama_deep_model || ""; onEditingFinished: bridge.setSetting("ollama_deep_model", text) }
                 Text { text: "Your name"; color: win.dim; font.pixelSize: 12 }
                 TextField { Layout.fillWidth: true; text: win.cfg.user_name || ""; onEditingFinished: bridge.setSetting("user_name", text) }
-                Button { text: "Close"; onClicked: settings.close(); Layout.alignment: Qt.AlignRight }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Button { text: "Activity log"; onClicked: { settings.close(); bridge.loadActivity() } }
+                    Item { Layout.fillWidth: true }
+                    Button { text: "Close"; onClicked: settings.close() }
+                }
             }
         }
     }

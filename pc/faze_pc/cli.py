@@ -15,6 +15,13 @@ def ask(text, chat=None):
                 sys.stdout.flush()
             elif ev["t"] == "route":
                 sys.stderr.write("[%s %s]\n" % (ev["label"], ev["model"]))
+            elif ev["t"] == "approve":
+                sys.stderr.write("\n%s\nAllow? [y/N] " % ev["summary"])
+                sys.stderr.flush()
+                ok = sys.stdin.readline().strip().lower() in ("y", "yes")
+                c.send({"op": "approve", "id": ev["id"], "ok": ok})
+            elif ev["t"] == "tool":
+                sys.stderr.write("[%s%s]\n" % (ev["name"], "" if ev["ok"] else " failed"))
             elif ev["t"] == "error":
                 sys.stderr.write("\n" + ev["message"] + "\n")
                 return 1
