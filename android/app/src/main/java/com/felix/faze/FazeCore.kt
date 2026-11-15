@@ -35,7 +35,7 @@ class FazeCore(private val app: Application) : EngineListener {
         private set
     var linkCode by mutableStateOf("")
         private set
-    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = "" } })
+    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = "" } })
 
     fun setLink(on: Boolean) {
         settings.linkOn = on
@@ -159,6 +159,7 @@ class FazeCore(private val app: Application) : EngineListener {
     private val stt = Stt(transport, { settings.groqKey })
     private val store = ChatStore(File(app.filesDir, "chats"))
     val memory = MemoryStore(File(app.filesDir, "memory.json"))
+    private val sync = LinkSync(store, memory, changed = { executor.execute { val list = store.list(); main.post { chats.clear(); chats.addAll(list) } } })
     val toolStore = ToolStore(File(app.filesDir, "tools.json"))
     private val broker = ApprovalBroker({ block -> main.post { block() } }, 60) { approval = it }
     private val engine: ChatEngine
