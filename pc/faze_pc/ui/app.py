@@ -172,9 +172,11 @@ def run_ui(floating=False):
         def grab():
             try:
                 from PySide6.QtQuick import QQuickWindow
-                import shiboken6
-                w = root if hasattr(root, "grabWindow") else shiboken6.wrapInstance(shiboken6.getCppPointer(root)[0], QQuickWindow)
-                ok = w.grabWindow().save(shot)
+                try:
+                    img = QQuickWindow.grabWindow(root)  # the Qt Quick renderer's own picture of the window
+                except Exception:
+                    img = root.screen().grabWindow(root.winId()).toImage()
+                ok = (not img.isNull()) and img.save(shot)
                 sys.stderr.write("screenshot %s: %s\n" % (shot, "saved" if ok else "could not be saved"))
             except Exception:
                 import traceback
