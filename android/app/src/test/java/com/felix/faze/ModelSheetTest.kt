@@ -7,16 +7,16 @@ import org.junit.Test
 
 class ModelSheetTest {
     @Test fun sameModelsInTheSameOrderAsTheWebSheet() {
-        assertEquals(listOf("auto", "offline", "gemini", "groq", "openrouter", "nvidia", "custom"), ModelSheet.names.keys.toList())
+        assertEquals(listOf("auto", "offline", "gemini", "groq", "openrouter", "nvidia"), ModelSheet.names.keys.toList())
         assertEquals("OpenRouter", ModelSheet.label("openrouter"))
-        assertEquals("Custom", ModelSheet.label("custom"))
+        assertEquals("Your PC", ModelSheet.label("pc"))
     }
 
     @Test fun groqGeminiAndOpenRouterRunInTheApp() {
         val models = mapOf("groq" to "openai/gpt-oss-120b", "gemini" to "gemini-3.1-flash-lite", "openrouter" to "openai/gpt-oss-120b:free")
         val rows = ModelSheet.rows(setOf("groq", "gemini"), models)
-        assertEquals(7, rows.size)
-        assertEquals(listOf("auto", "custom", "gemini", "groq", "nvidia", "offline", "openrouter"), rows.filter { it.available }.map { it.id }.sorted())
+        assertEquals(6, rows.size)
+        assertEquals(listOf("auto", "gemini", "groq", "nvidia", "offline", "openrouter"), rows.filter { it.available }.map { it.id }.sorted())
         assertEquals("gpt-oss-120b", rows.first { it.id == "groq" }.sub)
         assertEquals("gemini-3.1-flash-lite", rows.first { it.id == "gemini" }.sub)
         assertEquals("ok", rows.first { it.id == "gemini" }.dot)

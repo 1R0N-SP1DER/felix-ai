@@ -66,12 +66,4 @@ class CustomProviderTest {
         assertEquals(listOf("qwen3"), ModelCatalog(t, { "http://127.0.0.1:1234/v1" }) { "" }.fetch("custom").map { it.id })
         assertFalse(t.calls.single().headers.containsKey("Authorization"))
     }
-
-    @Test fun customIsOnTheModelSheetAndNeedsOnlyAnAddress() {
-        assertEquals("Custom", ModelSheet.label("custom"))
-        assertTrue("custom" in ModelSheet.live)
-        assertFalse(ModelSheet.thinkEnabled("custom"))
-        val rows = ModelSheet.rows(emptySet(), mapOf("custom" to ""))
-        assertTrue(rows.first { it.id == "custom" }.sub.contains("address"))
-    }
 }

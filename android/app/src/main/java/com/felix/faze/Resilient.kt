@@ -8,14 +8,14 @@ data class Attempt(val provider: String, val model: String)
 object Fallbacks {
     /** Other model ids to try on the same provider when the chosen one is overloaded or gone. */
     val alternates = mapOf("gemini" to listOf("gemini-flash-lite-latest", "gemini-2.5-flash-lite"))
-    private val order = listOf("groq", "gemini", "openrouter", "nvidia", "custom")
+    private val order = listOf("groq", "gemini", "openrouter", "nvidia")
 
     /**
      * What to try, in order: the chosen model, its same-provider alternates, then every other provider that has a key.
      * The chosen provider always comes first, even without a key, so the person is told what is wrong with it.
      */
     fun plan(selected: String, keys: Set<String>, model: (String) -> String): List<Attempt> {
-        if (selected == "offline") return listOf(Attempt(selected, model(selected))) // offline means offline: never quietly send it online
+        if (selected == "offline" || selected == "pc") return listOf(Attempt(selected, model(selected))) // offline means offline, and a chosen PC model means that PC: never quietly send it elsewhere
         val out = ArrayList<Attempt>()
         out.add(Attempt(selected, model(selected)))
         if (selected in keys) for (alt in alternates[selected].orEmpty()) if (alt != model(selected)) out.add(Attempt(selected, alt))

@@ -92,7 +92,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
 
     /** Which online model answers: groq, gemini or openrouter. */
     var provider: String
-        get() = text("provider").let { if (it == "auto" || it == "gemini" || it == "openrouter" || it == "offline" || it == "custom" || it in OpenAiProviders.all) it else "groq" }
+        get() = text("provider").let { if (it == "auto" || it == "gemini" || it == "openrouter" || it == "offline" || it == "pc" || it in OpenAiProviders.all) it else "groq" }
         set(value) = put("provider", value)
 
     var geminiKey: String
@@ -164,7 +164,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         "offline" -> offlineModel
         "gemini" -> geminiModel
         "openrouter" -> openrouterModel
-        "custom" -> customModel
+        "pc" -> text("pc_model")
         in OpenAiProviders.all -> compatModel(provider)
         else -> modelName.ifBlank { Groq.DEFAULT_MODEL }
     }
@@ -172,6 +172,7 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
     /** Chooses the model of one provider (Groq, Gemini or OpenRouter) from the picker. */
     fun setModelFor(provider: String, id: String) {
         when (provider) {
+            "pc" -> put("pc_model", id)
             "offline" -> offlineModel = id
             "gemini" -> geminiModel = id
             "openrouter" -> openrouterModel = id
@@ -195,7 +196,6 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         "auto" -> true // it uses whatever is there
         "gemini" -> geminiKey.isNotEmpty()
         "openrouter" -> openrouterKey.isNotEmpty()
-        "custom" -> CustomEndpoint.base(customUrl) != null // the key is optional; an address is what it needs
         in OpenAiProviders.all -> compatKey(provider).isNotEmpty()
         else -> groqKey.isNotEmpty()
     }
