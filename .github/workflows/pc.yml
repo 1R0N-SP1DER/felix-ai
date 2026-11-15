@@ -1,0 +1,51 @@
+name: PC build
+
+on:
+  push:
+    branches: [main, PC]
+    paths: ["pc/**", ".github/workflows/pc.yml"]
+  pull_request:
+    paths: ["pc/**", ".github/workflows/pc.yml"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: pc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Logic tests (standard library only)
+        run: python -m unittest discover -s . -t . -p "test_*.py" -v
+
+      - name: Install Qt and the system libraries it needs offscreen
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 libglib2.0-0 fonts-dejavu-core
+          pip install "PySide6-Essentials>=6.6"
+
+      - name: Draw both windows offscreen and take screenshots
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_QUICK_BACKEND: software
+          FAZE_DEMO: "1"
+        run: |
+          mkdir -p shots
+          FAZE_SCREENSHOT=shots/desktop.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(False))"
+          FAZE_SCREENSHOT=shots/floating.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(True))"
+          ls -l shots
+
+      - name: Print the screenshots into the log, so they can be read without downloading
+        run: |
+          for f in shots/*.png; do echo "BEGIN64 $f"; base64 -w0 "$f"; echo; echo "END64 $f"; done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pc-screenshots
+          path: pc/shots/*.png

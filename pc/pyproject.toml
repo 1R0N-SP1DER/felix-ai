@@ -1,0 +1,18 @@
+[project]
+name = "faze-pc"
+version = "0.1.0"
+description = "Faze for the desktop: a small background daemon, a Qt window, and a floating window"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+ui = ["PySide6-Essentials>=6.6"]
+
+[project.scripts]
+faze = "faze_pc.cli:main"
+
+[tool.setuptools]
+packages = ["faze_pc", "faze_pc.ui"]
+
+[tool.setuptools.package-data]
+"faze_pc.ui" = ["*.qml"]
