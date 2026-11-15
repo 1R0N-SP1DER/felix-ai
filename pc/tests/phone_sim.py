@@ -19,6 +19,7 @@ class PhoneSim:
         self.sock.listen(5)
         self.port = self.sock.getsockname()[1]
         self.sessions = []
+        self.replies = {}  # what the PC answered to the phone's own questions, by number
         self.handlers = {"ping": lambda m: {"t": "pong", "name": name}}
         threading.Thread(target=self.loop, daemon=True).start()
 
@@ -87,9 +88,13 @@ class PhoneSim:
         s.send({"t": "ready", "id": self.id, "name": self.name})
         while True:
             msg = s.recv()
+            if "re" in msg:
+                self.replies[msg["re"]] = msg
+                continue
             h = self.handlers.get(msg.get("t"))
             if h:
-                s.send(h(msg))
+                reply = h(msg)
+                s.send(dict(reply, re=msg["rid"]) if "rid" in msg else reply)
 
     def close(self):
         try:

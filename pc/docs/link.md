@@ -28,3 +28,8 @@ Sync (PC asks, phone answers; the phone is the source of truth)
   {"t":"sync_put_facts","facts":["text",..]}          -> {"t":"ok","added":n}
 Chats merge message by message (same role and text is the same message); notes by their text. Nothing is deleted by a sync. Only text travels.
 The PC syncs when it connects and every 30 seconds while connected.
+
+Two-way requests
+  Either side may ask. A message with "rid" (a number the asker chose) is answered with the same number in "re". Messages with neither are one-way.
+  Phone asks PC:  {"t":"pc_chat","messages":[openai-style],"deep":bool,"rid":n} -> {"t":"pc_chat_ok","content","model","re":n} or {"t":"error","message","re":n}
+  The PC answers with its Ollama model (chat model, or the deep one when "deep"). Used by the phone's Auto mode.
