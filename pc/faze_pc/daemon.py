@@ -11,6 +11,7 @@ from . import link
 from .linkmanager import LinkManager
 from .engine import Engine
 from .store import Store
+from .sync import Syncer
 
 
 def socket_path():
@@ -22,7 +23,12 @@ class Daemon:
         self.config = config or cfg.Config()
         self.store = store or Store(cfg.data_dir())
         self.engine = engine or Engine(self.config, self.store)
-        self.links = links or LinkManager(link.Devices())
+        self.listeners = set()
+        self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
+
+    def broadcast(self, ev):
+        for emit in list(self.listeners):
+            emit(ev)
 
     def handle(self, req, emit):
         op = req.get("op")
@@ -97,15 +103,19 @@ class Daemon:
                         except OSError:
                             pass
 
-                for raw in self.rfile:
-                    try:
-                        req = json.loads(raw)
-                    except ValueError:
-                        continue
-                    if req.get("op") == "stop":
-                        daemon.handle(req, emit)  # answered at once, even while a chat is streaming
-                    else:
-                        threading.Thread(target=daemon.handle, args=(req, emit), daemon=True).start()
+                daemon.listeners.add(emit)
+                try:
+                    for raw in self.rfile:
+                        try:
+                            req = json.loads(raw)
+                        except ValueError:
+                            continue
+                        if req.get("op") == "stop":
+                            daemon.handle(req, emit)  # answered at once, even while a chat is streaming
+                        else:
+                            threading.Thread(target=daemon.handle, args=(req, emit), daemon=True).start()
+                finally:
+                    daemon.listeners.discard(emit)
 
         class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
             daemon_threads = True

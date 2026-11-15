@@ -7,12 +7,16 @@ from . import link
 
 
 class LinkManager:
-    def __init__(self, devices, connect=link.connect, discover=link.discover, gateway=link.gateway, interval=5.0, keepalive=10.0, pair_fn=link.pair):
+    def __init__(self, devices, connect=link.connect, discover=link.discover, gateway=link.gateway, interval=5.0, keepalive=10.0, pair_fn=link.pair, syncer=None, sync_every=30.0, on_synced=None):
         self.devices = devices
         self._connect = connect
         self._discover = discover
         self._gateway = gateway
         self._pair = pair_fn
+        self.syncer = syncer
+        self.sync_every = sync_every
+        self.on_synced = on_synced
+        self.synced = {}  # phone id -> {"at": time, "note": text}
         self.interval = interval
         self.keepalive = keepalive
         self.sessions = {}   # phone id -> Session
@@ -40,7 +44,7 @@ class LinkManager:
     def list(self):
         out = []
         for pid, p in self.devices.phones().items():
-            out.append({"id": pid, "name": p["name"], "address": p["address"], "state": "connected" if pid in self.sessions else "offline", "error": self.errors.get(pid, "")})
+            out.append({"id": pid, "name": p["name"], "address": p["address"], "state": "connected" if pid in self.sessions else "offline", "error": self.errors.get(pid, ""), "synced": self.synced.get(pid, {}).get("note", "")})
         return out
 
     def pair(self, address, code, port=link.PORT):
@@ -112,8 +116,27 @@ class LinkManager:
             return
         self.errors[pid] = last
 
+    def sync_now(self, pid):
+        """One sync round with a connected phone. Failures are shown in the Devices list, never fatal."""
+        if not self.syncer or pid not in self.sessions:
+            return None
+        try:
+            got = self.syncer.run(pid, lambda m: self.request(pid, m, timeout=30))
+        except Exception as e:
+            self.synced[pid] = {"at": time.time(), "note": "sync failed: %s" % e}
+            return None
+        changed = got["facts_in"] or got["chats_in"]
+        self.synced[pid] = {"at": time.time(), "note": "synced %s" % time.strftime("%H:%M")}
+        if changed and self.on_synced:
+            try:
+                self.on_synced(pid, got)
+            except Exception:
+                pass
+        return got
+
     def _loop(self):
         last_ping = {}
+        last_sync = {}
         while not self._stop.is_set():
             for pid, p in self.devices.phones().items():
                 if self._stop.is_set():
@@ -121,6 +144,10 @@ class LinkManager:
                 if pid not in self.sessions:
                     self._try_connect(pid, p)
                     last_ping[pid] = time.time()
+                    last_sync[pid] = 0
+                elif time.time() - last_sync.get(pid, 0) >= self.sync_every:
+                    last_sync[pid] = time.time()
+                    self.sync_now(pid)
                 elif time.time() - last_ping.get(pid, 0) >= self.keepalive:
                     last_ping[pid] = time.time()
                     try:

@@ -303,7 +303,7 @@ ApplicationWindow {
                         ColumnLayout {
                             Layout.fillWidth: true; spacing: 2
                             Text { text: modelData.name; color: win.text; font.pixelSize: 14 }
-                            Text { text: modelData.state === "connected" ? "Connected · " + modelData.address : (modelData.error !== "" ? modelData.error : "Offline"); color: win.muted; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true }
+                            Text { text: modelData.state === "connected" ? "Connected · " + modelData.address + (modelData.synced ? " · " + modelData.synced : "") : (modelData.error !== "" ? modelData.error : "Offline"); color: win.muted; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true }
                         }
                         Button { text: "Forget"; onClicked: bridge.forgetDevice(modelData.id) }
                     }
