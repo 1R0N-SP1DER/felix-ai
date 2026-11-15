@@ -17,14 +17,21 @@ def clean(messages):
 
 
 class PeerRequests:
-    def __init__(self, config, streamer=providers.stream_chat):
+    def __init__(self, config, streamer=providers.stream_chat, runner=None):
         self.config = config
         self.streamer = streamer
+        self.runner = runner  # runner(task) -> (ok, text): runs a task the phone handed over, as a chat on this PC
 
     def handle(self, pid, msg):
         t = msg.get("t")
         if t == "pc_chat":
             return self.chat(msg)
+        if t == "pc_task":
+            task = str(msg.get("task", "")).strip()
+            if not task or not self.runner:
+                return {"t": "error", "message": "no task given" if self.runner else "this PC cannot run tasks"}
+            ok, text = self.runner(task)
+            return {"t": "pc_task_ok" if ok else "error", "text": text, "message": text}
         return {"t": "error", "message": "this PC does not know %r" % t}
 
     def chat(self, msg):
