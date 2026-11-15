@@ -34,6 +34,7 @@ TOOLS = {
     "set_clipboard": (ASK, "Put text on the clipboard.", {"text": "the text"}),
     "read_file": (ASK, "Read a text file.", {"path": "path of the file"}),
     "list_dir": (ASK, "List the files in a folder.", {"path": "path of the folder"}),
+    "ask_phone": (ASK, "Hand a task to the paired phone (call someone, check its battery, take a photo, anything the phone can do). The phone asks the person before risky steps.", {"task": "what the phone should do, in plain words"}),
     "run_command": (ASK, "Run a shell command and return its output.", {"command": "the command"}),
 }
 
@@ -69,6 +70,8 @@ def summary(name, args):
         return "Read the clipboard"
     if name == "take_screenshot":
         return "Take a screenshot of your screen"
+    if name == "ask_phone":
+        return "Ask your phone: " + str(args.get("task", ""))[:200]
     return "%s %s" % (name, json.dumps(args, ensure_ascii=False)[:160])
 
 
@@ -153,7 +156,8 @@ def find_app(name, dirs=None):
 
 
 class Tools:
-    def __init__(self, config, store, run=None, http=None, which=shutil.which):
+    def __init__(self, config, store, run=None, http=None, which=shutil.which, phone=None):
+        self.phone = phone  # phone(task) -> (ok, text), set by the daemon when a phone is linked
         self.config = config
         self.store = store
         self._run = run or self._subprocess
@@ -197,6 +201,14 @@ class Tools:
             return False, "nothing to remember"
         self.store.add_fact(text)
         return True, "Remembered."
+
+    def t_ask_phone(self, a):
+        task = str(a.get("task", "")).strip()
+        if not task:
+            return False, "no task given"
+        if not self.phone:
+            return False, "no phone is linked"
+        return self.phone(task)
 
     def t_notify(self, a):
         if not self.which("notify-send"):

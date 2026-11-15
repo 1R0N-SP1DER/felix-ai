@@ -33,3 +33,9 @@ Two-way requests
   Either side may ask. A message with "rid" (a number the asker chose) is answered with the same number in "re". Messages with neither are one-way.
   Phone asks PC:  {"t":"pc_chat","messages":[openai-style],"deep":bool,"rid":n} -> {"t":"pc_chat_ok","content","model","re":n} or {"t":"error","message","re":n}
   The PC answers with its Ollama model (chat model, or the deep one when "deep"). Used by the phone's Auto mode.
+
+Handing over tasks
+  Phone asks PC:  {"t":"pc_task","task":text,"rid":n} -> {"t":"pc_task_ok","text":final answer,"re":n} or {"t":"error","message","re":n}
+    The PC runs it as a new chat ("(From your phone) ..."). Approval cards show in the PC windows. One chat at a time: a busy PC answers with an error.
+  PC asks phone:  {"t":"phone_task","task":text,"rid":n} -> {"t":"phone_task_ok","note","re":n} or {"t":"error","message","re":n}
+    The phone starts a new chat with the task and answers at once; the result is in that chat, which syncs back. The phone's own approvals apply.

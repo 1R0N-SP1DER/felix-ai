@@ -11,6 +11,7 @@ from . import link
 from .linkmanager import LinkManager
 from .engine import Engine
 from .store import Store
+from . import tools as toolbox
 from .peer import PeerRequests
 from .sync import Syncer
 
@@ -23,10 +24,49 @@ class Daemon:
     def __init__(self, config=None, store=None, engine=None, links=None):
         self.config = config or cfg.Config()
         self.store = store or Store(cfg.data_dir())
-        self.engine = engine or Engine(self.config, self.store)
+        self.engine = engine or Engine(self.config, self.store, tools=toolbox.Tools(self.config, self.store, phone=self.ask_phone))
+        self.in_task = False
+        self.chat_lock = threading.Lock()  # one conversation at a time on the engine
         self.listeners = set()
-        self.peer = PeerRequests(self.config)
+        self.peer = PeerRequests(self.config, runner=self.run_task)
         self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_request=lambda pid, msg: self.peer.handle(pid, msg), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
+
+    def ask_phone(self, task):
+        """The ask_phone tool: hands a task to the first connected phone. The phone has its own approvals."""
+        if self.in_task:
+            return False, "this task came from the phone, so do it on this PC instead of handing it back"
+        for d in self.links.list():
+            if d["state"] == "connected":
+                try:
+                    r = self.links.request(d["id"], {"t": "phone_task", "task": task}, timeout=30)
+                except link.LinkError as e:
+                    return False, str(e)
+                return r.get("t") == "phone_task_ok", r.get("note") or r.get("message") or "no answer"
+        return False, "no phone is connected"
+
+    def run_task(self, task):
+        """A task the phone handed over: runs as a chat on this PC. Approval cards show in the open windows, like any chat."""
+        if not self.chat_lock.acquire(blocking=False):
+            return False, "this PC is busy with another chat"
+        try:
+            self.in_task = True
+            chat_id = self.store.new_chat()
+            result = {}
+
+            def emit(ev):
+                if ev.get("t") in ("approve", "approval"):
+                    self.broadcast(ev)
+                elif ev.get("t") in ("done", "error"):
+                    result.update(ev)
+
+            self.engine.chat(chat_id, "(From your phone) " + task, emit)
+            self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()})
+            if result.get("t") == "done":
+                return True, result.get("text", "")
+            return False, result.get("message", "no answer")
+        finally:
+            self.in_task = False
+            self.chat_lock.release()
 
     def broadcast(self, ev):
         for emit in list(self.listeners):
@@ -49,7 +89,8 @@ class Daemon:
         elif op == "chat":
             chat_id = req.get("chat") or self.store.new_chat()
             emit({"t": "chat", "id": chat_id})
-            self.engine.chat(chat_id, req.get("text", ""), emit)
+            with self.chat_lock:
+                self.engine.chat(chat_id, req.get("text", ""), emit)
         elif op == "stop":
             self.engine.stop()
             emit({"t": "ok"})
