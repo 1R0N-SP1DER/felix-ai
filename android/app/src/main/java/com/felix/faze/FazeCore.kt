@@ -35,7 +35,7 @@ class FazeCore(private val app: Application) : EngineListener {
         private set
     var linkCode by mutableStateOf("")
         private set
-    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = "" } })
+    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = "" } })
 
     fun setLink(on: Boolean) {
         settings.linkOn = on
@@ -160,6 +160,16 @@ class FazeCore(private val app: Application) : EngineListener {
     private val stt = Stt(transport, { settings.groqKey })
     private val store = ChatStore(File(app.filesDir, "chats"))
     val memory = MemoryStore(File(app.filesDir, "memory.json"))
+    private val peerTasks = PeerTasks({ busy || voiceOn || liveOn }, { task -> main.post { newChat(); send("(From your computer) $task") } })
+    private val computers = object : Computers {
+        override fun available() = link.connected().isNotEmpty()
+        override fun ask(task: String): Pair<Boolean, String> = try {
+            val r = link.ask(link.connected().first(), JSONObject().put("t", "pc_task").put("task", task), 300_000)
+            if (r.optString("t") == "pc_task_ok") true to r.optString("text").ifBlank { "Done." } else false to r.optString("message", "the computer could not do it")
+        } catch (e: Exception) {
+            false to "the computer could not be reached: ${e.message ?: ""}"
+        }
+    }
     private val sync = LinkSync(store, memory, changed = { executor.execute { val list = store.list(); main.post { chats.clear(); chats.addAll(list) } } })
     val toolStore = ToolStore(File(app.filesDir, "tools.json"))
     private val broker = ApprovalBroker({ block -> main.post { block() } }, 60) { approval = it }
@@ -259,7 +269,7 @@ class FazeCore(private val app: Application) : EngineListener {
         )
         rawTools = Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app), scheduler, AndroidSwitches(), liveControl,
             GeminiImages(transport, { settings.geminiKey }, { settings.imageModel }, java.io.File(app.filesDir, "images"), imageShelf),
-            WebImages(transport, { settings.tavily }, imageShelf))
+            WebImages(transport, { settings.tavily }, imageShelf), computers)
         gate = GatedTools(rawTools, broker, extraTier = { name -> if (userTools.has(name)) Tier.SAFE else null }, approvalMode = { settings.approvalMode }, phoneControl = { settings.phoneControl }, locked = { settings.limitWhenLocked && LockOverlayActivity.isLocked(app) })
         gate.logger = { line -> activity.add("tool", line) }
         val tools: ToolRunner = gate

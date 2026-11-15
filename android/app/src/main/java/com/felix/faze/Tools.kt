@@ -52,6 +52,14 @@ object AppMatch {
 
 private class Param(val name: String, val type: String, val description: String)
 
+/** The paired computers, for handing them a task. */
+interface Computers {
+    fun available(): Boolean
+
+    /** Does the task on the computer. Returns (worked, what it said). */
+    fun ask(task: String): Pair<Boolean, String>
+}
+
 class Tools(
     private val device: DeviceApi,
     private val transport: Transport,
@@ -65,6 +73,7 @@ class Tools(
     private val liveControl: LiveControl? = null,
     private val images: ImageMaker? = null,
     private val finder: ImageFinder? = null,
+    private val computers: Computers? = null,
 ) : ToolRunner {
 
     private fun tool(name: String, description: String, vararg params: Param): JSONObject {
@@ -138,6 +147,7 @@ class Tools(
             Param("prompt", "string", "a detailed description of the picture"), Param("shape", "string", "square, portrait or landscape")))
         if (finder != null) out.put(tool("find_images", "Call this when the user asks to see, find or show a picture or photo of something that already exists, or asks what something looks like (a place, an animal, a product, a person's work, a plant). The pictures from the web appear in the chat by themselves. To make a NEW picture, use generate_image instead.",
             Param("query", "string", "what to find pictures of, as a short search phrase"), Param("count", "integer", "how many pictures, 1 to 4")))
+        if (computers?.available() == true) out.put(tool("ask_computer", "Call this when the user asks you to do something on their computer (open a program, find or read a file, run a command, anything the computer can do that this phone cannot). The computer does it as its own chat and returns what happened.", Param("task", "string", "what the computer should do, in plain words")))
         if (liveControl != null) out.put(tool("end_live", "Call this when the user asks to end, stop or leave live mode or the voice chat (for example: end live, stop the call, bye). Say a short goodbye in the same reply; the conversation closes after you finish speaking. No arguments."))
         if (hands != null) {
             out.put(tool("tap", "Call this to tap the screen at a point. Read the screen first (read_screen) to get the point of the button or field. Then read it again to check what happened.",
@@ -232,6 +242,7 @@ class Tools(
                     val id = args.optString("id", "")
                     if (s.cancel(id)) ok("Cancelled $id.") else fail("there is no scheduled task $id")
                 } ?: fail("scheduling is not available")
+                "ask_computer" -> computers?.let { c -> args.optString("task", "").trim().let { t -> if (t.isEmpty()) fail("no task given") else c.ask(t).let { r -> if (r.first) ok(r.second) else fail(r.second) } } } ?: fail("no computer is linked")
                 "end_live" -> liveControl?.let { if (it.active()) { it.endAfterSpeech(); ok("Ending after the goodbye.") } else fail("there is no live or voice chat running") } ?: fail("not available")
                 "tap" -> hands?.let { ok(it.tap(int(args, "x"), int(args, "y"))) } ?: fail("controlling the screen is not available")
                 "long_press" -> hands?.let { ok(it.longPress(int(args, "x"), int(args, "y"))) } ?: fail("controlling the screen is not available")
