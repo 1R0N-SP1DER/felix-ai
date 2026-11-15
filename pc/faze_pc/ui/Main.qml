@@ -4,7 +4,7 @@ import QtQuick.Layouts
 
 ApplicationWindow {
     id: win
-    readonly property bool floating: bridge.floating
+    readonly property bool floating: bridge !== null && bridge.floating
     visible: true
     width: floating ? 560 : 1000
     height: floating ? 660 : 700
@@ -32,6 +32,16 @@ ApplicationWindow {
 
     function toggle() {
         if (visible) hide(); else { show(); raise(); requestActivate(); input.forceActiveFocus() }
+    }
+
+    property string shotPath: ""
+
+    function shoot() {
+        contentItem.grabToImage(function (r) {
+            var ok = r.saveToFile(win.shotPath)
+            console.log("screenshot", win.shotPath, ok ? "saved" : "failed")
+            bridge.quit()
+        })
     }
 
     ListModel { id: msgs }
@@ -226,7 +236,7 @@ ApplicationWindow {
                             Layout.alignment: Qt.AlignVCenter
                             implicitWidth: 38; implicitHeight: 38; radius: 19
                             color: win.accent
-                            Text { anchors.centerIn: parent; text: bridge.busy ? "■" : "↑"; color: win.ink; font.pixelSize: 17; font.bold: true }
+                            Text { anchors.centerIn: parent; text: (bridge !== null && bridge.busy) ? "■" : "↑"; color: win.ink; font.pixelSize: 17; font.bold: true }
                             MouseArea { anchors.fill: parent; onClicked: { if (bridge.busy) bridge.stop(); else { bridge.send(input.text); input.text = "" } } }
                         }
                     }

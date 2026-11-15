@@ -3,7 +3,7 @@ import os
 import sys
 import threading
 
-from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QMetaObject, QObject, Property, QTimer, QUrl, Qt, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtQml import QQmlApplicationEngine
@@ -102,6 +102,10 @@ class Bridge(QObject):
         self._send({"op": "chat", "chat": self._chat or None, "text": text})
 
     @Slot()
+    def quit(self):
+        QGuiApplication.quit()
+
+    @Slot()
     def stop(self):
         self._send({"op": "stop"})
 
@@ -159,20 +163,14 @@ def run_ui(floating=False):
 
     def on_conn():
         c = server.nextPendingConnection()
-        c.readyRead.connect(lambda: (c.readAll(), root.toggle()))
+        c.readyRead.connect(lambda: (c.readAll(), QMetaObject.invokeMethod(root, "toggle")))
 
     server.newConnection.connect(on_conn)
     bridge.start()
     shot = os.environ.get("FAZE_SCREENSHOT")
     if shot:
-        def grab():
-            try:
-                ok = root.grabWindow().save(shot)
-                sys.stderr.write("screenshot %s: %s\n" % (shot, "saved" if ok else "failed"))
-            except Exception as e:  # a failure here must end the run, not hang it
-                import traceback
-                traceback.print_exc()
-                sys.stderr.write("screenshot failed: %s\n" % e)
-            app.quit()
-        QTimer.singleShot(1500, grab)
+        # The page itself saves the picture (a QML window is drawn by QML), then asks the app to quit.
+        root.setProperty("shotPath", shot)
+        QTimer.singleShot(1500, lambda: QMetaObject.invokeMethod(root, "shoot"))
+        QTimer.singleShot(20000, app.quit)  # never hang if the picture cannot be taken
     return app.exec()
