@@ -29,6 +29,12 @@ ApplicationWindow {
     property var chats: []
     property var cfg: ({})
     property string currentChat: ""
+    property var devices: []
+    property var found: []
+    property string pairMsg: ""
+
+    Component.onCompleted: if (bridge !== null && bridge.demoPopup === "devices") devicesPopup.open()
+    Timer { interval: 3000; repeat: true; running: devicesPopup.opened; onTriggered: bridge.refreshDevices() }
 
     function toggle() {
         if (visible) hide(); else { show(); raise(); requestActivate(); input.forceActiveFocus() }
@@ -58,6 +64,9 @@ ApplicationWindow {
             win.addMsg("error", m)
         }
         function onChatsChanged(c) { win.chats = c }
+        function onDevicesChanged(d) { win.devices = d; win.pairMsg = "" }
+        function onPhonesFound(p) { win.found = p; if (p.length > 0) { addr.text = p[0].address; win.pairMsg = "Found " + p[0].name } else win.pairMsg = "No phone answered. Is Faze open on it with computers allowed?" }
+        function onPairFailed(m) { win.pairMsg = m }
         function onConfigChanged(c) { win.cfg = c }
         function onChatChanged(id) { win.currentChat = id; if (id === "") msgs.clear() }
         function onHistoryLoaded(h) { msgs.clear(); for (var i = 0; i < h.length; i++) msgs.append({ "role": h[i].role, "text": h[i].content, "reqId": "", "stage": "" }); list.positionViewAtEnd() }
@@ -111,6 +120,13 @@ ApplicationWindow {
                             Text { anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 8; verticalAlignment: Text.AlignVCenter; text: modelData.title; color: win.text; elide: Text.ElideRight; font.pixelSize: 13 }
                             MouseArea { anchors.fill: parent; onClicked: bridge.openChat(modelData.id) }
                         }
+                    }
+                    Button {
+                        Layout.fillWidth: true
+                        text: "Devices   (" + win.devices.filter(function (d) { return d.state === "connected" }).length + " connected)"
+                        onClicked: { bridge.refreshDevices(); devicesPopup.open() }
+                        contentItem: Text { text: parent.text; color: win.dim; horizontalAlignment: Text.AlignHCenter }
+                        background: Rectangle { radius: 14; color: "#08FFFFFF"; border.width: 1; border.color: win.line }
                     }
                     Button {
                         Layout.fillWidth: true
@@ -263,6 +279,57 @@ ApplicationWindow {
     }
 
     Popup {
+        id: devicesPopup
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(480, win.width - 40)
+        height: Math.min(560, win.height - 40)
+        padding: 18
+        background: Rectangle { radius: 20; color: win.surface; border.width: 1; border.color: win.line }
+        contentItem: ColumnLayout {
+            spacing: 10
+            Text { text: "Devices"; color: win.text; font.pixelSize: 18; font.bold: true }
+            Text { text: "This PC and your phone work as one Faze. The phone is the hub."; color: win.muted; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Repeater {
+                model: win.devices
+                delegate: Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: row.implicitHeight + 20
+                    radius: 14; color: win.surface2; border.width: 1; border.color: win.line
+                    RowLayout {
+                        id: row
+                        anchors.fill: parent; anchors.margins: 12; spacing: 10
+                        Rectangle { width: 10; height: 10; radius: 5; color: modelData.state === "connected" ? "#5EE6A8" : "#6D7A98" }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 2
+                            Text { text: modelData.name; color: win.text; font.pixelSize: 14 }
+                            Text { text: modelData.state === "connected" ? "Connected · " + modelData.address : (modelData.error !== "" ? modelData.error : "Offline"); color: win.muted; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true }
+                        }
+                        Button { text: "Forget"; onClicked: bridge.forgetDevice(modelData.id) }
+                    }
+                }
+            }
+            Text { visible: win.devices.length === 0; text: "No phone paired yet."; color: win.dim; font.pixelSize: 13 }
+            Rectangle { Layout.fillWidth: true; height: 1; color: win.line }
+            Text { text: "Pair a phone"; color: win.text; font.pixelSize: 14; font.bold: true }
+            Text { text: "On the phone: Settings > Devices > Pair a computer. It shows a code. Then find the phone here and type the code."; color: win.muted; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            RowLayout {
+                Layout.fillWidth: true
+                TextField { id: addr; Layout.fillWidth: true; placeholderText: "Phone address, e.g. 192.168.43.1" }
+                Button { text: "Find"; onClicked: bridge.findPhones() }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                TextField { id: code; Layout.fillWidth: true; placeholderText: "Code from the phone"; inputMethodHints: Qt.ImhUppercaseOnly }
+                Button { text: "Pair"; onClicked: { win.pairMsg = "Pairing…"; bridge.pairPhone(addr.text, code.text); code.text = "" } }
+            }
+            Text { visible: win.pairMsg !== ""; text: win.pairMsg; color: win.dim; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Item { Layout.fillHeight: true }
+            Button { text: "Close"; onClicked: devicesPopup.close(); Layout.alignment: Qt.AlignRight }
+        }
+    }
+
+    Popup {
         id: activity
         modal: true
         anchors.centerIn: Overlay.overlay
@@ -324,6 +391,7 @@ ApplicationWindow {
                 TextField { Layout.fillWidth: true; text: win.cfg.user_name || ""; onEditingFinished: bridge.setSetting("user_name", text) }
                 RowLayout {
                     Layout.fillWidth: true
+                    Button { text: "Devices"; onClicked: { settings.close(); bridge.refreshDevices(); devicesPopup.open() } }
                     Button { text: "Activity log"; onClicked: { settings.close(); bridge.loadActivity() } }
                     Item { Layout.fillWidth: true }
                     Button { text: "Close"; onClicked: settings.close() }

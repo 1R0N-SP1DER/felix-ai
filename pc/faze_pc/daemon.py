@@ -7,6 +7,8 @@ import sys
 import threading
 
 from . import config as cfg
+from . import link
+from .linkmanager import LinkManager
 from .engine import Engine
 from .store import Store
 
@@ -16,10 +18,11 @@ def socket_path():
 
 
 class Daemon:
-    def __init__(self, config=None, store=None, engine=None):
+    def __init__(self, config=None, store=None, engine=None, links=None):
         self.config = config or cfg.Config()
         self.store = store or Store(cfg.data_dir())
         self.engine = engine or Engine(self.config, self.store)
+        self.links = links or LinkManager(link.Devices())
 
     def handle(self, req, emit):
         op = req.get("op")
@@ -47,6 +50,24 @@ class Daemon:
             emit({"t": "ok"})
         elif op == "activity":
             emit({"t": "activity", "rows": self.store.activity()})
+        elif op == "devices":
+            emit({"t": "devices", "devices": self.links.list(), "pc": self.links.devices.pc_name})
+        elif op == "link_find":
+            try:
+                emit({"t": "found", "phones": self.links.find()})
+            except Exception as e:
+                emit({"t": "error", "message": "could not search: %s" % e})
+        elif op == "link_pair":
+            try:
+                phone = self.links.pair(req["address"].strip(), req["code"])
+                self.store.log("link", "paired with %s" % phone["name"])
+                emit({"t": "devices", "devices": self.links.list(), "pc": self.links.devices.pc_name})
+            except (link.LinkError, OSError, KeyError, ValueError) as e:
+                emit({"t": "error", "message": "pairing failed: %s" % e})
+        elif op == "link_forget":
+            self.links.forget(req.get("id", ""))
+            self.store.log("link", "forgot a phone")
+            emit({"t": "devices", "devices": self.links.list(), "pc": self.links.devices.pc_name})
         elif op == "ping":
             emit({"t": "pong"})
         else:
@@ -62,6 +83,7 @@ class Daemon:
             except (ConnectionRefusedError, FileNotFoundError):
                 os.unlink(path)
         daemon = self
+        self.links.start()
 
         class Handler(socketserver.StreamRequestHandler):
             def handle(self):
