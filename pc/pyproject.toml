@@ -3,7 +3,7 @@ name = "faze-pc"
 version = "0.1.0"
 description = "Faze for the desktop: a small background daemon, a Qt window, and a floating window"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["cryptography>=41"]
 
 [project.optional-dependencies]
 ui = ["PySide6-Essentials>=6.6"]

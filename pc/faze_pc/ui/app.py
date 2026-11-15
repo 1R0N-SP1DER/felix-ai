@@ -31,6 +31,9 @@ class Bridge(QObject):
     busyChanged = Signal()
     chatChanged = Signal(str)
     approval = Signal(str, str, str)
+    devicesChanged = Signal("QVariantList")
+    phonesFound = Signal("QVariantList")
+    pairFailed = Signal(str)
     toolUsed = Signal(str, bool)
     activityLoaded = Signal("QVariantList")
 
@@ -46,6 +49,10 @@ class Bridge(QObject):
     @Property(bool, constant=True)
     def floating(self):
         return self._floating
+
+    @Property(str, constant=True)
+    def demoPopup(self):
+        return os.environ.get("FAZE_DEMO_POPUP", "")
 
     @Property(bool, notify=busyChanged)
     def busy(self):
@@ -63,6 +70,7 @@ class Bridge(QObject):
         self._client = dclient.Client()
         threading.Thread(target=self._read, daemon=True).start()
         self._send({"op": "state"})
+        self._send({"op": "devices"})
 
     def _send(self, obj):
         with self._lock:
@@ -88,6 +96,10 @@ class Bridge(QObject):
                 self._set_busy(False)
                 self.assistantDone.emit(bool(ev.get("stopped")))
                 self._send({"op": "state"})
+            elif t == "devices":
+                self.devicesChanged.emit(ev["devices"])
+            elif t == "found":
+                self.phonesFound.emit(ev["phones"])
             elif t == "approve":
                 self.approval.emit(ev["id"], ev["tool"], ev["summary"])
             elif t == "tool":
@@ -97,8 +109,11 @@ class Bridge(QObject):
             elif t == "note":
                 self.note.emit(ev["message"])
             elif t == "error":
-                self._set_busy(False)
-                self.failed.emit(ev["message"])
+                if ev["message"].startswith(("pairing failed", "could not search")):
+                    self.pairFailed.emit(ev["message"])
+                else:
+                    self._set_busy(False)
+                    self.failed.emit(ev["message"])
 
     @Slot(str)
     def send(self, text):
@@ -134,6 +149,22 @@ class Bridge(QObject):
         self._send({"op": "approve", "id": request_id, "ok": ok})
 
     @Slot()
+    def refreshDevices(self):
+        self._send({"op": "devices"})
+
+    @Slot()
+    def findPhones(self):
+        self._send({"op": "link_find"})
+
+    @Slot(str, str)
+    def pairPhone(self, address, code):
+        self._send({"op": "link_pair", "address": address, "code": code})
+
+    @Slot(str)
+    def forgetDevice(self, device_id):
+        self._send({"op": "link_forget", "id": device_id})
+
+    @Slot()
     def loadActivity(self):
         self._send({"op": "activity"})
 
@@ -153,6 +184,8 @@ class Bridge(QObject):
         self.route.emit("Gemini · gemini-3.1-flash-lite")
         self.toolUsed.emit("Opened Firefox", True)
         self.approval.emit("demo", "run_command", "Run: df -h")
+        self.devicesChanged.emit([{"id": "p1", "name": "Pixel 8", "address": "192.168.43.1", "state": "connected", "error": ""},
+                                  {"id": "p2", "name": "Old phone", "address": "192.168.1.20", "state": "offline", "error": "192.168.1.20: timed out"}])
 
 
 def run_ui(floating=False):
