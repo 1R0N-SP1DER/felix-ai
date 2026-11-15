@@ -22,6 +22,7 @@ DEFAULTS = {
     "ollama_chat_model": "qwen2.5:1.5b",
     "ollama_deep_model": "qwen2.5:1.5b",
     "effort": "medium",
+    "ollama_tools": False,
 }
 
 
@@ -103,5 +104,5 @@ class Config:
     def public(self):
         """The settings with the keys hidden, safe to show in a window."""
         d = json.loads(json.dumps(self.data))
-        d["keys"] = {p: bool(self.key(p)) for p in KEYED}
+        d["keys"] = {p: bool(self.key(p)) for p in KEYED + ("tavily",)}
         return d

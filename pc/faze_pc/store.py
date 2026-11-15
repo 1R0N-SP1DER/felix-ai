@@ -67,6 +67,13 @@ class Store:
             out.append({"id": cid, "title": first.strip().replace("\n", " ")[:48], "t": real[-1]["t"]})
         return sorted(out, key=lambda c: c["t"], reverse=True)
 
+    def log(self, kind, text):
+        self._append(os.path.join(self.root, "activity.jsonl"), {"t": self.now(), "kind": kind, "text": text[:300]})
+
+    def activity(self, limit=60):
+        rows = self._read(os.path.join(self.root, "activity.jsonl"))
+        return rows[-limit:][::-1]
+
     # Memory: facts the person asked to be remembered.
     def _facts_path(self):
         return os.path.join(self.root, "facts.jsonl")

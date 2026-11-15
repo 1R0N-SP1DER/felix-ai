@@ -30,6 +30,9 @@ class Bridge(QObject):
     historyLoaded = Signal("QVariantList")
     busyChanged = Signal()
     chatChanged = Signal(str)
+    approval = Signal(str, str, str)
+    toolUsed = Signal(str, bool)
+    activityLoaded = Signal("QVariantList")
 
     def __init__(self, floating, demo=False):
         super().__init__()
@@ -85,6 +88,12 @@ class Bridge(QObject):
                 self._set_busy(False)
                 self.assistantDone.emit(bool(ev.get("stopped")))
                 self._send({"op": "state"})
+            elif t == "approve":
+                self.approval.emit(ev["id"], ev["tool"], ev["summary"])
+            elif t == "tool":
+                self.toolUsed.emit(ev["summary"], bool(ev.get("ok")))
+            elif t == "activity":
+                self.activityLoaded.emit([{"when": r["t"], "kind": r["kind"], "text": r["text"]} for r in ev["rows"]])
             elif t == "note":
                 self.note.emit(ev["message"])
             elif t == "error":
@@ -120,6 +129,14 @@ class Bridge(QObject):
         self.chatChanged.emit(chat_id)
         self._send({"op": "history", "chat": chat_id})
 
+    @Slot(str, bool)
+    def answer(self, request_id, ok):
+        self._send({"op": "approve", "id": request_id, "ok": ok})
+
+    @Slot()
+    def loadActivity(self):
+        self._send({"op": "activity"})
+
     @Slot(str, str)
     def setSetting(self, name, value):
         self._send({"op": "set", "name": name, "value": value})
@@ -134,6 +151,8 @@ class Bridge(QObject):
             {"role": "user", "content": "ha, you know me. why does this python function crash?"},
         ])
         self.route.emit("Gemini · gemini-3.1-flash-lite")
+        self.toolUsed.emit("Opened Firefox", True)
+        self.approval.emit("demo", "run_command", "Run: df -h")
 
 
 def run_ui(floating=False):
