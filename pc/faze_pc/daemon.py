@@ -5,6 +5,7 @@ import socket
 import socketserver
 import sys
 import threading
+import time
 
 from . import config as cfg
 from . import link
@@ -27,11 +28,58 @@ class Daemon:
         self.store = store or Store(cfg.data_dir())
         self.engine = engine or Engine(self.config, self.store, tools=toolbox.Tools(self.config, self.store, phone=self.ask_phone))
         self.in_task = False
+        self.mirroring = False
+        self.mirror_gap = 0.2  # seconds between pictures at most: the phone makes a few a second
         self.chat_lock = threading.Lock()  # one conversation at a time on the engine
         self.listeners = set()
         self.voice = voice or Voice(self.config)
         self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log)
         self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_request=lambda pid, msg: self.peer.handle(pid, msg), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
+
+    def _phone(self):
+        for d in self.links.list():
+            if d["state"] == "connected":
+                return d["id"]
+        return None
+
+    def mirror_loop(self):
+        """Asks the phone for its screen again and again and hands each picture to the open windows, until stopped or something fails."""
+        try:
+            while self.mirroring:
+                pid = self._phone()
+                if not pid:
+                    self.broadcast({"t": "mirror_error", "message": "no phone is connected"})
+                    return
+                t0 = time.time()
+                try:
+                    r = self.links.request(pid, {"t": "screen_get"}, timeout=20)
+                except link.LinkError as e:
+                    self.broadcast({"t": "mirror_error", "message": str(e)})
+                    return
+                if r.get("t") != "screen_ok":
+                    self.broadcast({"t": "mirror_error", "message": r.get("message", "the phone did not send its screen")})
+                    return
+                self.broadcast({"t": "frame", "jpeg": r["jpeg"]})
+                time.sleep(max(0.0, self.mirror_gap - (time.time() - t0)))
+        finally:
+            self.mirroring = False
+
+    def mirror_input(self, req):
+        """One tap, swipe, key or piece of text from the window, forwarded to the phone."""
+        kind = req.get("kind")
+        msg = {"tap": {"t": "screen_tap", "x": req.get("x"), "y": req.get("y")},
+               "long": {"t": "screen_long", "x": req.get("x"), "y": req.get("y")},
+               "swipe": {"t": "screen_swipe", "x1": req.get("x1"), "y1": req.get("y1"), "x2": req.get("x2"), "y2": req.get("y2")},
+               "key": {"t": "screen_key", "key": str(req.get("key", ""))},
+               "text": {"t": "screen_text", "text": str(req.get("text", ""))[:300]}}.get(kind)
+        pid = self._phone()
+        if not msg or not pid:
+            return {"t": "mirror_error", "message": "no phone is connected" if not pid else "unknown input"}
+        try:
+            r = self.links.request(pid, msg, timeout=15)
+        except link.LinkError as e:
+            return {"t": "mirror_error", "message": str(e)}
+        return {"t": "mirror_error", "message": r.get("message", "the phone refused")} if r.get("t") == "error" else None
 
     def say(self, text, emit):
         """Speaks a reply when "Speak replies" is on. A voice problem is shown once, never stops the chat."""
@@ -109,6 +157,18 @@ class Daemon:
                 self.engine.chat(chat_id, req.get("text", ""), watch)
             if said and self.config.data.get("speak"):
                 threading.Thread(target=self.say, args=(said[-1], emit), daemon=True).start()
+        elif op == "mirror_start":
+            if not self.mirroring:
+                self.mirroring = True
+                threading.Thread(target=self.mirror_loop, daemon=True, name="mirror").start()
+            emit({"t": "ok"})
+        elif op == "mirror_stop":
+            self.mirroring = False
+            emit({"t": "ok"})
+        elif op == "mirror_input":
+            reply = self.mirror_input(req)
+            if reply:
+                emit(reply)
         elif op == "listen":
             try:
                 self.voice.stop_speaking()

@@ -33,7 +33,7 @@ ApplicationWindow {
     property var found: []
     property string pairMsg: ""
 
-    Component.onCompleted: if (bridge !== null && bridge.demoPopup === "devices") devicesPopup.open()
+    Component.onCompleted: { if (bridge !== null && bridge.demoPopup === "devices") devicesPopup.open(); if (bridge !== null && bridge.demoPopup === "mirror") mirrorPopup.open() }
     Timer { interval: 3000; repeat: true; running: devicesPopup.opened; onTriggered: bridge.refreshDevices() }
 
     function toggle() {
@@ -288,6 +288,63 @@ ApplicationWindow {
     }
 
     Popup {
+        id: mirrorPopup
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(520, win.width - 30)
+        height: Math.min(820, win.height - 30)
+        padding: 14
+        property string problem: ""
+        onOpened: { problem = ""; bridge.startMirror() }
+        onClosed: bridge.stopMirror()
+        background: Rectangle { radius: 20; color: win.surface; border.width: 1; border.color: win.line }
+        Connections { target: bridge; function onMirrorFailed(m) { mirrorPopup.problem = m } }
+        contentItem: ColumnLayout {
+            spacing: 8
+            RowLayout {
+                Layout.fillWidth: true
+                Text { text: "Phone screen"; color: win.text; font.pixelSize: 16; font.bold: true; Layout.fillWidth: true }
+                Button { text: "Back"; onClicked: bridge.mirrorKey("back") }
+                Button { text: "Home"; onClicked: bridge.mirrorKey("home") }
+                Button { text: "Close"; onClicked: mirrorPopup.close() }
+            }
+            Text { visible: mirrorPopup.problem !== ""; text: mirrorPopup.problem; color: win.bad; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Rectangle {
+                Layout.fillWidth: true; Layout.fillHeight: true
+                color: "#05080F"; radius: 12; clip: true
+                Image {
+                    id: screenImg
+                    anchors.fill: parent
+                    fillMode: Image.PreserveAspectFit
+                    cache: false
+                    source: bridge !== null && bridge.frameNo > 0 ? "image://phone/frame?" + bridge.frameNo : ""
+                }
+                Text { visible: bridge !== null && bridge.frameNo === 0 && mirrorPopup.problem === ""; anchors.centerIn: parent; text: "Waiting for the phone…"; color: win.dim }
+                MouseArea {
+                    id: pad
+                    anchors.fill: parent
+                    property real sx: 0; property real sy: 0; property var t0: 0
+                    function fx(v) { var w = screenImg.paintedWidth, off = (width - w) / 2; return Math.max(0, Math.min(1, (v - off) / w)) }
+                    function fy(v) { var h = screenImg.paintedHeight, off = (height - h) / 2; return Math.max(0, Math.min(1, (v - off) / h)) }
+                    onPressed: function (m) { sx = m.x; sy = m.y; t0 = Date.now() }
+                    onReleased: function (m) {
+                        var moved = Math.abs(m.x - sx) + Math.abs(m.y - sy)
+                        if (moved < 12) bridge.mirrorInput(Date.now() - t0 > 500 ? "long" : "tap", fx(sx), fy(sy), 0, 0)
+                        else bridge.mirrorInput("swipe", fx(sx), fy(sy), fx(m.x), fy(m.y))
+                    }
+                    onWheel: function (w) { bridge.mirrorInput("swipe", 0.5, w.angleDelta.y > 0 ? 0.3 : 0.7, 0.5, w.angleDelta.y > 0 ? 0.7 : 0.3) }
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                TextField { id: mirrorText; Layout.fillWidth: true; placeholderText: "Type on the phone"; onAccepted: { bridge.mirrorText(text); text = "" } }
+                Button { text: "Send"; onClicked: { bridge.mirrorText(mirrorText.text); mirrorText.text = "" } }
+            }
+            Text { text: "Click to tap, hold to long-press, drag to swipe, scroll to scroll. Turn on Allow screen view and control on the phone first."; color: win.muted; font.pixelSize: 11; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        }
+    }
+
+    Popup {
         id: devicesPopup
         modal: true
         anchors.centerIn: Overlay.overlay
@@ -314,6 +371,7 @@ ApplicationWindow {
                             Text { text: modelData.name; color: win.text; font.pixelSize: 14 }
                             Text { text: modelData.state === "connected" ? "Connected · " + modelData.address + (modelData.synced ? " · " + modelData.synced : "") : (modelData.error !== "" ? modelData.error : "Offline"); color: win.muted; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true }
                         }
+                        Button { text: "Screen"; visible: modelData.state === "connected"; onClicked: { devicesPopup.close(); mirrorPopup.open() } }
                         Button { text: "Forget"; onClicked: bridge.forgetDevice(modelData.id) }
                     }
                 }

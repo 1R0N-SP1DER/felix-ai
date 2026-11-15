@@ -49,3 +49,8 @@ Shared folders (read only; phone asks, PC answers)
   {"t":"fs_list","root","path"}               -> {"t":"fs_list_ok","entries":[{"name","dir","size","mtime"}]}   folders first, up to 2000, links that leave the folder are hidden
   {"t":"fs_read","root","path","offset","len"} -> {"t":"fs_read_ok","data":base64,"size","eof"}   up to 512 KiB a time
 A path is resolved with symlinks and must stay inside its folder. The phone shows these in its Files picker under "Your PC".
+
+Screen view and control (phone asks nothing; PC asks, only when "Allow screen view and control" is on, never while the phone is locked)
+  {"t":"screen_get"} -> {"t":"screen_ok","jpeg":base64}   a root screenshot, a few a second
+  {"t":"screen_tap","x","y"} / screen_long / {"t":"screen_swipe","x1","y1","x2","y2"}   points are fractions 0..1 of the screen
+  {"t":"screen_key","key"} / {"t":"screen_text","text"}   -> {"t":"screen_done","note"} or {"t":"error","message"}
