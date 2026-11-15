@@ -52,7 +52,7 @@ object AutoMode {
 
     /**
      * What to try, in order. Online: chat prefers Groq and OpenRouter, code and deep work prefers Gemini, and a provider that is out of
-     * allowance goes to the back, so a limit never stops a task. The offline model is the last resort. Offline: LFM for chat, Qwen for the rest.
+     * allowance goes to the back, so a limit never stops a task. A connected computer's Ollama comes before the phone's own offline model. The offline model is the last resort. Offline: LFM for chat, Qwen for the rest.
      */
     fun plan(
         task: Task,
@@ -62,6 +62,7 @@ object AutoMode {
         model: (String) -> String,
         casualModel: String,
         deepModel: String,
+        pc: Boolean = false,
     ): List<Attempt> {
         val offline = ArrayList<Attempt>()
         val first = if (task == Task.CASUAL) casualModel else deepModel
@@ -71,7 +72,8 @@ object AutoMode {
         val usable = order.filter { it in keys }
         val ready = usable.filter { !resting(it) }.map { Attempt(it, model(it)) }
         val tired = usable.filter { resting(it) }.map { Attempt(it, model(it)) }
-        return if (online) ready + offline + tired else offline + ready + tired
+        val computer = if (pc) listOf(Attempt("pc", "ollama")) else emptyList() // a paired computer's own model: free and stronger than the phone's
+        return if (online) ready + computer + offline + tired else computer + offline + ready + tired
     }
 }
 

@@ -150,4 +150,36 @@ class LinkTest {
         try { b.recv() } catch (e: java.io.IOException) { refused = true }
         assertTrue(refused)
     }
+
+    @Test fun thePhoneCanAskAConnectedComputerAndGetTheAnswer() {
+        var store = ""
+        val peers = LinkPeers({ store }, { store = it })
+        val srv = server(peers)
+        val secret = pair(srv.boundPort, srv.openPairing())!!
+        Socket("127.0.0.1", srv.boundPort).use { s ->
+            val nc = LinkCrypto.randomBytes(16)
+            put(s, JSONObject().put("t", "hello").put("v", 1).put("id", "pc1").put("nonce", LinkCrypto.hex(nc)))
+            val r = json(s)
+            val np = LinkCrypto.unhex(r.getString("nonce"))
+            put(s, JSONObject().put("t", "auth").put("proof", LinkCrypto.hex(LinkCrypto.proof(secret, "pc", np, nc))))
+            val sess = LinkSession(s.getInputStream(), s.getOutputStream(), LinkCrypto.sessionKey(secret, nc, np), phone = false)
+            assertEquals("ready", sess.recv().getString("t"))
+            val answer = java.util.concurrent.atomic.AtomicReference<JSONObject>()
+            val t = Thread { answer.set(srv.ask("pc1", JSONObject().put("t", "pc_chat"), 5000)) }
+            t.start()
+            val q = sess.recv() // the computer receives the phone's question...
+            assertEquals("pc_chat", q.getString("t"))
+            sess.send(JSONObject().put("t", "pc_chat_ok").put("content", "hi").put("re", q.getLong("rid"))) // ...and answers with the same number
+            t.join(5000)
+            assertEquals("hi", answer.get().getString("content"))
+        }
+    }
+
+    @Test fun askingAComputerThatIsNotConnectedFails() {
+        var store = ""
+        val srv = server(LinkPeers({ store }, { store = it }))
+        var failed = false
+        try { srv.ask("nobody", JSONObject().put("t", "x"), 100) } catch (e: java.io.IOException) { failed = true }
+        assertTrue(failed)
+    }
 }
