@@ -43,6 +43,7 @@ jobs:
           FAZE_SCREENSHOT=shots/desktop.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(False))"
           FAZE_SCREENSHOT=shots/floating.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(True))"
           FAZE_DEMO_POPUP=devices FAZE_SCREENSHOT=shots/devices.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(False))"
+          FAZE_DEMO_POPUP=mirror FAZE_SCREENSHOT=shots/mirror.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(False))"
           ls -l shots
 
       - name: Print the screenshots into the log, so they can be read without downloading

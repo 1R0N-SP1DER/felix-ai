@@ -4,7 +4,8 @@ import sys
 import threading
 
 from PySide6.QtCore import QMetaObject, QObject, Property, QTimer, QUrl, Qt, Signal, Slot
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QImage
+from PySide6.QtQuick import QQuickImageProvider
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtQml import QQmlApplicationEngine
 
@@ -15,6 +16,24 @@ HERE = os.path.dirname(__file__)
 
 def instance_name():
     return "faze-ui-%d" % os.getuid()
+
+
+class FrameProvider(QQuickImageProvider):
+    """Holds the newest picture of the phone's screen for the window to show as image://phone/frame."""
+
+    def __init__(self):
+        super().__init__(QQuickImageProvider.ImageType.Image)
+        self.image = QImage()
+        self.lock = threading.Lock()
+
+    def set(self, img):
+        with self.lock:
+            self.image = img
+
+    def requestImage(self, id, size, requestedSize):
+        with self.lock:
+            img = self.image
+        return img if not img.isNull() else QImage(2, 2, QImage.Format.Format_RGB32)
 
 
 class Bridge(QObject):
@@ -36,6 +55,8 @@ class Bridge(QObject):
     devicesChanged = Signal("QVariantList")
     phonesFound = Signal("QVariantList")
     pairFailed = Signal(str)
+    frameChanged = Signal()
+    mirrorFailed = Signal(str)
     toolUsed = Signal(str, bool)
     activityLoaded = Signal("QVariantList")
 
@@ -44,6 +65,8 @@ class Bridge(QObject):
         self._floating = floating
         self._busy = False
         self._listening = False
+        self.frames = FrameProvider()
+        self._frameNo = 0
         self._chat = ""
         self._demo = demo
         self._client = None
@@ -99,6 +122,15 @@ class Bridge(QObject):
                 self._set_busy(False)
                 self.assistantDone.emit(bool(ev.get("stopped")))
                 self._send({"op": "state"})
+            elif t == "frame":
+                import base64
+                img = QImage.fromData(base64.b64decode(ev["jpeg"]), "JPG")
+                if not img.isNull():
+                    self.frames.set(img)
+                    self._frameNo += 1
+                    self.frameChanged.emit()
+            elif t == "mirror_error":
+                self.mirrorFailed.emit(ev["message"])
             elif t == "listening":
                 self._listening = True
                 self.listeningChanged.emit(True)
@@ -165,6 +197,30 @@ class Bridge(QObject):
     def listening(self):
         return self._listening
 
+    @Property(int, notify=frameChanged)
+    def frameNo(self):
+        return self._frameNo
+
+    @Slot()
+    def startMirror(self):
+        self._send({"op": "mirror_start"})
+
+    @Slot()
+    def stopMirror(self):
+        self._send({"op": "mirror_stop"})
+
+    @Slot(str, float, float, float, float)
+    def mirrorInput(self, kind, x, y, x2, y2):
+        self._send({"op": "mirror_input", "kind": kind, "x": x, "y": y, "x1": x, "y1": y, "x2": x2, "y2": y2})
+
+    @Slot(str)
+    def mirrorKey(self, key):
+        self._send({"op": "mirror_input", "kind": "key", "key": key})
+
+    @Slot(str)
+    def mirrorText(self, text):
+        self._send({"op": "mirror_input", "kind": "text", "text": text})
+
     @Slot()
     def startListening(self):
         self._send({"op": "listen"})
@@ -218,6 +274,20 @@ class Bridge(QObject):
         ])
         self.route.emit("Gemini · gemini-3.1-flash-lite")
         self.toolUsed.emit("Opened Firefox", True)
+        if os.environ.get("FAZE_DEMO_POPUP") == "mirror":
+            from PySide6.QtGui import QColor, QLinearGradient, QPainter, QBrush, QFont
+            img = QImage(540, 1200, QImage.Format.Format_RGB32)
+            p = QPainter(img)
+            g = QLinearGradient(0, 0, 540, 1200)
+            g.setColorAt(0, QColor("#1b2a4a"))
+            g.setColorAt(1, QColor("#0b1020"))
+            p.fillRect(img.rect(), QBrush(g))
+            p.setPen(QColor("white"))
+            p.setFont(QFont("sans", 28))
+            p.drawText(img.rect(), 0x84, "phone screen (demo picture)")
+            p.end()
+            self.frames.set(img)
+            self._frameNo += 1
         self.approval.emit("demo", "run_command", "Run: df -h")
         self.devicesChanged.emit([{"id": "p1", "name": "Pixel 8", "address": "192.168.43.1", "state": "connected", "error": ""},
                                   {"id": "p2", "name": "Old phone", "address": "192.168.1.20", "state": "offline", "error": "192.168.1.20: timed out"}])
@@ -239,6 +309,7 @@ def run_ui(floating=False):
     bridge = Bridge(floating, demo)
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty("bridge", bridge)
+    engine.addImageProvider("phone", bridge.frames)
     engine.load(QUrl.fromLocalFile(os.path.join(HERE, "Main.qml")))
     if not engine.rootObjects():
         sys.stderr.write("the window could not be loaded\n")
