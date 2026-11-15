@@ -64,6 +64,7 @@ ApplicationWindow {
             win.addMsg("error", m)
         }
         function onChatsChanged(c) { win.chats = c }
+        function onHeard(t) { if (t.trim() !== "") bridge.send(t); else bridge.sayNothing() }
         function onDevicesChanged(d) { win.devices = d; win.pairMsg = "" }
         function onPhonesFound(p) { win.found = p; if (p.length > 0) { addr.text = p[0].address; win.pairMsg = "Found " + p[0].name } else win.pairMsg = "No phone answered. Is Faze open on it with computers allowed?" }
         function onPairFailed(m) { win.pairMsg = m }
@@ -252,7 +253,7 @@ ApplicationWindow {
                             id: input
                             Layout.fillWidth: true
                             Layout.alignment: Qt.AlignVCenter
-                            placeholderText: "Message FAZE"
+                            placeholderText: (bridge !== null && bridge.listening) ? "Listening… tap ■ to send" : "Message FAZE"
                             placeholderTextColor: win.muted
                             color: win.text
                             font.pixelSize: 14
@@ -264,6 +265,14 @@ ApplicationWindow {
                                     if (!bridge.busy) { bridge.send(text); text = "" }
                                 }
                             }
+                        }
+                        Rectangle {
+                            Layout.alignment: Qt.AlignVCenter
+                            implicitWidth: 38; implicitHeight: 38; radius: 19
+                            color: (bridge !== null && bridge.listening) ? win.bad : win.surface
+                            border.width: 1; border.color: win.line
+                            Text { anchors.centerIn: parent; text: (bridge !== null && bridge.listening) ? "■" : "🎙"; color: win.text; font.pixelSize: 15 }
+                            MouseArea { anchors.fill: parent; onClicked: { if (bridge.listening) bridge.stopListening(); else bridge.startListening() } }
                         }
                         Rectangle {
                             Layout.alignment: Qt.AlignVCenter
@@ -383,6 +392,9 @@ ApplicationWindow {
                         }
                     }
                 }
+                CheckBox { text: "Speak replies aloud"; checked: win.cfg.speak === true; onToggled: bridge.setSetting("speak", checked ? "true" : "false") }
+                Text { text: "Voice (Gemini voice name)"; color: win.dim; font.pixelSize: 12 }
+                TextField { Layout.fillWidth: true; text: win.cfg.voice || ""; onEditingFinished: bridge.setSetting("voice", text) }
                 Text { text: "Folders shared with your phone (read only, comma separated)"; color: win.dim; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
                 TextField { Layout.fillWidth: true; text: win.cfg.share_folders || ""; onEditingFinished: bridge.setSetting("share_folders", text) }
                 Text { text: "Ollama chat model"; color: win.dim; font.pixelSize: 12 }

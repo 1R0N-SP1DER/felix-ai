@@ -23,6 +23,9 @@ DEFAULTS = {
     "ollama_deep_model": "qwen2.5:1.5b",
     "effort": "medium",
     "ollama_tools": False,
+    "speak": False,
+    "voice": "Kore",
+    "tts_model": "gemini-3.8-flash-tts",
     "share_folders": "~/Documents, ~/Downloads, ~/Pictures",
 }
 
@@ -97,6 +100,8 @@ class Config:
                 raise KeyError(name)
             self.data[group][item] = str(value).strip()
         elif name in DEFAULTS and not isinstance(DEFAULTS[name], dict):
+            if isinstance(DEFAULTS[name], bool) and isinstance(value, str):
+                value = value.strip().lower() in ("true", "1", "yes", "on")
             self.data[name] = value.strip() if isinstance(value, str) else value
         else:
             raise KeyError(name)

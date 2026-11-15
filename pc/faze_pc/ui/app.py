@@ -31,6 +31,8 @@ class Bridge(QObject):
     busyChanged = Signal()
     chatChanged = Signal(str)
     approval = Signal(str, str, str)
+    listeningChanged = Signal(bool)
+    heard = Signal(str)
     devicesChanged = Signal("QVariantList")
     phonesFound = Signal("QVariantList")
     pairFailed = Signal(str)
@@ -41,6 +43,7 @@ class Bridge(QObject):
         super().__init__()
         self._floating = floating
         self._busy = False
+        self._listening = False
         self._chat = ""
         self._demo = demo
         self._client = None
@@ -96,6 +99,13 @@ class Bridge(QObject):
                 self._set_busy(False)
                 self.assistantDone.emit(bool(ev.get("stopped")))
                 self._send({"op": "state"})
+            elif t == "listening":
+                self._listening = True
+                self.listeningChanged.emit(True)
+            elif t == "heard":
+                self._listening = False
+                self.listeningChanged.emit(False)
+                self.heard.emit(ev["text"])
             elif t == "devices":
                 self.devicesChanged.emit(ev["devices"])
             elif t == "found":
@@ -112,6 +122,9 @@ class Bridge(QObject):
                 if ev["message"].startswith(("pairing failed", "could not search")):
                     self.pairFailed.emit(ev["message"])
                 else:
+                    if self._listening:
+                        self._listening = False
+                        self.listeningChanged.emit(False)
                     self._set_busy(False)
                     self.failed.emit(ev["message"])
 
@@ -147,6 +160,28 @@ class Bridge(QObject):
     @Slot(str, bool)
     def answer(self, request_id, ok):
         self._send({"op": "approve", "id": request_id, "ok": ok})
+
+    @Property(bool, notify=listeningChanged)
+    def listening(self):
+        return self._listening
+
+    @Slot()
+    def startListening(self):
+        self._send({"op": "listen"})
+
+    @Slot()
+    def stopListening(self):
+        self._send({"op": "listen_stop"})
+
+    @Slot()
+    def sayNothing(self):
+        self.failed.emit("I did not catch that. Try again a little closer to the mic.")
+
+    @Slot()
+    def cancelListening(self):
+        self._listening = False
+        self.listeningChanged.emit(False)
+        self._send({"op": "listen_cancel"})
 
     @Slot()
     def refreshDevices(self):
