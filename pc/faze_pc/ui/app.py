@@ -68,6 +68,7 @@ class Bridge(QObject):
         self._busy = False
         self._listening = False
         self._voiceState = "off"
+        self._live = False
         self.frames = FrameProvider()
         self._frameNo = 0
         self._chat = ""
@@ -129,6 +130,8 @@ class Bridge(QObject):
                 self.levelChanged.emit(float(ev["v"]))
             elif t == "voice_state":
                 self._voiceState = ev["state"]
+                if ev["state"] == "off":
+                    self._live = False
                 self.voiceStateChanged.emit()
                 if ev["state"] == "off":
                     self._listening = False
@@ -222,9 +225,21 @@ class Bridge(QObject):
 
     @Slot()
     def startVoiceChat(self):
+        self._live = False
         self._voiceState = "listening"
         self.voiceStateChanged.emit()
         self._send({"op": "voice_start", "chat": self._chat or None})
+
+    @Slot()
+    def startLive(self):
+        self._voiceState = "listening"
+        self._live = True
+        self.voiceStateChanged.emit()
+        self._send({"op": "live_start"})
+
+    @Property(bool, notify=voiceStateChanged)
+    def live(self):
+        return self._live
 
     @Slot()
     def stopVoiceChat(self):

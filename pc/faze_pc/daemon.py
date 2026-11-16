@@ -15,6 +15,7 @@ from .store import Store
 from . import tools as toolbox
 from .peer import PeerRequests
 from .sync import Syncer
+from .live import LiveSession
 from .voice import Voice, VoiceError
 
 
@@ -29,6 +30,7 @@ class Daemon:
         self.engine = engine or Engine(self.config, self.store, tools=toolbox.Tools(self.config, self.store, phone=self.ask_phone))
         self.in_task = False
         self.voicing = False
+        self.live = None
         self.mirroring = False
         self.mirror_gap = 0.2  # seconds between pictures at most: the phone makes a few a second
         self.chat_lock = threading.Lock()  # one conversation at a time on the engine
@@ -95,8 +97,25 @@ class Daemon:
         except VoiceError as e:
             emit({"t": "error", "message": str(e)})
 
+    def start_live(self):
+        """Gemini Live, a continuous spoken conversation. Runs in its own thread until stopped."""
+        if self.live is not None:
+            return
+        session = LiveSession(self.config, self.broadcast)
+        self.live = session
+
+        def go():
+            try:
+                session.run()
+            finally:
+                self.live = None
+
+        threading.Thread(target=go, daemon=True, name="live").start()
+
     def stop_voice_chat(self):
         self.voicing = False
+        if self.live is not None:
+            self.live.stop()
         self.voice.cancel_listening()
         self.voice.stop_speaking()
         self.broadcast({"t": "voice_state", "state": "off"})
@@ -252,6 +271,11 @@ class Daemon:
                 self.voicing = True
                 threading.Thread(target=self.voice_chat, args=(req.get("chat") or None,), daemon=True, name="voice-chat").start()
             emit({"t": "ok"})
+        elif op == "live_start":
+            if not self.voicing:
+                self.broadcast({"t": "voice_state", "state": "listening"})
+                self.start_live()
+            emit({"t": "ok"})
         elif op == "voice_stop":
             self.stop_voice_chat()
             emit({"t": "ok"})
@@ -259,6 +283,8 @@ class Daemon:
             self.voice.cancel_listening()
             emit({"t": "ok"})
         elif op == "stop":
+            if self.live is not None:
+                self.live.player.stop()
             self.voice.stop_speaking()
             self.engine.stop()
             emit({"t": "ok"})
