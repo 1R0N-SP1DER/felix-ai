@@ -17,6 +17,7 @@ from . import tools as toolbox
 from .peer import PeerRequests
 from .sync import Syncer
 from .clip import ClipSync
+from .media import Media
 from .remote import RemoteControl
 from .live import LiveSession
 from .voice import Voice, VoiceError
@@ -41,7 +42,7 @@ class Daemon:
         self.voice = voice or Voice(self.config)
         self.mirror_proc = None
         self.spawn = spawn or subprocess.Popen
-        self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log, mirror_opener=self.open_mirror_window, clip_in=lambda m: self.clip.receive(m), remote=RemoteControl(self.config, log=self.store.log))
+        self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log, mirror_opener=self.open_mirror_window, clip_in=lambda m: self.clip.receive(m), remote=RemoteControl(self.config, log=self.store.log), media=Media(self.config))
         self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_request=lambda pid, msg: self.peer.handle(pid, msg), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
 
         self.clip = ClipSync(self.config, lambda m: self.links.notify(m))
