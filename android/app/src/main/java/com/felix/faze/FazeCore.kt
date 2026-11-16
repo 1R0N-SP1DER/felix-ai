@@ -74,6 +74,15 @@ class FazeCore(private val app: Application) : EngineListener {
 
     fun stopPairing() { link.closePairing(); linkCode = ""; linkTick++ }
 
+    private val remoteWorker = Executors.newSingleThreadExecutor()
+
+    /** The remote-receiver controller for the connected computer (its screen, mouse and keyboard). [onError] is called on a background thread with the computer's own words. */
+    fun pcRemote(onError: (String) -> Unit): PcRemote = PcRemote(
+        { msg, timeout -> link.ask(link.connected().firstOrNull() ?: throw java.io.IOException("no computer is connected"), msg, timeout) },
+        { r -> remoteWorker.execute(r) },
+        { m -> main.post { onError(m) } },
+    )
+
     /** Asks the connected computer to open a window showing this phone's screen (it needs Allow screen view and control to be on). */
     fun showPhoneOnPc() {
         val id = link.connected().firstOrNull() ?: run { status = "No computer is connected."; return }

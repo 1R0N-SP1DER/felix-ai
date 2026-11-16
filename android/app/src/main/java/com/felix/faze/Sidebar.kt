@@ -62,7 +62,7 @@ private fun startOfToday(): Long = Calendar.getInstance().apply {
  * Width is min(86% of the screen, 330 dp), as on the page for phones.
  */
 @Composable
-fun ChatDrawer(core: FazeCore, onNew: () -> Unit, onOpen: (String) -> Unit, onSettings: () -> Unit, onClose: () -> Unit, onDevices: () -> Unit = {}, onActivity: () -> Unit = {}) {
+fun ChatDrawer(core: FazeCore, onNew: () -> Unit, onOpen: (String) -> Unit, onSettings: () -> Unit, onClose: () -> Unit, onDevices: () -> Unit = {}, onActivity: () -> Unit = {}, onPcRemote: () -> Unit = {}) {
     val context = LocalContext.current
     val cfg = LocalConfiguration.current
     var query by remember { mutableStateOf("") }
@@ -162,6 +162,7 @@ fun ChatDrawer(core: FazeCore, onNew: () -> Unit, onOpen: (String) -> Unit, onSe
                 Box {
                 androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     androidx.compose.material3.DropdownMenuItem(text = { Text("Devices") }, onClick = { menu = false; onDevices() })
+                    if (core.deviceRows().any { it.connected }) androidx.compose.material3.DropdownMenuItem(text = { Text("Control my PC") }, onClick = { menu = false; onPcRemote() })
                     if (core.deviceRows().any { it.connected }) androidx.compose.material3.DropdownMenuItem(text = { Text("Show this phone on my PC") }, onClick = { menu = false; core.showPhoneOnPc() })
                     androidx.compose.material3.DropdownMenuItem(text = { Text("Activity log") }, onClick = { menu = false; onActivity() })
                     androidx.compose.material3.DropdownMenuItem(text = { Text("Settings") }, onClick = { menu = false; onSettings() })
