@@ -428,7 +428,7 @@ ApplicationWindow {
                             Text { text: modelData.name; color: win.text; font.pixelSize: 14 }
                             Text { text: modelData.state === "connected" ? "Connected · " + modelData.address + (modelData.synced ? " · " + modelData.synced : "") : (modelData.error !== "" ? modelData.error : "Offline"); color: win.muted; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true }
                         }
-                        Button { text: "Screen"; visible: modelData.state === "connected"; onClicked: { devicesPopup.close(); mirrorPopup.open() } }
+                        Button { text: "Screen"; visible: modelData.state === "connected"; onClicked: { devicesPopup.close(); bridge.openMirrorWindow() } }
                         Button { text: "Forget"; onClicked: bridge.forgetDevice(modelData.id) }
                     }
                 }
