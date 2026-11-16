@@ -321,7 +321,9 @@ class OverlayWindow(private val context: Context, private val core: FazeCore, pr
         }
         mode.open(SystemClock.uptimeMillis(), core.settings.overlayIdleSeconds * 1000L)
         val pg = GlyphView(context, GlyphView.Kind.PLUS)
-        val pb = roundButton(pg, null) { core.reportStatus("Attachments (photos, camera, files) arrive in the next patch") }
+        lateinit var plusButton: View
+        val pb = roundButton(pg, null) { attachMenu(plusButton) }
+        plusButton = pb
         pill.addView(pb, LinearLayout.LayoutParams(dp(44), dp(44)))
         val et = EditText(context).apply {
             hint = "Message FAZE"
@@ -513,6 +515,26 @@ class OverlayWindow(private val context: Context, private val core: FazeCore, pr
     }
 
     /** Typed (or edited) text is sent as typed: its reply is not read out. */
+    /** The + menu: Photos, Camera, Files. Each opens an invisible screen that runs the picker, queues the pick, and then shows the chat. */
+    private fun attachMenu(anchor: View) {
+        val menu = android.widget.PopupMenu(context, anchor)
+        menu.menu.add(0, 1, 0, "Photos")
+        menu.menu.add(0, 2, 1, "Camera")
+        menu.menu.add(0, 3, 2, "Files")
+        menu.setOnMenuItemClickListener { item ->
+            val mode = when (item.itemId) { 1 -> "photos"; 2 -> "camera"; else -> "files" }
+            try {
+                context.startActivity(android.content.Intent(context, AttachActivity::class.java).putExtra(AttachActivity.EXTRA_MODE, mode).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                startedHere = false
+                close(false)
+            } catch (e: Exception) {
+                core.reportStatus("couldn't open the picker: ${e.message ?: e.javaClass.simpleName}")
+            }
+            true
+        }
+        try { menu.show() } catch (e: Exception) { core.reportStatus("couldn't open the menu: ${e.message ?: e.javaClass.simpleName}") }
+    }
+
     private fun doSend() {
         val e = edit ?: return
         val t = e.text.toString().trim()
