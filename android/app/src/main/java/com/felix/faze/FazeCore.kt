@@ -39,6 +39,7 @@ class FazeCore(private val app: Application) : EngineListener {
 
     fun setLink(on: Boolean) {
         settings.linkOn = on
+        syncBackground()
         Thread { try { if (on) link.start() else link.stop() } catch (e: Exception) { main.post { status = "Could not open the link: " + (e.message ?: "") } }; main.post { linkTick++ } }.start()
     }
 
@@ -231,6 +232,18 @@ class FazeCore(private val app: Application) : EngineListener {
         { text -> main.post { try { clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Faze", text)) } catch (_: Exception) { } } },
         { text -> executor.execute { link.notify(JSONObject().put("t", "clip").put("text", text)) } })
 
+    private val clipWatch = ClipWatch(app.packageName) { m -> main.post { activity.add("link", m) } }
+
+    /** Starts or stops what keeps the link alive in the background: the notification service and, with root, the clipboard watcher. */
+    fun syncBackground() {
+        val on = settings.linkOn
+        try {
+            if (on) androidx.core.content.ContextCompat.startForegroundService(app, android.content.Intent(app, LinkService::class.java))
+            else app.stopService(android.content.Intent(app, LinkService::class.java))
+        } catch (_: Exception) { /* Android only lets this start while the app is in front; the next time Faze opens it will */ }
+        if (on && settings.linkClip && settings.linkClipRoot) clipWatch.start() else clipWatch.stop()
+    }
+
     /** Sends the phone's clipboard to the computer. Android only lets an app read it while the app is in front, so this runs on a copy and when Faze opens. */
     fun shareClipboard() {
         try { phoneClip.changed(clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(app)?.toString()) } catch (_: Exception) { }
@@ -315,6 +328,7 @@ class FazeCore(private val app: Application) : EngineListener {
 
     init {
         clipboard.addPrimaryClipChangedListener { shareClipboard() }
+        syncBackground()
         if (settings.linkOn) Thread { try { link.start() } catch (e: Exception) { /* the port may be taken */ } }.start()
         val client = ResilientChat(
             mapOf(
