@@ -28,6 +28,7 @@ DEFAULTS = {
     "live_model": "gemini-2.5-flash-native-audio-preview-12-2025",
     "live_barge_in": False,
     "tts_model": "gemini-3.8-flash-tts",
+    "share_all": False,
     "share_folders": "~/Documents, ~/Downloads, ~/Pictures",
 }
 

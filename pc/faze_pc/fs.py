@@ -18,6 +18,9 @@ class Shares:
     def roots(self):
         """[(id, shown name, real path)] for the listed folders that exist."""
         out, seen = [], set()
+        if self.config.data.get("share_all") is True:
+            out.append(("All files", "All files on this PC", os.sep))
+            seen.add("All files")
         for raw in str(self.config.data.get("share_folders", "")).split(","):
             raw = raw.strip()
             if not raw:
@@ -40,7 +43,7 @@ class Shares:
                 if ".." in parts or any("\x00" in p for p in parts):
                     raise FsError("that path is not allowed")
                 full = os.path.realpath(os.path.join(base, *parts))
-                if full != base and not full.startswith(base + os.sep):
+                if full != base and not full.startswith(base.rstrip(os.sep) + os.sep):
                     raise FsError("that path leaves the shared folder")
                 return full
         raise FsError("that folder is not shared")
@@ -59,7 +62,7 @@ class Shares:
             try:
                 real = os.path.realpath(full)
                 base = self.resolve(root_id, "")
-                if real != base and not real.startswith(base + os.sep):
+                if real != base and not real.startswith(base.rstrip(os.sep) + os.sep):
                     continue  # a link pointing out of the shared folder is not shown
                 st = os.stat(real)
             except (OSError, FsError):
