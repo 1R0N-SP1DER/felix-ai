@@ -81,6 +81,12 @@
         </service>
 
         <activity
+            android:name=".AttachActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.Faze.Grab" />
+
+        <activity
             android:name=".ClipGrabActivity"
             android:exported="false"
             android:excludeFromRecents="true"
