@@ -296,11 +296,13 @@ private fun AgentTab(core: FazeCore) {
         var link by remember { mutableStateOf(core.settings.linkOn) }
         var screen by remember { mutableStateOf(core.settings.linkScreen) }
         var clipOn by remember { mutableStateOf(core.settings.linkClip) }
+        var clipRoot by remember { mutableStateOf(core.settings.linkClipRoot) }
         var files by remember { mutableStateOf(core.settings.linkFiles) }
         var filesAll by remember { mutableStateOf(core.settings.linkFilesAll) }
         SettingRow("Allow computers", "Opens a port on this phone so a paired computer can connect. Everything after pairing is encrypted. Pair from the Felix_ menu > Devices.") { FazeSwitch(link, { link = it; core.setLink(it) }) }
         SettingRow("Allow screen view and control", "Lets a paired computer see this screen and tap, swipe and type on it. Needs root, and never works while the phone is locked.") { FazeSwitch(screen, { screen = it; core.settings.linkScreen = it }) }
-        SettingRow("Share the clipboard", "Text you copy on a computer lands here at once. Text you copy here goes to the computer when Faze is open (Android only lets an app read the clipboard while it is in front).") { FazeSwitch(clipOn, { clipOn = it; core.settings.linkClip = it }) }
+        SettingRow("Share the clipboard", "Text you copy on a computer lands here at once. Text you copy here goes to the computer when Faze is open (Android only lets an app read the clipboard while it is in front).") { FazeSwitch(clipOn, { clipOn = it; core.settings.linkClip = it; core.syncBackground() }) }
+        SettingRow("Copy from anywhere (root)", "With root, every copy in any app goes to the computer, even with Faze closed: Faze reads the system log and briefly opens an invisible window to read the text.") { FazeSwitch(clipRoot, { clipRoot = it; core.settings.linkClipRoot = it; core.syncBackground() }) }
         SettingRow("Let computers open my folders", "Pictures, Download, Documents, DCIM, Music and Movies, read only. Needs Access to all files (above).") { FazeSwitch(files, { files = it; core.settings.linkFiles = it }) }
         SettingRow("Let computers open all my files", "Everything on the phone's storage, not just those folders. Read only. Needs Access to all files (above).", last = true) { FazeSwitch(filesAll, { filesAll = it; core.settings.linkFilesAll = it }) }
     }
