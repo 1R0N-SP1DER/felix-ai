@@ -21,13 +21,14 @@ def clean(messages):
 
 
 class PeerRequests:
-    def __init__(self, config, streamer=providers.stream_chat, runner=None, lister=None, log=None, mirror_opener=None, clip_in=None):
+    def __init__(self, config, streamer=providers.stream_chat, runner=None, lister=None, log=None, mirror_opener=None, clip_in=None, remote=None):
         self.shares = Shares(config)
         self.log = log or (lambda kind, text: None)
         self.lister = lister or self._ollama_models
         self.config = config
         self.streamer = streamer
         self.clip_in = clip_in
+        self.remote = remote
         self.mirror_opener = mirror_opener  # opens the phone-screen window
         self.runner = runner  # runner(task) -> (ok, text): runs a task the phone handed over, as a chat on this PC
 
@@ -37,6 +38,8 @@ class PeerRequests:
             return self.chat(msg)
         if t in ("fs_roots", "fs_list", "fs_read"):
             return self.files(msg)
+        if t in ("pc_screen_get", "pc_input"):
+            return self.remote.handle(msg) if self.remote else {"t": "error", "message": "remote control is not available"}
         if t == "clip":
             return self.clip_in(msg) if self.clip_in else None
         if t == "mirror_open":
