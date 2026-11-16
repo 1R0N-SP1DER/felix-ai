@@ -30,6 +30,7 @@ ApplicationWindow {
     property var cfg: ({})
     property string currentChat: ""
     property var devices: []
+    property var levels: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
     property var found: []
     property string pairMsg: ""
 
@@ -64,7 +65,8 @@ ApplicationWindow {
             win.addMsg("error", m)
         }
         function onChatsChanged(c) { win.chats = c }
-        function onHeard(t) { if (t.trim() !== "") bridge.send(t); else bridge.sayNothing() }
+        function onHeard(t) { if (t.trim() !== "") { input.text = (input.text ? input.text + " " : "") + t; input.forceActiveFocus() } else bridge.sayNothing() }
+        function onLevelChanged(v) { win.levels = win.levels.slice(1).concat([v]) }
         function onDevicesChanged(d) { win.devices = d; win.pairMsg = "" }
         function onPhonesFound(p) { win.found = p; if (p.length > 0) { addr.text = p[0].address; win.pairMsg = "Found " + p[0].name } else win.pairMsg = "No phone answered. Is Faze open on it with computers allowed?" }
         function onPairFailed(m) { win.pairMsg = m }
@@ -269,6 +271,14 @@ ApplicationWindow {
                         Rectangle {
                             Layout.alignment: Qt.AlignVCenter
                             implicitWidth: 38; implicitHeight: 38; radius: 19
+                            color: win.surface; border.width: 1; border.color: win.line
+                            Row { anchors.centerIn: parent; spacing: 2
+                                Repeater { model: [6, 12, 16, 10, 5]; Rectangle { width: 2.5; height: modelData; radius: 1; color: win.text; anchors.verticalCenter: parent.verticalCenter } } }
+                            MouseArea { anchors.fill: parent; onClicked: bridge.startVoiceChat() }
+                        }
+                        Rectangle {
+                            Layout.alignment: Qt.AlignVCenter
+                            implicitWidth: 38; implicitHeight: 38; radius: 19
                             color: (bridge !== null && bridge.listening) ? win.bad : win.surface
                             border.width: 1; border.color: win.line
                             Text { anchors.centerIn: parent; text: (bridge !== null && bridge.listening) ? "■" : "🎙"; color: win.text; font.pixelSize: 15 }
@@ -284,6 +294,46 @@ ApplicationWindow {
                     }
                 }
             }
+        }
+    }
+
+    Popup {
+        id: voicePopup
+        modal: true
+        visible: bridge !== null && bridge.voiceState !== "off"
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(560, win.width - 30)
+        height: Math.min(420, win.height - 30)
+        padding: 20
+        closePolicy: Popup.NoAutoClose
+        background: Rectangle { radius: 24; color: win.surface; border.width: 1; border.color: win.line }
+        contentItem: ColumnLayout {
+            spacing: 16
+            Text { text: bridge === null ? "" : (bridge.voiceState === "listening" ? "Listening…" : bridge.voiceState === "thinking" ? "Thinking…" : "Speaking…"); color: win.text; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
+            Row {
+                Layout.alignment: Qt.AlignHCenter; Layout.fillHeight: true
+                spacing: 4
+                Repeater {
+                    model: win.levels.length
+                    Rectangle {
+                        width: 8; radius: 4
+                        height: 8 + Math.min(1, win.levels[index] * 1.6) * 110
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: bridge !== null && bridge.voiceState === "speaking" ? win.accent : win.text
+                        opacity: 0.35 + 0.65 * Math.min(1, win.levels[index] * 1.6)
+                    }
+                }
+            }
+            RowLayout {
+                Layout.alignment: Qt.AlignHCenter; spacing: 18
+                Rectangle { implicitWidth: 56; implicitHeight: 56; radius: 28; color: win.surface2; border.width: 1; border.color: win.line
+                    Text { anchors.centerIn: parent; text: "■"; color: win.text; font.pixelSize: 18 }
+                    MouseArea { anchors.fill: parent; onClicked: bridge.stop() } }
+                Rectangle { implicitWidth: 56; implicitHeight: 56; radius: 28; color: win.bad
+                    Text { anchors.centerIn: parent; text: "✕"; color: "#04060B"; font.pixelSize: 20; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: bridge.stopVoiceChat() } }
+            }
+            Text { text: "Talk normally. It answers when you pause. ■ cuts the voice, ✕ ends."; color: win.muted; font.pixelSize: 11; Layout.alignment: Qt.AlignHCenter }
         }
     }
 

@@ -55,6 +55,8 @@ class Bridge(QObject):
     devicesChanged = Signal("QVariantList")
     phonesFound = Signal("QVariantList")
     pairFailed = Signal(str)
+    levelChanged = Signal(float)
+    voiceStateChanged = Signal()
     frameChanged = Signal()
     mirrorFailed = Signal(str)
     toolUsed = Signal(str, bool)
@@ -65,6 +67,7 @@ class Bridge(QObject):
         self._floating = floating
         self._busy = False
         self._listening = False
+        self._voiceState = "off"
         self.frames = FrameProvider()
         self._frameNo = 0
         self._chat = ""
@@ -122,6 +125,18 @@ class Bridge(QObject):
                 self._set_busy(False)
                 self.assistantDone.emit(bool(ev.get("stopped")))
                 self._send({"op": "state"})
+            elif t == "level":
+                self.levelChanged.emit(float(ev["v"]))
+            elif t == "voice_state":
+                self._voiceState = ev["state"]
+                self.voiceStateChanged.emit()
+                if ev["state"] == "off":
+                    self._listening = False
+                    self.listeningChanged.emit(False)
+            elif t == "voice_user":
+                self._set_busy(True)
+                self.userMessage.emit(ev["text"])
+                self.assistantStart.emit()
             elif t == "frame":
                 import base64
                 img = QImage.fromData(base64.b64decode(ev["jpeg"]), "JPG")
@@ -200,6 +215,20 @@ class Bridge(QObject):
     @Property(int, notify=frameChanged)
     def frameNo(self):
         return self._frameNo
+
+    @Property(str, notify=voiceStateChanged)
+    def voiceState(self):
+        return self._voiceState
+
+    @Slot()
+    def startVoiceChat(self):
+        self._voiceState = "listening"
+        self.voiceStateChanged.emit()
+        self._send({"op": "voice_start", "chat": self._chat or None})
+
+    @Slot()
+    def stopVoiceChat(self):
+        self._send({"op": "voice_stop"})
 
     @Slot()
     def startMirror(self):

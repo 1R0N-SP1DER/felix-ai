@@ -28,6 +28,7 @@ class Daemon:
         self.store = store or Store(cfg.data_dir())
         self.engine = engine or Engine(self.config, self.store, tools=toolbox.Tools(self.config, self.store, phone=self.ask_phone))
         self.in_task = False
+        self.voicing = False
         self.mirroring = False
         self.mirror_gap = 0.2  # seconds between pictures at most: the phone makes a few a second
         self.chat_lock = threading.Lock()  # one conversation at a time on the engine
@@ -80,6 +81,79 @@ class Daemon:
         except link.LinkError as e:
             return {"t": "mirror_error", "message": str(e)}
         return {"t": "mirror_error", "message": r.get("message", "the phone refused")} if r.get("t") == "error" else None
+
+    def start_listen(self, emit, auto):
+        """One recording. Level events draw the waveform; the text arrives as a "heard" event when it ends."""
+        try:
+            self.voice.stop_speaking()
+
+            def result(text, err):
+                emit({"t": "error", "message": str(err)} if err else {"t": "heard", "text": text})
+
+            self.voice.start_listening(lambda v: emit({"t": "level", "v": v}), auto, result)
+            emit({"t": "listening"})
+        except VoiceError as e:
+            emit({"t": "error", "message": str(e)})
+
+    def stop_voice_chat(self):
+        self.voicing = False
+        self.voice.cancel_listening()
+        self.voice.stop_speaking()
+        self.broadcast({"t": "voice_state", "state": "off"})
+
+    def voice_chat(self, chat_id):
+        """Hands-free conversation: listen, answer, speak, and listen again, until stopped."""
+        try:
+            while self.voicing:
+                self.broadcast({"t": "voice_state", "state": "listening"})
+                got = {}
+                ready = threading.Event()
+
+                def result(text, err):
+                    got["text"], got["err"] = text, err
+                    ready.set()
+
+                try:
+                    self.voice.stop_speaking()
+                    self.voice.start_listening(lambda v: self.broadcast({"t": "level", "v": v}), True, result)
+                except VoiceError as e:
+                    self.broadcast({"t": "error", "message": str(e)})
+                    return
+                while not ready.wait(0.2):
+                    if not self.voicing:
+                        return
+                if not self.voicing:
+                    return
+                if got.get("err"):
+                    self.broadcast({"t": "error", "message": str(got["err"])})
+                    return
+                text = (got.get("text") or "").strip()
+                if not text:
+                    continue
+                if not chat_id:
+                    chat_id = self.store.new_chat()
+                    self.broadcast({"t": "chat", "id": chat_id})
+                self.broadcast({"t": "voice_user", "text": text})
+                self.broadcast({"t": "voice_state", "state": "thinking"})
+                said = []
+
+                def watch(ev):
+                    if ev.get("t") == "done" and not ev.get("stopped"):
+                        said.append(ev.get("text", ""))
+                    self.broadcast(ev)
+
+                with self.chat_lock:
+                    self.engine.chat(chat_id, text, watch)
+                if said and said[-1].strip() and self.voicing:
+                    self.broadcast({"t": "voice_state", "state": "speaking"})
+                    try:
+                        self.voice.speak(said[-1])
+                    except VoiceError as e:
+                        self.broadcast({"t": "error", "message": str(e)})
+                        return
+        finally:
+            self.voicing = False
+            self.broadcast({"t": "voice_state", "state": "off"})
 
     def say(self, text, emit):
         """Speaks a reply when "Speak replies" is on. A voice problem is shown once, never stops the chat."""
@@ -170,17 +244,17 @@ class Daemon:
             if reply:
                 emit(reply)
         elif op == "listen":
-            try:
-                self.voice.stop_speaking()
-                self.voice.start_listening()
-                emit({"t": "listening"})
-            except VoiceError as e:
-                emit({"t": "error", "message": str(e)})
+            self.start_listen(emit, bool(req.get("auto", True)))
         elif op == "listen_stop":
-            try:
-                emit({"t": "heard", "text": self.voice.stop_listening()})
-            except VoiceError as e:
-                emit({"t": "error", "message": str(e)})
+            self.voice.stop_listening()
+        elif op == "voice_start":
+            if not self.voicing:
+                self.voicing = True
+                threading.Thread(target=self.voice_chat, args=(req.get("chat") or None,), daemon=True, name="voice-chat").start()
+            emit({"t": "ok"})
+        elif op == "voice_stop":
+            self.stop_voice_chat()
+            emit({"t": "ok"})
         elif op == "listen_cancel":
             self.voice.cancel_listening()
             emit({"t": "ok"})

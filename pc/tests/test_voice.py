@@ -9,26 +9,54 @@ from faze_pc import voice as v
 from faze_pc.config import Config
 
 
+import threading
+
+
+def speech(seconds, amp=8000):
+    n = int(16000 * seconds)
+    return b"".join(struct.pack("<h", amp if (i // 40) % 2 else -amp) for i in range(n))
+
+
+def silence(seconds):
+    return b"\x00\x00" * int(16000 * seconds)
+
+
 class FakeProc:
+    """A recorder: audio written with feed() comes out of stdout; SIGINT ends the stream."""
+
     def __init__(self, argv, **kw):
-        self.argv, self.signals, self.killed, self.done = argv, [], False, False
-        # a recorder writes its file; a player just plays
-        if argv and argv[0] in ("pw-record", "parecord", "arecord"):
-            path = argv[-1]
-            with open(path, "wb") as f:
-                f.write(b"RIFF" + b"x" * 5000)
+        self.argv, self.signals, self.killed = argv, [], False
+        r, w = os.pipe()
+        self.stdout, self._w = os.fdopen(r, "rb", buffering=0), os.fdopen(w, "wb", buffering=0)
+
+    def feed(self, data):
+        self._w.write(data)
+
+    def end(self):
+        try:
+            self._w.close()
+        except OSError:
+            pass
 
     def send_signal(self, s):
         self.signals.append(s)
+        self.end()
 
     def wait(self, timeout=None):
-        self.done = True
+        pass
 
     def terminate(self):
         self.killed = True
+        self.end()
 
     def kill(self):
         self.killed = True
+        self.end()
+
+
+class PlayProc(FakeProc):
+    def wait(self, timeout=None):
+        pass
 
 
 class VoiceTest(unittest.TestCase):
@@ -40,7 +68,7 @@ class VoiceTest(unittest.TestCase):
     def voice(self, have=("pw-record", "pw-play"), post=None, **keys):
         self.procs = []
         def popen(argv, **kw):
-            p = FakeProc(argv)
+            p = FakeProc(argv) if argv[0] in ("pw-record", "parecord", "arecord") else PlayProc(argv)
             self.procs.append(p)
             return p
         self.posts = []
@@ -62,47 +90,76 @@ class VoiceTest(unittest.TestCase):
         self.assertIn(b"filename=\"a.wav\"", body)
         self.assertTrue(body.endswith(b"--" + b + b"--\r\n"))
 
+    def listen(self, voice, feed, auto=False, wait_for=1):
+        got, levels, done = [], [], threading.Event()
+        voice.start_listening(levels.append, auto, lambda t, e: (got.append((t, e)), done.set()))
+        self.assertTrue(self.procs[0].argv[0] in ("pw-record", "parecord", "arecord"))
+        feed(self.procs[0])
+        self.assertTrue(done.wait(5), "no result")
+        return got[0], levels
+
     def test_records_then_transcribes_with_groq(self):
         voice = self.voice(post=lambda u, h, b: json.dumps({"text": " open firefox "}).encode(), groq="gsk_x")
-        voice.start_listening()
-        self.assertEqual(self.procs[0].argv[0], "pw-record")
-        self.assertEqual(voice.stop_listening(), "open firefox")
+        def feed(p):
+            p.feed(speech(1.0))
+            voice.stop_listening()
+        (text, err), levels = self.listen(voice, feed)
+        self.assertEqual((text, err), ("open firefox", None))
         self.assertIn("audio/transcriptions", self.posts[0][0])
         self.assertEqual(self.posts[0][1]["Authorization"], "Bearer gsk_x")
-        self.assertTrue(self.procs[0].signals)  # asked to finish the file
-        self.assertFalse(os.path.exists(self.procs[0].argv[-1]))
+        self.assertTrue(self.procs[0].signals)
+        self.assertTrue(levels and max(levels) > 0.5)
 
     def test_gemini_transcription_when_no_groq_key(self):
         reply = {"candidates": [{"content": {"parts": [{"text": "hello there"}]}}]}
         voice = self.voice(post=lambda u, h, b: json.dumps(reply).encode(), gemini="AIza")
-        voice.start_listening()
-        self.assertEqual(voice.stop_listening(), "hello there")
-        self.assertIn("generateContent", self.posts[0][0])
+        def feed(p):
+            p.feed(speech(1.0))
+            voice.stop_listening()
+        (text, err), _ = self.listen(voice, feed)
+        self.assertEqual(text, "hello there")
         self.assertEqual(json.loads(self.posts[0][2])["contents"][0]["parts"][1]["inline_data"]["mime_type"], "audio/wav")
 
     def test_no_key_and_no_recorder_say_what_is_missing(self):
         voice = self.voice()
-        voice.start_listening()
-        with self.assertRaises(v.VoiceError) as e:
+        def feed(p):
+            p.feed(speech(1.0))
             voice.stop_listening()
-        self.assertIn("key", str(e.exception))
+        (text, err), _ = self.listen(voice, feed)
+        self.assertIsNone(text)
+        self.assertIn("key", str(err))
         with self.assertRaises(v.VoiceError) as e:
             self.voice(have=()).start_listening()
         self.assertIn("recorder", str(e.exception))
 
-    def test_silence_returns_nothing_without_a_request(self):
+    def test_auto_mode_ends_after_a_pause_in_speech(self):
+        voice = self.voice(post=lambda u, h, b: json.dumps({"text": "what time is it"}).encode(), groq="x")
+        def feed(p):
+            p.feed(silence(0.3))
+            p.feed(speech(1.0))
+            p.feed(silence(1.4))  # the pause ends it, no stop needed
+        (text, err), _ = self.listen(voice, feed, auto=True)
+        self.assertEqual(text, "what time is it")
+
+    def test_auto_mode_with_no_speech_sends_nothing_to_transcribe(self):
         voice = self.voice(groq="x")
-        voice.start_listening()
-        open(self.procs[0].argv[-1], "wb").write(b"RIFF")
-        self.assertEqual(voice.stop_listening(), "")
+        def feed(p):
+            p.feed(silence(0.5))
+            voice.stop_listening()
+        (text, err), _ = self.listen(voice, feed, auto=True)
+        self.assertEqual(text, "")
         self.assertEqual(self.posts, [])
 
-    def test_cancel_removes_the_recording(self):
-        voice = self.voice()
-        voice.start_listening()
-        path = self.procs[0].argv[-1]
+    def test_cancel_gives_no_result(self):
+        voice = self.voice(groq="x")
+        got = []
+        voice.start_listening(None, False, lambda t, e: got.append(t))
+        self.procs[0].feed(speech(0.5))
         voice.cancel_listening()
-        self.assertFalse(os.path.exists(path))
+        import time
+        time.sleep(0.4)
+        self.assertEqual(got, [])
+        self.assertFalse(voice.listening())
 
     def test_gemini_voice_plays_through_the_player(self):
         pcm = b"\x01\x00" * 50
