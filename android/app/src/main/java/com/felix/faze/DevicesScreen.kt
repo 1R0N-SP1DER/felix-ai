@@ -49,7 +49,7 @@ object DevicePlatform {
 }
 
 @Composable
-private fun PageHeader(title: String, onBack: () -> Unit, right: @Composable () -> Unit = {}) {
+fun PageHeader(title: String, onBack: () -> Unit, right: @Composable () -> Unit = {}) {
     Row(modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(modifier = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).clickable { onBack() }, contentAlignment = Alignment.Center) {
             Text("←", color = Palette.Dim, fontSize = 18.sp)

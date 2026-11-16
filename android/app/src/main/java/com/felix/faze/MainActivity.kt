@@ -85,7 +85,7 @@ fun FazeRoot(vm: ChatViewModel = viewModel()) {
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var settings by remember { mutableStateOf(false) }
-    var page by remember { mutableStateOf("") } // "devices" or "activity", each its own full screen
+    var page by remember { mutableStateOf("") } // "devices", "activity" or "pcremote", each its own full screen
     val shown = settings || page.isNotEmpty()
 
     BackHandler(enabled = shown) { if (page.isNotEmpty()) page = "" else settings = false }
@@ -113,12 +113,14 @@ fun FazeRoot(vm: ChatViewModel = viewModel()) {
                 onSettings = { settings = true; scope.launch { drawer.close() } },
                 onDevices = { page = "devices"; scope.launch { drawer.close() } },
                 onActivity = { page = "activity"; scope.launch { drawer.close() } },
+                onPcRemote = { page = "pcremote"; scope.launch { drawer.close() } },
                 onClose = { scope.launch { drawer.close() } },
             )
         },
     ) {
         if (page == "devices") DevicesScreen(core) { page = "" }
         else if (page == "activity") ActivityScreen(core) { page = "" }
+        else if (page == "pcremote") PcRemoteScreen(core) { page = "" }
         else if (settings) SettingsScreen(core) { settings = false }
         else ChatScreen(core, onMenu = { scope.launch { drawer.open() } }, onSettings = { settings = true }, onActivity = { page = "activity" })
     }
