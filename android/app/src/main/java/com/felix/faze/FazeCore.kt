@@ -74,11 +74,14 @@ class FazeCore(private val app: Application) : EngineListener {
 
     fun stopPairing() { link.closePairing(); linkCode = ""; linkTick++ }
 
+    /** Asks the connected computer something; throws IOException when there is none. */
+    fun pcAsk(msg: JSONObject, timeoutMs: Long): JSONObject = link.ask(link.connected().firstOrNull() ?: throw java.io.IOException("no computer is connected"), msg, timeoutMs)
+
     private val remoteWorker = Executors.newSingleThreadExecutor()
 
     /** The remote-receiver controller for the connected computer (its screen, mouse and keyboard). [onError] is called on a background thread with the computer's own words. */
     fun pcRemote(onError: (String) -> Unit): PcRemote = PcRemote(
-        { msg, timeout -> link.ask(link.connected().firstOrNull() ?: throw java.io.IOException("no computer is connected"), msg, timeout) },
+        { msg, timeout -> pcAsk(msg, timeout) },
         { r -> remoteWorker.execute(r) },
         { m -> main.post { onError(m) } },
     )

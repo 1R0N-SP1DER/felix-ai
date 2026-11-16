@@ -62,7 +62,7 @@ fun PageHeader(title: String, onBack: () -> Unit, right: @Composable () -> Unit 
 
 /** Every device linked to this phone: the platform as the big picture, then the name and how it is connected. */
 @Composable
-fun DevicesScreen(core: FazeCore, onBack: () -> Unit, onControl: () -> Unit = {}) {
+fun DevicesScreen(core: FazeCore, onBack: () -> Unit, onControl: () -> Unit = {}, onMedia: (String) -> Unit = {}) {
     val rows = core.deviceRows()
     val on = core.settings.linkOn
     Column(modifier = Modifier.fillMaxSize().background(Palette.Bg)) {
@@ -70,7 +70,7 @@ fun DevicesScreen(core: FazeCore, onBack: () -> Unit, onControl: () -> Unit = {}
         Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Hint("Screen control and file access are in Settings > Advanced > Devices. This phone is the hub. Any number of computers can pair with it and work with it as one Faze.")
             if (rows.isEmpty()) Text("No devices yet.", color = Palette.Muted, fontSize = 14.sp, modifier = Modifier.padding(vertical = 8.dp))
-            for (d in rows) DeviceCard(core, d, onControl) { core.removeDevice(d.id) }
+            for (d in rows) DeviceCard(core, d, onControl, onMedia) { core.removeDevice(d.id) }
             SettingsCard("Pair a computer") {
                 SettingRow("Allow computers", "Opens a port on this phone so a paired computer can connect. Everything after pairing is encrypted.", last = !on) {
                     FazeSwitch(on, { core.setLink(it) })
@@ -94,7 +94,7 @@ fun DevicesScreen(core: FazeCore, onBack: () -> Unit, onControl: () -> Unit = {}
 }
 
 @Composable
-private fun DeviceCard(core: FazeCore, d: DeviceRow, onControl: () -> Unit, onRemove: () -> Unit) {
+private fun DeviceCard(core: FazeCore, d: DeviceRow, onControl: () -> Unit, onMedia: (String) -> Unit, onRemove: () -> Unit) {
     var confirm by remember { mutableStateOf(false) }
     var open by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf("") }
@@ -137,6 +137,9 @@ private fun DeviceCard(core: FazeCore, d: DeviceRow, onControl: () -> Unit, onRe
                 }
                 DeviceChip("Send file") { picker.launch(arrayOf("*/*")) }
                 DeviceChip("Control screen") { onControl() }
+                DeviceChip("PC sound") { onMedia("sound") }
+                DeviceChip("PC mic") { onMedia("mic") }
+                DeviceChip("Webcam") { onMedia("cam") }
             }
             if (note.isNotEmpty()) Text(note, color = Palette.Dim, fontSize = 12.5.sp, modifier = Modifier.padding(top = 6.dp))
         }
