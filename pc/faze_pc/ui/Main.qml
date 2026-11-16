@@ -278,6 +278,13 @@ ApplicationWindow {
                         }
                         Rectangle {
                             Layout.alignment: Qt.AlignVCenter
+                            implicitWidth: 52; implicitHeight: 38; radius: 19
+                            color: win.surface; border.width: 1; border.color: win.line
+                            Text { anchors.centerIn: parent; text: "Live"; color: win.accent; font.pixelSize: 13; font.bold: true }
+                            MouseArea { anchors.fill: parent; onClicked: bridge.startLive() }
+                        }
+                        Rectangle {
+                            Layout.alignment: Qt.AlignVCenter
                             implicitWidth: 38; implicitHeight: 38; radius: 19
                             color: (bridge !== null && bridge.listening) ? win.bad : win.surface
                             border.width: 1; border.color: win.line
@@ -309,7 +316,7 @@ ApplicationWindow {
         background: Rectangle { radius: 24; color: win.surface; border.width: 1; border.color: win.line }
         contentItem: ColumnLayout {
             spacing: 16
-            Text { text: bridge === null ? "" : (bridge.voiceState === "listening" ? "Listening…" : bridge.voiceState === "thinking" ? "Thinking…" : "Speaking…"); color: win.text; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
+            Text { text: bridge === null ? "" : ((bridge.live ? "Live · " : "") + (bridge.voiceState === "listening" ? "Listening…" : bridge.voiceState === "thinking" ? "Thinking…" : "Speaking…")); color: win.text; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
             Row {
                 Layout.alignment: Qt.AlignHCenter; Layout.fillHeight: true
                 spacing: 4
