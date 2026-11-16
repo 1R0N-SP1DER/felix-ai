@@ -1,6 +1,7 @@
 """Voice on the PC: record from the microphone, turn it into text, and speak replies.
 Recording uses whatever the system has (pw-record, parecord or arecord). Speech to text goes to Groq's Whisper when there is a Groq key, else to Gemini.
 The reply voice is Gemini's natural voice (same call as the phone) when there is a Gemini key; without one, or when the call fails, a system voice (spd-say or espeak-ng) if installed."""
+import array
 import base64
 import json
 import os
@@ -10,6 +11,7 @@ import struct
 import subprocess
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -17,11 +19,12 @@ import uuid
 GEMINI_TTS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
 GEMINI_STT_URL = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
 GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
-RECORDERS = [
-    ("pw-record", ["pw-record", "--rate", "16000", "--channels", "1", "{file}"]),
-    ("parecord", ["parecord", "--rate=16000", "--channels=1", "--file-format=wav", "{file}"]),
-    ("arecord", ["arecord", "-q", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "wav", "{file}"]),
+RECORDERS = [  # all write raw 16 kHz mono 16-bit samples to standard output
+    ("pw-record", ["pw-record", "--rate", "16000", "--channels", "1", "--format", "s16", "-"]),
+    ("parecord", ["parecord", "--rate=16000", "--channels=1", "--format=s16le", "--raw"]),
+    ("arecord", ["arecord", "-q", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw"]),
 ]
+CHUNK_BYTES = 3200  # 100 ms of audio
 PLAYERS = [
     ("pw-play", ["pw-play", "{file}"]),
     ("paplay", ["paplay", "{file}"]),
@@ -83,7 +86,7 @@ class Voice:
         self.popen = popen
         self.post = post
         self._rec = None
-        self._rec_file = None
+        self._cancelled = False
         self._play = None
         self._lock = threading.Lock()
 
@@ -94,48 +97,83 @@ class Voice:
                 return argv
         return None
 
-    def start_listening(self):
+    def listening(self):
+        return self._rec is not None
+
+    def start_listening(self, on_level=None, auto=False, on_result=None):
+        """Starts recording. on_level(0..1) is called about ten times a second. With auto=True the recording ends by itself after a short
+        pause in speech. When it ends, on_result(text, error) is called once (text is '' when nothing was said). stop_listening() ends it by hand."""
         argv = self.recorder()
         if not argv:
             raise VoiceError("no recorder found. Install pipewire, pulseaudio-utils or alsa-utils.")
         with self._lock:
             if self._rec:
                 return
-            fd, path = tempfile.mkstemp(prefix="faze-mic-", suffix=".wav")
-            os.close(fd)
-            self._rec_file = path
-            self._rec = self.popen([a.replace("{file}", path) for a in argv], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            proc = self.popen(list(argv), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            self._rec = proc
+            self._cancelled = False
+        threading.Thread(target=self._read_loop, args=(proc, auto, on_level or (lambda v: None), on_result or (lambda t, e: None)), daemon=True, name="mic").start()
+
+    @staticmethod
+    def rms(chunk):
+        samples = array.array("h")
+        samples.frombytes(chunk[: len(chunk) // 2 * 2])
+        if not samples:
+            return 0.0
+        return (sum(x * x for x in samples) / len(samples)) ** 0.5
+
+    def _read_loop(self, proc, auto, on_level, on_result):
+        pcm = bytearray()
+        speech, silent, floor, t0 = False, 0.0, None, time.time()
+        while True:
+            chunk = proc.stdout.read(CHUNK_BYTES)
+            if not chunk:
+                break
+            pcm += chunk
+            level = self.rms(chunk)
+            on_level(min(1.0, level / 4000.0))
+            if auto:
+                floor = level if floor is None else min(floor, level)
+                if level > max(600.0, 2.5 * floor):
+                    speech, silent = True, 0.0
+                elif speech:
+                    silent += len(chunk) / 32000.0
+                if speech and silent >= 1.2:
+                    break
+                if (not speech and time.time() - t0 > 8) or time.time() - t0 > 30:
+                    break
+        with self._lock:
+            if self._rec is proc:
+                self._rec = None
+            cancelled = self._cancelled
+        self._end(proc)
+        if cancelled:
+            return
+        try:
+            heard = speech or not auto
+            text = self.transcribe(wav_from_pcm(bytes(pcm), 16000)) if heard and len(pcm) >= 8000 else ""
+            on_result(text, None)
+        except VoiceError as e:
+            on_result(None, e)
+
+    def stop_listening(self):
+        """Ends the recording; its text arrives through on_result."""
+        with self._lock:
+            proc = self._rec
+        if proc:
+            self._end(proc)
 
     def cancel_listening(self):
         with self._lock:
-            rec, path = self._rec, self._rec_file
-            self._rec = self._rec_file = None
-        if rec:
-            self._end(rec)
-        if path and os.path.exists(path):
-            os.remove(path)
-
-    def stop_listening(self):
-        """Stops recording and returns the text that was said ('' when nothing was heard)."""
-        with self._lock:
-            rec, path = self._rec, self._rec_file
-            self._rec = self._rec_file = None
-        if not rec:
-            raise VoiceError("not listening")
-        self._end(rec)
-        try:
-            with open(path, "rb") as f:
-                audio = f.read()
-        finally:
-            if os.path.exists(path):
-                os.remove(path)
-        if len(audio) < 2000:
-            return ""
-        return self.transcribe(audio)
+            proc = self._rec
+            self._rec = None
+            self._cancelled = True
+        if proc:
+            self._end(proc)
 
     def _end(self, proc):
         try:
-            proc.send_signal(signal.SIGINT)  # lets the recorder finish the file's header
+            proc.send_signal(signal.SIGINT)
             proc.wait(timeout=3)
         except Exception:
             try:
