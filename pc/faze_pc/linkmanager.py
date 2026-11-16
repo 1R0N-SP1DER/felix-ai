@@ -93,6 +93,17 @@ class LinkManager:
         finally:
             self.pending.pop((pid, rid), None)
 
+    def notify(self, msg):
+        """Sends a message nobody waits an answer for to every connected phone. Returns how many it reached."""
+        n = 0
+        for pid, sess in list(self.sessions.items()):
+            try:
+                self._send(pid, sess, msg)
+                n += 1
+            except link.LinkError:
+                pass
+        return n
+
     def _send(self, pid, sess, msg):
         try:
             with self.send_locks.setdefault(pid, threading.Lock()):

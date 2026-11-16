@@ -16,6 +16,7 @@ from .store import Store
 from . import tools as toolbox
 from .peer import PeerRequests
 from .sync import Syncer
+from .clip import ClipSync
 from .live import LiveSession
 from .voice import Voice, VoiceError
 
@@ -39,8 +40,10 @@ class Daemon:
         self.voice = voice or Voice(self.config)
         self.mirror_proc = None
         self.spawn = spawn or subprocess.Popen
-        self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log, mirror_opener=self.open_mirror_window)
+        self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log, mirror_opener=self.open_mirror_window, clip_in=lambda m: self.clip.receive(m))
         self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_request=lambda pid, msg: self.peer.handle(pid, msg), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
+
+        self.clip = ClipSync(self.config, lambda m: self.links.notify(m))
 
     def _phone(self):
         for d in self.links.list():
@@ -342,6 +345,7 @@ class Daemon:
                 os.unlink(path)
         daemon = self
         self.links.start()
+        self.clip.start()
 
         class Handler(socketserver.StreamRequestHandler):
             def handle(self):
