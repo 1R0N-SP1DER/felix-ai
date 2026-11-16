@@ -292,6 +292,16 @@ private fun AgentTab(core: FazeCore) {
             }.padding(8.dp))
         }
     }
+    SettingsCard("Devices") {
+        var link by remember { mutableStateOf(core.settings.linkOn) }
+        var screen by remember { mutableStateOf(core.settings.linkScreen) }
+        var files by remember { mutableStateOf(core.settings.linkFiles) }
+        var filesAll by remember { mutableStateOf(core.settings.linkFilesAll) }
+        SettingRow("Allow computers", "Opens a port on this phone so a paired computer can connect. Everything after pairing is encrypted. Pair from the Felix_ menu > Devices.") { FazeSwitch(link, { link = it; core.setLink(it) }) }
+        SettingRow("Allow screen view and control", "Lets a paired computer see this screen and tap, swipe and type on it. Needs root, and never works while the phone is locked.") { FazeSwitch(screen, { screen = it; core.settings.linkScreen = it }) }
+        SettingRow("Let computers open my folders", "Pictures, Download, Documents, DCIM, Music and Movies, read only. Needs Access to all files (above).") { FazeSwitch(files, { files = it; core.settings.linkFiles = it }) }
+        SettingRow("Let computers open all my files", "Everything on the phone's storage, not just those folders. Read only. Needs Access to all files (above).", last = true) { FazeSwitch(filesAll, { filesAll = it; core.settings.linkFilesAll = it }) }
+    }
     SettingsCard("Fast routes") {
         var fast by remember { mutableStateOf(core.settings.fastRoutes) }
         var needle by remember { mutableStateOf(core.settings.needleOn) }

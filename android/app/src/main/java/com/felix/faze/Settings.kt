@@ -319,6 +319,16 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getBoolean("link_on", false)
         set(value) = prefs.edit().putBoolean("link_on", value).apply()
 
+    /** Whether a paired computer may browse some of this phone's public folders (Pictures, Download, Documents, DCIM, Music, Movies), read only. */
+    var linkFiles: Boolean
+        get() = prefs.getBoolean("link_files", false)
+        set(value) = prefs.edit().putBoolean("link_files", value).apply()
+
+    /** Whether a paired computer may browse every file on the phone, not just the public folders. Needs Access to all files. */
+    var linkFilesAll: Boolean
+        get() = prefs.getBoolean("link_files_all", false)
+        set(value) = prefs.edit().putBoolean("link_files_all", value).apply()
+
     /** Whether a paired computer may view and control the screen. Separate from pairing, off until asked for. */
     var linkScreen: Boolean
         get() = prefs.getBoolean("link_screen", false)
