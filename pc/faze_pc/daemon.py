@@ -3,6 +3,7 @@ import json
 import os
 import socket
 import socketserver
+import subprocess
 import sys
 import threading
 import time
@@ -24,7 +25,7 @@ def socket_path():
 
 
 class Daemon:
-    def __init__(self, config=None, store=None, engine=None, links=None, voice=None):
+    def __init__(self, config=None, store=None, engine=None, links=None, voice=None, spawn=None):
         self.config = config or cfg.Config()
         self.store = store or Store(cfg.data_dir())
         self.engine = engine or Engine(self.config, self.store, tools=toolbox.Tools(self.config, self.store, phone=self.ask_phone))
@@ -36,7 +37,9 @@ class Daemon:
         self.chat_lock = threading.Lock()  # one conversation at a time on the engine
         self.listeners = set()
         self.voice = voice or Voice(self.config)
-        self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log)
+        self.mirror_proc = None
+        self.spawn = spawn or subprocess.Popen
+        self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log, mirror_opener=self.open_mirror_window)
         self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_request=lambda pid, msg: self.peer.handle(pid, msg), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
 
     def _phone(self):
@@ -96,6 +99,12 @@ class Daemon:
             emit({"t": "listening"})
         except VoiceError as e:
             emit({"t": "error", "message": str(e)})
+
+    def open_mirror_window(self):
+        """The phone-screen window is its own program. Opens it unless it is already open."""
+        if self.mirror_proc is not None and self.mirror_proc.poll() is None:
+            return
+        self.mirror_proc = self.spawn([sys.executable, "-m", "faze_pc.cli", "--mirror"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
     def start_live(self):
         """Gemini Live, a continuous spoken conversation. Runs in its own thread until stopped."""
@@ -255,6 +264,12 @@ class Daemon:
                 self.mirroring = True
                 threading.Thread(target=self.mirror_loop, daemon=True, name="mirror").start()
             emit({"t": "ok"})
+        elif op == "mirror_open":
+            try:
+                self.open_mirror_window()
+                emit({"t": "ok"})
+            except OSError as e:
+                emit({"t": "mirror_error", "message": "could not open the phone window: %s" % e})
         elif op == "mirror_stop":
             self.mirroring = False
             emit({"t": "ok"})

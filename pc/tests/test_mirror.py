@@ -89,3 +89,44 @@ class MirrorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeProc:
+    def __init__(self):
+        self.alive = True
+
+    def poll(self):
+        return None if self.alive else 0
+
+
+class MirrorWindowTest(unittest.TestCase):
+    def make(self):
+        store = Store(tmp())
+        spawned = []
+
+        def spawn(argv, **kw):
+            p = FakeProc()
+            spawned.append((argv, p))
+            return p
+
+        d = Daemon(config=Config(os.path.join(tmp(), "c.json")), store=store, engine=FakeEngine(store), links=ScreenLinks(), spawn=spawn)
+        return d, spawned
+
+    def test_the_phone_can_ask_for_the_window_and_it_opens_once(self):
+        d, spawned = self.make()
+        self.assertEqual(d.peer.handle("p1", {"t": "mirror_open"}), {"t": "ok"})
+        self.assertEqual(d.peer.handle("p1", {"t": "mirror_open"}), {"t": "ok"})
+        self.assertEqual(len(spawned), 1)
+        self.assertEqual(spawned[0][0][-2:], ["faze_pc.cli", "--mirror"])
+
+    def test_it_opens_again_after_the_window_was_closed(self):
+        d, spawned = self.make()
+        d.open_mirror_window()
+        spawned[0][1].alive = False
+        d.open_mirror_window()
+        self.assertEqual(len(spawned), 2)
+
+    def test_a_failure_to_start_is_an_error_for_the_phone(self):
+        d, _ = self.make()
+        d.spawn = lambda *a, **k: (_ for _ in ()).throw(OSError("no python"))
+        self.assertEqual(d.peer.handle("p1", {"t": "mirror_open"})["t"], "error")

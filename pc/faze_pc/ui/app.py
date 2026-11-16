@@ -246,6 +246,10 @@ class Bridge(QObject):
         self._send({"op": "voice_stop"})
 
     @Slot()
+    def openMirrorWindow(self):
+        self._send({"op": "mirror_open"})
+
+    @Slot()
     def startMirror(self):
         self._send({"op": "mirror_start"})
 

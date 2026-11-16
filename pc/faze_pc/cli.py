@@ -36,6 +36,7 @@ def ask(text, chat=None):
 def main(argv=None):
     p = argparse.ArgumentParser(prog="faze", description="Faze on your desktop")
     p.add_argument("--float", action="store_true", help="the small floating window (run it again to hide it)")
+    p.add_argument("--mirror", action="store_true", help="the phone-screen window, as its own program (the daemon starts it when the phone asks)")
     p.add_argument("--daemon", action="store_true", help="run only the background daemon, in front")
     p.add_argument("--set", nargs=2, metavar=("NAME", "VALUE"), help="change a setting, e.g. keys.groq gsk_...")
     p.add_argument("text", nargs="*", help="ask from the terminal instead of opening a window")
@@ -53,6 +54,9 @@ def main(argv=None):
         return 0 if ev and ev["t"] == "state" else 1
     if a.text:
         return ask(" ".join(a.text))
+    if a.mirror:
+        from .ui.mirror_app import run_mirror
+        return run_mirror()
     from .ui.app import run_ui
     return run_ui(floating=a.float)
 

@@ -46,6 +46,19 @@ jobs:
           FAZE_DEMO_POPUP=mirror FAZE_SCREENSHOT=shots/mirror.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(False))"
           ls -l shots
 
+      - name: The phone window starts as its own program (it must still be running after 6 seconds)
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_QUICK_BACKEND: software
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/run" XDG_CONFIG_HOME="$RUNNER_TEMP/cfg" XDG_DATA_HOME="$RUNNER_TEMP/data"
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          set +e
+          timeout 6 python -m faze_pc.cli --mirror
+          code=$?
+          pkill -f faze_pc.daemon
+          test "$code" = 124
+
       - name: Print the screenshots into the log, so they can be read without downloading
         run: |
           for f in shots/*.png; do echo "BEGIN64 $f"; base64 -w0 "$f"; echo; echo "END64 $f"; done
