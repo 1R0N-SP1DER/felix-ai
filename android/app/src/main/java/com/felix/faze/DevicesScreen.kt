@@ -67,15 +67,13 @@ fun DevicesScreen(core: FazeCore, onBack: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize().background(Palette.Bg)) {
         PageHeader("Devices", onBack)
         Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Hint("This phone is the hub. Any number of computers can pair with it and work with it as one Faze.")
+            Hint("Screen control and file access are in Settings > Advanced > Devices. This phone is the hub. Any number of computers can pair with it and work with it as one Faze.")
             if (rows.isEmpty()) Text("No devices yet.", color = Palette.Muted, fontSize = 14.sp, modifier = Modifier.padding(vertical = 8.dp))
             for (d in rows) DeviceCard(d) { core.removeDevice(d.id) }
             SettingsCard("Pair a computer") {
                 SettingRow("Allow computers", "Opens a port on this phone so a paired computer can connect. Everything after pairing is encrypted.", last = !on) {
                     FazeSwitch(on, { core.setLink(it) })
                 }
-                var screen by remember { mutableStateOf(core.settings.linkScreen) }
-                if (on) SettingRow("Allow screen view and control", "Lets a paired computer see this screen and tap, swipe and type on it. Needs root, and never works while the phone is locked.") { FazeSwitch(screen, { screen = it; core.settings.linkScreen = it }) }
                 if (on) {
                     if (core.linkCode.isEmpty()) {
                         WideButton("Show a pairing code") { core.startPairing() }

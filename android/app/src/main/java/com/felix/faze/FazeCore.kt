@@ -35,7 +35,7 @@ class FazeCore(private val app: Application) : EngineListener {
         private set
     var linkCode by mutableStateOf("")
         private set
-    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = "" } })
+    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = "" } })
 
     fun setLink(on: Boolean) {
         settings.linkOn = on
@@ -193,6 +193,15 @@ class FazeCore(private val app: Application) : EngineListener {
         { app.resources.displayMetrics.let { it.widthPixels to it.heightPixels } },
         { settings.linkScreen }, { LockOverlayActivity.isLocked(app) }, { activity.add("link", it) },
     )
+    private val phoneFiles = PhoneFiles({
+        val top = android.os.Environment.getExternalStorageDirectory()
+        val allOk = android.os.Build.VERSION.SDK_INT < 30 || android.os.Environment.isExternalStorageManager()
+        when {
+            settings.linkFilesAll && allOk -> listOf("All files" to top)
+            settings.linkFiles || settings.linkFilesAll -> listOf("DCIM", "Pictures", "Download", "Documents", "Music", "Movies").map { it to File(top, it) }.filter { it.second.isDirectory }
+            else -> emptyList()
+        }
+    }, { activity.add("link", it) })
     private val peerTasks = PeerTasks({ busy || voiceOn || liveOn }, { task -> main.post { newChat(); send("(From your computer) $task") } })
     private val computers = object : Computers {
         override fun available() = link.connected().isNotEmpty()
