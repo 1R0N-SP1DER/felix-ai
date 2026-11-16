@@ -29,6 +29,18 @@ class FsTest(unittest.TestCase):
     def test_only_existing_listed_folders_are_roots(self):
         self.assertEqual([(r, n) for r, n, _ in self.s.roots()], [("Docs", "Docs")])
 
+    def test_share_all_adds_a_root_that_reaches_everything(self):
+        self.assertNotIn("All files", [r for r, _, _ in self.s.roots()])
+        self.cfg.set("share_all", "true")
+        self.assertEqual(self.s.roots()[0][:2], ("All files", "All files on this PC"))
+        rel = self.secret.lstrip("/")
+        import base64
+        self.assertEqual(base64.b64decode(self.s.read("All files", rel, 0, 100)["data"]), b"nope")
+        with self.assertRaises(FsError):
+            self.s.resolve("All files", "../etc")
+        self.cfg.set("share_all", "false")
+        self.assertNotIn("All files", [r for r, _, _ in self.s.roots()])
+
     def test_lists_folders_first_and_hides_links_that_leave(self):
         names = [e["name"] for e in self.s.list("Docs", "")]
         self.assertEqual(names, ["sub", "a.txt"])
