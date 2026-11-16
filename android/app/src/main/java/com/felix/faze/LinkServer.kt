@@ -87,6 +87,12 @@ class LinkServer(
         }
     }
 
+    /** Sends a notice nobody waits for to every connected computer. */
+    fun notify(msg: JSONObject) {
+        val all = synchronized(live) { sessions.values.toList() }
+        for (s in all) try { s.send(msg) } catch (_: Exception) { }
+    }
+
     fun connected(): Set<String> = synchronized(live) { live.keys.toSet() }
 
     /** Opens pairing and returns the code to show. */

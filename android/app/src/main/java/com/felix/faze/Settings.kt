@@ -319,6 +319,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getBoolean("link_on", false)
         set(value) = prefs.edit().putBoolean("link_on", value).apply()
 
+    /** Whether the clipboard text is shared with paired computers, both ways. */
+    var linkClip: Boolean
+        get() = prefs.getBoolean("link_clip", true)
+        set(value) = prefs.edit().putBoolean("link_clip", value).apply()
+
     /** Whether a paired computer may browse some of this phone's public folders (Pictures, Download, Documents, DCIM, Music, Movies), read only. */
     var linkFiles: Boolean
         get() = prefs.getBoolean("link_files", false)

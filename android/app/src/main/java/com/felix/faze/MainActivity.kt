@@ -68,6 +68,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         (application as FazeApp).core.appVisible = true
+        window.decorView.post { (application as FazeApp).core.shareClipboard() }
         // The app is on screen, which is the one moment Android lets a microphone service start: bring listening back.
         val core = (application as FazeApp).core
         if (core.settings.wakeEnabled && !core.listening &&
