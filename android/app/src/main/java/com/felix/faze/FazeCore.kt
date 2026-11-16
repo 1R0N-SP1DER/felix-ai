@@ -74,6 +74,18 @@ class FazeCore(private val app: Application) : EngineListener {
 
     fun stopPairing() { link.closePairing(); linkCode = ""; linkTick++ }
 
+    /** Asks the connected computer to open a window showing this phone's screen (it needs Allow screen view and control to be on). */
+    fun showPhoneOnPc() {
+        val id = link.connected().firstOrNull() ?: run { status = "No computer is connected."; return }
+        executor.execute {
+            val msg = try {
+                val r = link.ask(id, JSONObject().put("t", "mirror_open"), 15_000)
+                if (r.optString("t") == "error") r.optString("message", "the computer refused") else if (settings.linkScreen) "Opened on your computer." else "Opened on your computer. Turn on Allow screen view and control in Settings > Advanced > Devices to see the screen."
+            } catch (e: Exception) { "The computer could not be reached: ${e.message ?: ""}" }
+            main.post { status = msg }
+        }
+    }
+
     fun removeDevice(id: String) { linkPeers.remove(id); link.drop(id); linkTick++ }
 
     /** What the Devices screen lists: each paired device, whether it is connected, and how. */
