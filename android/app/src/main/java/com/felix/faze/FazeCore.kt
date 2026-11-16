@@ -35,7 +35,7 @@ class FazeCore(private val app: Application) : EngineListener {
         private set
     var linkCode by mutableStateOf("")
         private set
-    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = "" } })
+    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) ?: phoneClip.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = "" } })
 
     fun setLink(on: Boolean) {
         settings.linkOn = on
@@ -214,6 +214,16 @@ class FazeCore(private val app: Application) : EngineListener {
             else -> emptyList()
         }
     }, { activity.add("link", it) })
+    private val clipboard = app.getSystemService(android.content.ClipboardManager::class.java)
+    private val phoneClip = PhoneClip({ settings.linkClip && link.connected().isNotEmpty() },
+        { text -> main.post { try { clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Faze", text)) } catch (_: Exception) { } } },
+        { text -> executor.execute { link.notify(JSONObject().put("t", "clip").put("text", text)) } })
+
+    /** Sends the phone's clipboard to the computer. Android only lets an app read it while the app is in front, so this runs on a copy and when Faze opens. */
+    fun shareClipboard() {
+        try { phoneClip.changed(clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(app)?.toString()) } catch (_: Exception) { }
+    }
+
     private val peerTasks = PeerTasks({ busy || voiceOn || liveOn }, { task -> main.post { newChat(); send("(From your computer) $task") } })
     private val computers = object : Computers {
         override fun available() = link.connected().isNotEmpty()
@@ -292,6 +302,7 @@ class FazeCore(private val app: Application) : EngineListener {
     )
 
     init {
+        clipboard.addPrimaryClipChangedListener { shareClipboard() }
         if (settings.linkOn) Thread { try { link.start() } catch (e: Exception) { /* the port may be taken */ } }.start()
         val client = ResilientChat(
             mapOf(
