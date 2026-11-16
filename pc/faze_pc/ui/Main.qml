@@ -511,6 +511,7 @@ ApplicationWindow {
                 Text { text: "Voice (Gemini voice name)"; color: win.dim; font.pixelSize: 12 }
                 TextField { Layout.fillWidth: true; text: win.cfg.voice || ""; onEditingFinished: bridge.setSetting("voice", text) }
                 Text { text: "Devices"; color: win.text; font.pixelSize: 15; font.bold: true; Layout.topMargin: 10 }
+                CheckBox { text: "Sync the clipboard with my phone (text, both ways)"; checked: win.cfg.clip_sync !== false; onToggled: bridge.setSetting("clip_sync", checked ? "true" : "false") }
                 CheckBox { text: "Let my phone open all files on this PC (read only)"; checked: win.cfg.share_all === true; onToggled: bridge.setSetting("share_all", checked ? "true" : "false") }
                 Text { text: "Folders shared with your phone (read only, comma separated)"; color: win.dim; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
                 TextField { Layout.fillWidth: true; text: win.cfg.share_folders || ""; onEditingFinished: bridge.setSetting("share_folders", text) }
