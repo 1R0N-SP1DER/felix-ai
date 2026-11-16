@@ -21,6 +21,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: The installer is valid shell
+        run: bash -n install.sh
+
       - name: Install the one crypto dependency
         run: pip install cryptography
 
