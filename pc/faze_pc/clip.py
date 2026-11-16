@@ -58,12 +58,13 @@ class ClipSync:
         return bool(self.send({"t": "clip", "text": text}))
 
     def receive(self, msg):
+        """A copy from the phone. Never answered: it was a notice, not a question."""
         text = msg.get("text")
         if not self.enabled() or not isinstance(text, str) or not text or len(text.encode()) > MAX or text == self.last:
-            return {"t": "ok"}
+            return None
         self.last = text  # set first: reading it back must not echo it to the phone
         self.write(text)
-        return {"t": "ok"}
+        return None
 
     def start(self):
         def loop():

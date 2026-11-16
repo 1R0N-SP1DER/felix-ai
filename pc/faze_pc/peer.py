@@ -38,7 +38,7 @@ class PeerRequests:
         if t in ("fs_roots", "fs_list", "fs_read"):
             return self.files(msg)
         if t == "clip":
-            return self.clip_in(msg) if self.clip_in else {"t": "ok"}
+            return self.clip_in(msg) if self.clip_in else None
         if t == "mirror_open":
             if not self.mirror_opener:
                 return {"t": "error", "message": "this PC cannot open the phone window"}
