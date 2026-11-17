@@ -71,4 +71,12 @@ class GoogleTakeoverTest {
         assertFalse(GoogleTakeover.matches(pkg, "com.google.android.apps.search.googleapp.activity.GoogleAppActivity", w, skip))
         assertTrue(GoogleTakeover.matches(pkg, "com.google.android.apps.search.assistant.surfaces.voice.robin.ui.floaty.activity.FloatyActivity", w, skip))
     }
+
+    @Test fun theFingerprintIsOneLineAndHandlesUnknowns() {
+        val f = GoogleTakeover.fingerprint(1500, false, 1, 320, "com.android.launcher")
+        assertEquals("screen on 1.5s | unlocked | recorders 1 | after 320ms | from com.android.launcher", f)
+        assertFalse(f.contains('\n'))
+        assertEquals("screen on ? | locked | recorders 0 | after ? | from ?", GoogleTakeover.fingerprint(null, true, 0, null, ""))
+        assertEquals(6, GoogleTakeover.remember((1..9).joinToString("\n") { "w$it" }, "$f x").lines().size)
+    }
 }

@@ -33,6 +33,20 @@ object GoogleTakeover {
     fun remember(history: String, seen: String, max: Int = 6): String =
         (listOf(seen) + history.split('\n').filter { it.isNotBlank() && it != seen }).take(max).joinToString("\n")
 
+    /**
+     * What else was true when a Google window appeared, as short text kept next to its name. Hey Google, the power button and a corner swipe all end in the
+     * same window, so the surrounding facts are what can tell them apart: how long the screen has been on, whether the phone is locked, whether anything was
+     * recording audio, how long since the previous window change, and which app was in front.
+     */
+    fun fingerprint(screenOnMs: Long?, locked: Boolean, recorders: Int, sinceLastMs: Long?, previous: String): String =
+        listOf(
+            "screen on " + (screenOnMs?.let { "${it / 100 / 10.0}s" } ?: "?"),
+            if (locked) "locked" else "unlocked",
+            "recorders $recorders",
+            "after " + (sinceLastMs?.let { "${it}ms" } ?: "?"),
+            "from " + previous.ifEmpty { "?" },
+        ).joinToString(" | ")
+
     val LINES = listOf(
         "Nah, Google isn't around. Did you mean me?",
         "Oh no, were you calling Google? Too late, you've got me.",
