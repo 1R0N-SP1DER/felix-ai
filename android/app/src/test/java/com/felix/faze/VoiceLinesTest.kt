@@ -64,4 +64,16 @@ class VoiceLinesTest {
         assertFalse(GoogleTakeover.pickFrom(emptyList(), 3, Random(2)) == 3)
         assertEquals(5, GoogleTakeover.pickFrom(listOf(5), 5, r))
     }
+
+    @Test fun openGreetingsNeverRepeatAndStayInRange() {
+        val r = Random(5)
+        var last = -1
+        repeat(100) {
+            val i = GoogleTakeover.pickOpen(last, r)
+            assertTrue(i in GoogleTakeover.OPEN_LINES.indices)
+            assertTrue(i != last)
+            last = i
+        }
+        assertEquals(GoogleTakeover.OPEN_LINES.size, GoogleTakeover.OPEN_LINES.toSet().size)
+    }
 }

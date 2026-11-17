@@ -69,6 +69,29 @@ object GoogleTakeover {
         "Heard you from across the room. What's the plan?",
     )
 
+    /** Short greetings for opening by the volume keys or any route that is not Google's takeover. */
+    val OPEN_LINES = listOf(
+        "Yeah?",
+        "I'm here. What do you need?",
+        "Go ahead, I'm listening.",
+        "Here. What's up?",
+        "At your service.",
+        "You rang?",
+        "Ready when you are.",
+        "Talk to me.",
+        "Right here. Go on.",
+        "What are we doing?",
+        "Yep, I'm up. What's the plan?",
+        "Listening.",
+    )
+
+    /** An opening greeting index other than [last]. */
+    fun pickOpen(last: Int, random: Random = Random.Default): Int {
+        var i = random.nextInt(OPEN_LINES.size)
+        if (i == last) i = (i + 1) % OPEN_LINES.size
+        return i
+    }
+
     /** A line other than the last one used. */
     fun pick(last: Int, random: Random = Random.Default): Int {
         if (LINES.size < 2) return 0

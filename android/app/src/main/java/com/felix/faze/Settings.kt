@@ -261,6 +261,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getBoolean("google_quips", true)
         set(value) = prefs.edit().putBoolean("google_quips", value).apply()
 
+    /** Faze says a short greeting when opened with the volume keys. */
+    var openQuips: Boolean
+        get() = prefs.getBoolean("open_quips", true)
+        set(value) = prefs.edit().putBoolean("open_quips", value).apply()
+
     /** Extra window-name words to take over on, for phones where Google's assistant window has another name. */
     var googleWords: String
         get() = text("google_words")
