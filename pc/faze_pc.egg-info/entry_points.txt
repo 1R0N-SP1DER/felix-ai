@@ -1,0 +1,2 @@
+[console_scripts]
+faze = faze_pc.cli:main

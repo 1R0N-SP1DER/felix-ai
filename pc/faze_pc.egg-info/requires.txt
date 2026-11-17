@@ -1,0 +1,4 @@
+cryptography>=41
+
+[ui]
+PySide6-Essentials>=6.6

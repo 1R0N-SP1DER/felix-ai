@@ -303,6 +303,17 @@ private fun AgentTab(core: FazeCore) {
         SettingRow("Allow screen view and control", "Lets a paired computer see this screen and tap, swipe and type on it. Needs root, and never works while the phone is locked.") { FazeSwitch(screen, { screen = it; core.settings.linkScreen = it }) }
         SettingRow("Share the clipboard", "Text you copy on a computer lands here at once. Text you copy here goes to the computer when Faze is open (Android only lets an app read the clipboard while it is in front).") { FazeSwitch(clipOn, { clipOn = it; core.settings.linkClip = it; core.syncBackground() }) }
         SettingRow("Copy from anywhere (root)", "With root, every copy in any app goes to the computer, even with Faze closed: Faze reads the system log and briefly opens an invisible window to read the text.") { FazeSwitch(clipRoot, { clipRoot = it; core.settings.linkClipRoot = it; core.syncBackground() }) }
+        var notesOn by remember { mutableStateOf(core.settings.linkNotes) }
+        var notesHide by remember { mutableStateOf(core.settings.linkNotesHide) }
+        SettingRow("Show my notifications on the computer", "Each notification appears on a connected computer too, and goes away there when you clear it here. Needs notification access: turning this on asks root to grant it, or opens the system screen if that fails.") {
+            FazeSwitch(notesOn, { on ->
+                notesOn = on; core.settings.linkNotes = on
+                if (on) Thread {
+                    if (!core.allowNotificationAccess()) ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                }.start()
+            })
+        }
+        SettingRow("Hide the notification text", "Only the app name goes to the computer, not what the notification says.") { FazeSwitch(notesHide, { notesHide = it; core.settings.linkNotesHide = it }) }
         SettingRow("Let computers open my folders", "Pictures, Download, Documents, DCIM, Music and Movies, read only. Needs Access to all files (above).") { FazeSwitch(files, { files = it; core.settings.linkFiles = it }) }
         SettingRow("Let computers open all my files", "Everything on the phone's storage, not just those folders. Read only. Needs Access to all files (above).", last = true) { FazeSwitch(filesAll, { filesAll = it; core.settings.linkFilesAll = it }) }
     }

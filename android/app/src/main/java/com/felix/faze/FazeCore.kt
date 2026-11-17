@@ -242,6 +242,14 @@ class FazeCore(private val app: Application) : EngineListener {
         { text -> main.post { try { clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Faze", text)) } catch (_: Exception) { } } },
         { text -> executor.execute { link.notify(JSONObject().put("t", "clip").put("text", text)) } })
 
+    val notes = PhoneNotes({ settings.linkNotes && link.connected().isNotEmpty() }, { settings.linkNotesHide }, { m -> executor.execute { link.notify(m) } }, app.packageName)
+
+    /** Gives Faze notification access with root, so the person does not have to find the system screen. Returns whether it worked. */
+    fun allowNotificationAccess(): Boolean = try {
+        Su.run("cmd notification allow_listener ${app.packageName}/${app.packageName}.FazeNotifications", 8000)
+        Su.run("cmd notification list_listeners 2>/dev/null; settings get secure enabled_notification_listeners", 8000).contains("FazeNotifications")
+    } catch (_: Exception) { false }
+
     private val clipWatch = ClipWatch(app.packageName) { m -> main.post { activity.add("link", m) } }
 
     /** Starts or stops what keeps the link alive in the background: the notification service and, with root, the clipboard watcher. */
