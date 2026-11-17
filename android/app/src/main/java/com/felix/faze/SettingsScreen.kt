@@ -485,6 +485,7 @@ private fun AdvancedTab(core: FazeCore) {
     var limitLocked by remember { mutableStateOf(s.limitWhenLocked) }
     var gTake by remember { mutableStateOf(s.googleTakeover) }
     var gQuips by remember { mutableStateOf(s.googleQuips) }
+    var oQuips by remember { mutableStateOf(s.openQuips) }
     var gWords by remember { mutableStateOf(s.googleWords) }
     var gLast by remember { mutableStateOf(s.lastGoogleWindow) }
     var gSkip by remember { mutableStateOf(s.googleSkip) }
@@ -553,6 +554,9 @@ private fun AdvancedTab(core: FazeCore) {
         }
         SettingRow("Say a line when it does", "Faze jokes about Google not being around, out loud, and listens after it.") {
             FazeSwitch(gQuips, { gQuips = it; s.googleQuips = it })
+        }
+        SettingRow("Greet me when I open it", "Faze says a short hello when you open it with the volume keys.") {
+            FazeSwitch(oQuips, { oQuips = it; s.openQuips = it })
         }
         SettingRow("Extra window names", "Only if it does not trigger: words from the Google window name below, separated by commas.") {
             FieldBox(gWords, false, Modifier.widthIn(max = 190.dp)) { gWords = it; s.googleWords = it }
