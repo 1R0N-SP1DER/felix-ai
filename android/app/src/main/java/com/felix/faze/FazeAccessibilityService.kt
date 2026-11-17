@@ -83,7 +83,8 @@ class FazeAccessibilityService : AccessibilityService() {
             ChordAction.OPEN -> {
                 restoreVolumes()
                 buzz()
-                if (openOverlay()) { detector.overlayOpen = true; core.activity.add("wake", if (LockOverlayActivity.isLocked(this)) "Both volume keys held (lock screen)" else "Both volume keys held") }
+                val hello = if (core.settings.openQuips) GoogleTakeover.OPEN_LINES[GoogleTakeover.pickOpen(lastOpen).also { lastOpen = it }] else null
+                if (openOverlay(hello, hello != null)) { detector.overlayOpen = true; core.activity.add("wake", if (LockOverlayActivity.isLocked(this)) "Both volume keys held (lock screen)" else "Both volume keys held") }
             }
             ChordAction.CLOSE -> {
                 restoreVolumes()
@@ -133,6 +134,7 @@ class FazeAccessibilityService : AccessibilityService() {
 
     private val gate = Debounce(2500)
     private var lastLine = -1
+    private var lastOpen = -1
 
     /**
      * Only the package and window name of Google's own apps are looked at (never the screen's contents). When the assistant window opens,

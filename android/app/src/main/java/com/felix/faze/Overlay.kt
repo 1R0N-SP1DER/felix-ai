@@ -422,6 +422,13 @@ class OverlayWindow(private val context: Context, private val core: FazeCore, pr
      * morphs into Faze's while it slides up, and Faze says a line about it.
      */
     private fun morphFromGoogle(line: String, spoken: Boolean) {
+        if (line in GoogleTakeover.OPEN_LINES) {
+            // A plain greeting (volume keys): no pretending to be Google, just the line.
+            quip = line
+            quipUntil = SystemClock.uptimeMillis() + 4000
+            if (spoken) { spokenFrom = SystemClock.uptimeMillis() + 400; handler.postDelayed({ core.speakOpening(line) }, 250) }
+            return
+        }
         val r = root ?: return
         val pillBg = pillDrawable ?: return
         val panel = panelView ?: return
