@@ -1,4 +1,5 @@
 """The background daemon: owns settings, memory and the chat engine, and talks to windows over a Unix socket (one JSON object per line)."""
+import base64
 import json
 import os
 import socket
@@ -17,6 +18,7 @@ from . import tools as toolbox
 from .peer import PeerRequests
 from .sync import Syncer
 from .clip import ClipSync
+from .h264 import H264Decoder
 from .media import Media
 from .remote import RemoteControl
 from .live import LiveSession
@@ -41,8 +43,11 @@ class Daemon:
         self.listeners = set()
         self.voice = voice or Voice(self.config)
         self.mirror_proc = None
+        self.h264 = None
+        self.live_video = False
+        self.ping_gap = 3.0
         self.spawn = spawn or subprocess.Popen
-        self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log, mirror_opener=self.open_mirror_window, clip_in=lambda m: self.clip.receive(m), remote=RemoteControl(self.config, log=self.store.log, notify=lambda m: self.links.notify(m)), media=Media(self.config))
+        self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log, mirror_opener=self.open_mirror_window, clip_in=lambda m: self.clip.receive(m), remote=RemoteControl(self.config, log=self.store.log, notify=lambda m: self.links.notify(m)), media=Media(self.config), screen_in=lambda m: self.screen_in(m))
         self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_request=lambda pid, msg: self.peer.handle(pid, msg), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
 
         self.clip = ClipSync(self.config, lambda m: self.links.notify(m))
@@ -53,8 +58,60 @@ class Daemon:
                 return d["id"]
         return None
 
+    def screen_in(self, msg):
+        """Notices from the phone while it streams its screen: video pieces, or the stream giving up (then we fall back to screenshots)."""
+        if msg.get("t") == "screen_h264":
+            if self.h264 is not None:
+                try:
+                    self.h264.feed(base64.b64decode(msg.get("data", "")))
+                except ValueError:
+                    pass
+        else:
+            self.live_video = False
+            self.broadcast({"t": "mirror_error", "message": msg.get("message", "the phone's live video stopped") + " Showing slower pictures."})
+        return None
+
+    def start_live_video(self, pid):
+        """Asks the phone for live H.264 video. True when it agreed; the window then fills from screen_in."""
+        try:
+            r = self.links.request(pid, {"t": "screen_stream_start"}, timeout=15)
+        except link.LinkError:
+            return False
+        if r.get("t") != "screen_stream_ok":
+            return False  # an old phone, or a refusal: the screenshot path below says why in its own words
+        self.h264 = H264Decoder(lambda jpeg: self.broadcast({"t": "frame", "jpeg": jpeg}), lambda m: self.broadcast({"t": "mirror_error", "message": m}))
+        self.live_video = True
+        return True
+
+    def stop_live_video(self):
+        pid = self._phone()
+        if self.h264 is not None:
+            self.h264.stop()
+            self.h264 = None
+        if self.live_video and pid:
+            try:
+                self.links.request(pid, {"t": "screen_stream_stop"}, timeout=5)
+            except link.LinkError:
+                pass
+        self.live_video = False
+
     def mirror_loop(self):
-        """Asks the phone for its screen again and again and hands each picture to the open windows, until stopped or something fails."""
+        """Shows the phone's screen in the open windows until stopped. Live H.264 video when the phone offers it; otherwise it asks for one picture after another."""
+        pid = self._phone()
+        if pid and self.start_live_video(pid):
+            while self.mirroring and self.live_video:
+                time.sleep(self.ping_gap)
+                try:
+                    self.links.request(pid, {"t": "screen_stream_ping"}, timeout=5)
+                except link.LinkError:
+                    break
+            if self.live_video:  # stopped by the window or the link
+                self.stop_live_video()
+                self.mirroring = False
+                return
+            if self.h264 is not None:  # the phone gave up on video: carry on with screenshots
+                self.h264.stop()
+                self.h264 = None
         try:
             while self.mirroring:
                 pid = self._phone()
@@ -277,6 +334,7 @@ class Daemon:
                 emit({"t": "mirror_error", "message": "could not open the phone window: %s" % e})
         elif op == "mirror_stop":
             self.mirroring = False
+            self.stop_live_video()
             emit({"t": "ok"})
         elif op == "mirror_input":
             reply = self.mirror_input(req)
