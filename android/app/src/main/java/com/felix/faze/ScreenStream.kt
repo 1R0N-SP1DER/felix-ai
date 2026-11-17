@@ -18,7 +18,7 @@ class ScreenStream(
     private val now: () -> Long = { System.currentTimeMillis() },
     private val log: (String) -> Unit = {},
 ) {
-    interface Source { val input: InputStream; fun close() }
+    interface Source { val input: InputStream; fun close(); fun error(): String = "" }
 
     companion object {
         const val IDLE_MS = 10_000L
@@ -34,6 +34,7 @@ class ScreenStream(
     }
 
     @Volatile private var running = false
+    @Volatile private var lastError = ""
     @Volatile private var lastPing = 0L
     private var thread: Thread? = null
 
@@ -83,11 +84,12 @@ class ScreenStream(
                     if (!running) break
                 } finally {
                     try { src?.close() } catch (_: Exception) { }
+                    try { src?.let { lastError = it.error().ifEmpty { lastError } } } catch (_: Exception) { }
                 }
                 if (!running) break
                 quick = if (now() - began < 3000) quick + 1 else 0 // a run of three minutes is normal; instant endings are not
                 if (quick >= 3) {
-                    send(JSONObject().put("t", "screen_stream_error").put("message", "The phone's screen recorder keeps stopping. It needs root (screenrecord)."))
+                    send(JSONObject().put("t", "screen_stream_error").put("message", "The phone's screen recorder keeps stopping. It needs root (screenrecord)." + (if (lastError.isNotEmpty()) " It said: $lastError" else "")))
                     break
                 }
             }
@@ -104,4 +106,7 @@ class RootScreenSource(w: Int, h: Int) : ScreenStream.Source {
     private val proc: Process = ProcessBuilder("su", "-c", "screenrecord --output-format=h264 --size ${w}x$h --bit-rate 6000000 -").redirectErrorStream(false).start()
     override val input: InputStream get() = proc.inputStream
     override fun close() { try { proc.destroy() } catch (_: Exception) { } }
+    override fun error(): String = try {
+        if (proc.errorStream.available() > 0) String(proc.errorStream.readBytes()).trim().lines().lastOrNull()?.take(160) ?: "" else ""
+    } catch (_: Exception) { "" }
 }

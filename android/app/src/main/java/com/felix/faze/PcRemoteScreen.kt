@@ -69,17 +69,27 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
         }
         var shown = 0L
         var pinged = 0L
+        val began = System.currentTimeMillis()
+        var sawFrame = false
         while (true) {
             val now = System.currentTimeMillis()
+            if (streaming && !sawFrame && now - began > 7000) {
+                // The stream started but nothing has been drawn: use one picture at a time instead, and say why.
+                val why = core.pcFrames.error.ifEmpty { "No picture arrived from the PC (is a share box waiting on its screen?)." }
+                launch(Dispatchers.IO) { remote.stopStream() }
+                streaming = false
+                note = ""
+                problem = "$why Showing slower pictures instead."
+            }
             if (streaming) {
                 if (now - pinged > 3000) { pinged = now; launch(Dispatchers.IO) { remote.pingStream() } }
                 val latest = core.pcFrames.latest()
                 if (latest != null && latest.first != shown) {
                     shown = latest.first
                     val bmp = withContext(Dispatchers.Default) { BitmapFactory.decodeByteArray(latest.second, 0, latest.second.size) }
-                    if (bmp != null) frame = bmp.asImageBitmap()
+                    if (bmp != null) { frame = bmp.asImageBitmap(); sawFrame = true; problem = "" }
                 } else {
-                    if (core.pcFrames.error.isNotEmpty()) problem = core.pcFrames.error
+                    if (core.pcFrames.error.isNotEmpty() && !sawFrame) problem = core.pcFrames.error
                     delay(8)
                 }
             } else {
