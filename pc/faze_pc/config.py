@@ -31,6 +31,7 @@ DEFAULTS = {
     "edge_open": False,
     "allow_remote": False,
     "clip_sync": True,
+    "show_phone_notes": True,
     "share_all": False,
     "share_folders": "~/Documents, ~/Downloads, ~/Pictures",
 }

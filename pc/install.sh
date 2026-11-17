@@ -69,5 +69,5 @@ case ":$PATH:" in *":$bin:"*) ;; *) echo "(Add $bin to your PATH to type just: f
 echo "The background part starts by itself at your next login."
 echo
 echo "Optional tools for voice, remote control and the webcam:"
-echo "  sudo apt install pulseaudio-utils alsa-utils imagemagick ffmpeg wl-clipboard python3-gi gstreamer1.0-tools gstreamer1.0-pipewire gstreamer1.0-plugins-good xdg-desktop-portal-kde"
+echo "  sudo apt install pulseaudio-utils alsa-utils imagemagick ffmpeg wl-clipboard libnotify-bin python3-gi gstreamer1.0-tools gstreamer1.0-pipewire gstreamer1.0-plugins-good xdg-desktop-portal-kde"
 echo "For fast mouse and keyboard control from the phone, run once:  bash install.sh --input   (then log out and in)"
