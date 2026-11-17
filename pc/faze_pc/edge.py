@@ -5,7 +5,9 @@ import glob
 import os
 import re
 import select
+import shutil
 import struct
+import subprocess
 import threading
 import time
 
@@ -122,3 +124,106 @@ class EdgeWatcher:
                     self.on_push()
                 except Exception:
                     pass
+
+
+class KWinEdge:
+    """The exact way on KDE Wayland: a small KWin script watches the pointer and reports when it has been pushed against the left edge.
+    A helper process (kwin_edge) receives those reports over D-Bus and prints them; this class reads them. While it works the evdev watcher stands down."""
+
+    def __init__(self, enabled, on_push, note=lambda m: None, which=shutil.which, popen=subprocess.Popen, run=None, python="/usr/bin/python3", env=None, qml=None, switched=None, poll=2.0):
+        self.enabled, self.on_push, self.note = enabled, on_push, note
+        self.switched = switched or (lambda: True)  # is the feature switched on at all: the script is only loaded in KWin while it is
+        self.poll = poll
+        self.helper_up = False
+        self.loaded = False
+        self.which, self.popen, self.python = which, popen, python
+        self.run = run or _run
+        self.env = env if env is not None else dict(os.environ)
+        self.qml = qml or os.path.join(os.path.dirname(os.path.abspath(__file__)), "kwin", "edge.qml")
+        self.ready = False
+        self.proc = None
+        self.stopping = threading.Event()
+
+    def usable(self):
+        return bool(self.env.get("WAYLAND_DISPLAY")) and bool(self.which("qdbus6")) and os.path.exists(self.python)
+
+    def start(self):
+        if not self.usable():
+            return False
+        threading.Thread(target=self._loop, daemon=True, name="kwin-edge").start()
+        return True
+
+    def _kwin(self, *args):
+        return self.run(["qdbus6", "org.kde.KWin"] + list(args))
+
+    def _loop(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env = dict(self.env, PYTHONPATH=os.pathsep.join(filter(None, [root, self.env.get("PYTHONPATH", "")])))
+        try:
+            self.proc = self.popen([self.python, "-m", "faze_pc.kwin_edge"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, text=True)
+        except OSError as e:
+            self.note("Edge helper would not start: %s" % e)
+            return
+        tail = []
+        threading.Thread(target=lambda: [tail.append(l.strip()) for l in self.proc.stderr], daemon=True, name="kwin-edge-err").start()
+        for line in self.proc.stdout:
+            line = line.strip()
+            if line == "ready":
+                self.helper_up = True
+                threading.Thread(target=self._manage, daemon=True, name="kwin-edge-load").start()
+            elif line.startswith("hit ") and self.enabled():
+                try:
+                    self.on_push()
+                except Exception:
+                    pass
+        self.ready = False
+        self.helper_up = False
+        if not self.stopping.is_set():
+            self.note("The KWin edge helper stopped" + (": " + tail[-1] if tail else "") + ". The mouse-push fallback is used instead.")
+
+    def _manage(self):
+        """Loads the script into KWin while the feature is switched on and unloads it when it is switched off, so nothing runs in KWin for nobody."""
+        while self.helper_up and not self.stopping.is_set():
+            want = bool(self.switched())
+            if want and not self.loaded:
+                self.loaded = True
+                self._load()
+            elif not want and self.loaded:
+                self.loaded = False
+                self.ready = False
+                self._kwin("/Scripting", "org.kde.kwin.Scripting.unloadScript", "faze-edge")
+            self.stopping.wait(self.poll)
+
+    def _load(self):
+        self._kwin("/Scripting", "org.kde.kwin.Scripting.unloadScript", "faze-edge")  # a leftover from an earlier run
+        rc, out = self._kwin("/Scripting", "org.kde.kwin.Scripting.loadDeclarativeScript", self.qml, "faze-edge")
+        sid = out.strip()
+        if rc != 0 or not sid.lstrip("-").isdigit() or int(sid) < 0:
+            self.note("KWin would not load the edge script (%s). The mouse-push fallback is used instead." % (out.strip() or "no answer"))
+            return
+        rc, out = self._kwin("/Scripting/Script%s" % sid, "org.kde.kwin.Script.run")
+        self.ready = rc == 0
+        if not self.ready:
+            self.note("KWin would not run the edge script. The mouse-push fallback is used instead.")
+
+    def stop(self):
+        self.stopping.set()
+        self.ready = False
+        try:
+            self._kwin("/Scripting", "org.kde.kwin.Scripting.unloadScript", "faze-edge")
+        except Exception:
+            pass
+        if self.proc:
+            try:
+                self.proc.stdin.close()
+                self.proc.terminate()
+            except (OSError, ValueError):
+                pass
+
+
+def _run(argv, timeout=5):
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout
+    except (OSError, subprocess.SubprocessError):
+        return 1, ""

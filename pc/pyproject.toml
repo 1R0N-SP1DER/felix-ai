@@ -16,3 +16,4 @@ packages = ["faze_pc", "faze_pc.ui"]
 
 [tool.setuptools.package-data]
 "faze_pc.ui" = ["*.qml"]
+"faze_pc" = ["kwin/*.qml"]
