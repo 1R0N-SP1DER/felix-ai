@@ -38,6 +38,21 @@ class PcRemoteTest {
         assertEquals(1, pending.size)
     }
 
+    @Test fun movesAndScrollsAreFiredWithoutWaitingWhenThereIsAFireRoute() {
+        val fired = mutableListOf<JSONObject>()
+        val r = PcRemote({ m, _ -> sent.add(m); reply(m) }, { pending.add(it) }, { errors.add(it) }, { fired.add(it) })
+        r.move(3f, 4f); r.scroll(2); r.key("enter")
+        drain()
+        assertEquals(listOf("move", "scroll"), fired.map { it.getString("kind") })
+        assertEquals(listOf("key"), sent.map { it.getString("kind") })
+    }
+
+    @Test fun holdingAndReleasingTheButton() {
+        remote.button(true); remote.button(false)
+        drain()
+        assertEquals(listOf("down", "up"), sent.map { it.getString("kind") })
+    }
+
     @Test fun clickScrollKeyAndTextAreSent() {
         remote.click("right"); remote.click(double = true); remote.scroll(-3); remote.key("enter"); remote.text("hi")
         drain()
