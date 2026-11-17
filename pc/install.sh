@@ -1,12 +1,25 @@
 #!/usr/bin/env bash
 # Installs Faze on this PC for the current user: a private Python environment, the `faze` command, a menu entry, and autostart of the background daemon at login.
-# Run from the pc folder:  bash install.sh        Remove with:  bash install.sh --remove
+# Run from the pc folder:  bash install.sh        Fast remote control (once): bash install.sh --input        Remove: bash install.sh --remove
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 home="${XDG_DATA_HOME:-$HOME/.local/share}/faze"
 bin="$HOME/.local/bin"
 apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 auto="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
+
+if [ "${1:-}" = "--input" ]; then
+  # Lets Faze make a virtual mouse and keyboard (fast remote control from the phone). Needs sudo once; log out and in afterwards.
+  echo "Giving your user access to /dev/uinput (asks for your password)"
+  echo uinput | sudo tee /etc/modules-load.d/faze-uinput.conf >/dev/null
+  sudo modprobe uinput
+  echo 'KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"' | sudo tee /etc/udev/rules.d/99-faze-uinput.rules >/dev/null
+  sudo udevadm control --reload-rules
+  sudo udevadm trigger /dev/uinput 2>/dev/null || true
+  sudo usermod -aG input "$USER"
+  echo "Done. Log out and log back in once so the group applies."
+  exit 0
+fi
 
 if [ "${1:-}" = "--remove" ]; then
   pkill -f faze_pc.daemon 2>/dev/null || true
@@ -56,4 +69,5 @@ case ":$PATH:" in *":$bin:"*) ;; *) echo "(Add $bin to your PATH to type just: f
 echo "The background part starts by itself at your next login."
 echo
 echo "Optional tools for voice, remote control and the webcam:"
-echo "  sudo apt install pulseaudio-utils alsa-utils ydotool imagemagick ffmpeg wl-clipboard"
+echo "  sudo apt install pulseaudio-utils alsa-utils imagemagick ffmpeg wl-clipboard python3-gi gstreamer1.0-tools gstreamer1.0-pipewire gstreamer1.0-plugins-good xdg-desktop-portal-kde"
+echo "For fast mouse and keyboard control from the phone, run once:  bash install.sh --input   (then log out and in)"

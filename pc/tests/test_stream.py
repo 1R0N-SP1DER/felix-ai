@@ -10,6 +10,15 @@ from faze_pc.remote import RemoteControl
 from tests.test_tasks import tmp
 
 
+class NoUInput:
+    def open(self):
+        raise OSError("no /dev/uinput here")
+
+    def close(self):
+        pass
+
+
+
 def jpeg(tag):
     return b"\xff\xd8" + tag + b"\xff\xd9"
 
@@ -164,7 +173,7 @@ class RemoteStreamTest(unittest.TestCase):
     def make(self, on=True):
         cfg = Config(os.path.join(tmp(), "c.json"))
         cfg.data["allow_remote"] = on
-        r = RemoteControl(cfg, stream_factory=FakeStream)
+        r = RemoteControl(cfg, stream_factory=FakeStream, uinput=NoUInput())
         return r
 
     def test_start_ping_stop(self):

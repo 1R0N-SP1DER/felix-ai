@@ -4,6 +4,7 @@ import unittest
 from faze_pc.config import Config
 from faze_pc.remote import RemoteControl, MAX_JPEG
 from tests.test_tasks import tmp
+from tests.test_stream import NoUInput
 
 
 class Rig:
@@ -29,7 +30,7 @@ class RemoteTest(unittest.TestCase):
         cfg = Config(os.path.join(tmp(), "c.json"))
         cfg.data["allow_remote"] = on
         self.rig = Rig(tools, **kw)
-        return RemoteControl(cfg, which=self.rig.which, runner=self.rig.run)
+        return RemoteControl(cfg, which=self.rig.which, runner=self.rig.run, uinput=NoUInput())
 
     def test_ignores_other_messages(self):
         self.assertIsNone(self.make(["ydotool"]).handle({"t": "sync_list"}))
