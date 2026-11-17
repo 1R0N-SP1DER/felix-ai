@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: faze-pc
+Version: 0.1.0
+Summary: Faze for the desktop: a small background daemon, a Qt window, and a floating window
+Requires-Python: >=3.11
+Requires-Dist: cryptography>=41
+Provides-Extra: ui
+Requires-Dist: PySide6-Essentials>=6.6; extra == "ui"

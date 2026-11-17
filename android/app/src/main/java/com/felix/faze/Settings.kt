@@ -329,6 +329,16 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getBoolean("link_clip", true)
         set(value) = prefs.edit().putBoolean("link_clip", value).apply()
 
+    /** Show this phone's notifications on connected computers. Off until asked for. */
+    var linkNotes: Boolean
+        get() = prefs.getBoolean("link_notes", false)
+        set(value) = prefs.edit().putBoolean("link_notes", value).apply()
+
+    /** Send only the app name of each notification, not its text. */
+    var linkNotesHide: Boolean
+        get() = prefs.getBoolean("link_notes_hide", false)
+        set(value) = prefs.edit().putBoolean("link_notes_hide", value).apply()
+
     /** With root: send every copy to the computer, even from the background, by reading the system log and briefly opening an invisible window. */
     var linkClipRoot: Boolean
         get() = prefs.getBoolean("link_clip_root", true)
