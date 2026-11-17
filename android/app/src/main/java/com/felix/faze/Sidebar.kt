@@ -156,8 +156,6 @@ fun ChatDrawer(core: FazeCore, onNew: () -> Unit, onOpen: (String) -> Unit, onSe
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("Settings", color = Palette.Dim, modifier = Modifier.clip(RoundedCornerShape(14.dp)).clickable { onSettings() }.padding(horizontal = 12.dp, vertical = 9.dp))
-                Box(modifier = Modifier.weight(1f))
                 var menu by remember { mutableStateOf(false) }
                 Box {
                 androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
