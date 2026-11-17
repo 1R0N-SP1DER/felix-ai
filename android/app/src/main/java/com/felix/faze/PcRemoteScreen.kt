@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -49,24 +50,51 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
     var frame by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     var problem by remember { mutableStateOf("") }
     var typed by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
     val remote = remember { core.pcRemote { problem = it } }
 
+    // The live stream: the computer pushes pictures, the newest is drawn. If it cannot stream, fall back to asking for one picture at a time.
+    var streaming by remember { mutableStateOf(false) }
     LaunchedEffect(pc?.id) {
-        while (pc != null) {
-            try {
-                val bytes = withContext(Dispatchers.IO) { remote.screen() }
-                val bmp = withContext(Dispatchers.Default) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
-                if (bmp != null) { frame = bmp.asImageBitmap(); problem = "" }
-            } catch (e: Exception) {
-                problem = e.message ?: "could not get the PC screen"
-                delay(2000)
+        if (pc == null) return@LaunchedEffect
+        core.pcFrames.reset()
+        try {
+            val engine = withContext(Dispatchers.IO) { remote.startStream() }
+            streaming = true
+            problem = ""
+            note = engine
+        } catch (e: Exception) {
+            problem = (e.message ?: "could not start the PC screen") + " Showing slower pictures instead."
+        }
+        var shown = 0L
+        var pinged = 0L
+        while (true) {
+            val now = System.currentTimeMillis()
+            if (streaming) {
+                if (now - pinged > 3000) { pinged = now; launch(Dispatchers.IO) { remote.pingStream() } }
+                val latest = core.pcFrames.latest()
+                if (latest != null && latest.first != shown) {
+                    shown = latest.first
+                    val bmp = withContext(Dispatchers.Default) { BitmapFactory.decodeByteArray(latest.second, 0, latest.second.size) }
+                    if (bmp != null) frame = bmp.asImageBitmap()
+                } else {
+                    if (core.pcFrames.error.isNotEmpty()) problem = core.pcFrames.error
+                    delay(8)
+                }
+            } else {
+                try {
+                    val bytes = withContext(Dispatchers.IO) { remote.screen() }
+                    val bmp = withContext(Dispatchers.Default) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
+                    if (bmp != null) frame = bmp.asImageBitmap()
+                } catch (e: Exception) { problem = e.message ?: "could not get the PC screen"; delay(2000) }
+                delay(150)
             }
-            delay(150)
         }
     }
+    DisposableEffect(Unit) { onDispose { Thread { remote.stopStream() }.start() } }
 
     Column(modifier = Modifier.fillMaxSize().background(Palette.Bg)) {
-        PageHeader(if (pc != null) "Control ${pc.name}" else "Control PC", onBack)
+        PageHeader(if (pc != null) "Control ${pc.name}${if (note.isNotEmpty()) " · live ($note)" else ""}" else "Control PC", onBack)
         if (pc == null) {
             Text("No computer is connected. Pair one from Devices.", color = Palette.Dim, modifier = Modifier.padding(16.dp))
             return@Column

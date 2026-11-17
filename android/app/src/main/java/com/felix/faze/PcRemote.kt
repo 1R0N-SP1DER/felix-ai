@@ -21,6 +21,18 @@ class PcRemote(private val ask: (JSONObject, Long) -> JSONObject, private val wo
         return java.util.Base64.getDecoder().decode(r.getString("jpeg"))
     }
 
+    /** Starts the computer's live screen stream (pc_frame pictures arrive on their own). Returns the capture method's name. Throws IOException with what to install when it cannot. */
+    fun startStream(width: Int = 960, fps: Int = 30, quality: Int = 60): String {
+        val r = ask(JSONObject().put("t", "pc_stream_start").put("w", width).put("fps", fps).put("q", quality), 150_000) // the first time the desktop asks for approval
+        if (r.optString("t") != "pc_stream_ok") throw IOException(r.optString("message", "the computer could not start its screen stream"))
+        return r.optString("engine")
+    }
+
+    /** Tells the computer we are still watching; it stops capturing a few seconds after the last ping. */
+    fun pingStream() { try { ask(JSONObject().put("t", "pc_stream_ping"), 5_000) } catch (_: Exception) { } }
+
+    fun stopStream() { try { ask(JSONObject().put("t", "pc_stream_stop"), 5_000) } catch (_: Exception) { } }
+
     fun move(dx: Float, dy: Float) {
         synchronized(this) {
             pdx += dx; pdy += dy

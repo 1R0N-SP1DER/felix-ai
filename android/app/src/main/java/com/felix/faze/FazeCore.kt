@@ -35,7 +35,7 @@ class FazeCore(private val app: Application) : EngineListener {
         private set
     var linkCode by mutableStateOf("")
         private set
-    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) ?: phoneClip.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = "" } })
+    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) ?: phoneClip.handle(msg) ?: pcFrames.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = "" } })
 
     fun setLink(on: Boolean) {
         settings.linkOn = on
@@ -227,6 +227,9 @@ class FazeCore(private val app: Application) : EngineListener {
             else -> emptyList()
         }
     }, { activity.add("link", it) })
+    /** The connected computer's live screen (see PcFrames). */
+    val pcFrames = PcFrames()
+
     private val clipboard = app.getSystemService(android.content.ClipboardManager::class.java)
     private val phoneClip = PhoneClip({ settings.linkClip && link.connected().isNotEmpty() },
         { text -> main.post { try { clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Faze", text)) } catch (_: Exception) { } } },
