@@ -85,6 +85,7 @@ class FazeCore(private val app: Application) : EngineListener {
         { msg, timeout -> pcAsk(msg, timeout) },
         { r -> remoteWorker.execute(r) },
         { m -> main.post { onError(m) } },
+        { m -> link.notify(m) },
     )
 
     /** Asks the connected computer to open a window showing this phone's screen (it needs Allow screen view and control to be on). */

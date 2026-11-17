@@ -9,7 +9,7 @@ import java.util.concurrent.Executor
  * (a switch in its own settings), and tells us in words when it does not. Mouse movement is gathered while the previous message is still in flight,
  * so a fast drag sends fewer, larger moves instead of a queue.
  */
-class PcRemote(private val ask: (JSONObject, Long) -> JSONObject, private val worker: Executor, private val onError: (String) -> Unit) {
+class PcRemote(private val ask: (JSONObject, Long) -> JSONObject, private val worker: Executor, private val onError: (String) -> Unit, private val fire: ((JSONObject) -> Unit)? = null) {
     private var pdx = 0f
     private var pdy = 0f
     private var scheduled = false
@@ -46,18 +46,23 @@ class PcRemote(private val ask: (JSONObject, Long) -> JSONObject, private val wo
         val dx: Float
         val dy: Float
         synchronized(this) { dx = pdx; dy = pdy; pdx = 0f; pdy = 0f; scheduled = false }
-        if (dx != 0f || dy != 0f) input("move", "dx" to dx.toDouble(), "dy" to dy.toDouble())
+        if (dx != 0f || dy != 0f) input("move", "dx" to dx.toDouble(), "dy" to dy.toDouble(), quick = true)
     }
 
+    /** Holds or releases a mouse button (for dragging things on the computer). */
+    fun button(down: Boolean, button: String = "left") = worker.execute { input(if (down) "down" else "up", "button" to button) }
+
     fun click(button: String = "left", double: Boolean = false) = worker.execute { input("click", "button" to button, "double" to double) }
-    fun scroll(lines: Int) = worker.execute { input("scroll", "dy" to lines) }
+    fun scroll(lines: Int) = worker.execute { input("scroll", "dy" to lines, quick = true) }
     fun key(name: String) = worker.execute { input("key", "key" to name) }
     fun text(text: String) = worker.execute { input("text", "text" to text) }
 
-    private fun input(kind: String, vararg kv: Pair<String, Any>) {
+    /** [quick] inputs (movement, scrolling) are sent without waiting for an answer, so a fast drag is not slowed by round trips. Clicks and keys wait, so a refusal is reported. */
+    private fun input(kind: String, vararg kv: Pair<String, Any>, quick: Boolean = false) {
         try {
             val m = JSONObject().put("t", "pc_input").put("kind", kind)
             kv.forEach { m.put(it.first, it.second) }
+            if (quick && fire != null) { fire.invoke(m); return }
             val r = ask(m, 10_000)
             if (r.optString("t") == "error") onError(r.optString("message", "the computer refused"))
         } catch (e: Exception) {

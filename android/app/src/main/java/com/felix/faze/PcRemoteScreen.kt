@@ -5,6 +5,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -106,7 +107,8 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
                     .pointerInput(Unit) {
                         detectTapGestures(onTap = { remote.click() }, onDoubleTap = { remote.click(double = true) }, onLongPress = { remote.click("right") })
                     }
-                    .pointerInput(Unit) { detectDragGestures { change, drag -> change.consume(); remote.move(drag.x * 1.8f, drag.y * 1.8f) } },
+                    .pointerInput(Unit) { detectDragGestures { change, drag -> change.consume(); remote.move(drag.x * 1.8f, drag.y * 1.8f) } }
+                    .pointerInput(Unit) { detectDragGesturesAfterLongPress(onDragStart = { remote.button(true) }, onDragEnd = { remote.button(false) }, onDragCancel = { remote.button(false) }) { change, drag -> change.consume(); remote.move(drag.x * 1.8f, drag.y * 1.8f) } },
                 contentAlignment = Alignment.Center,
             ) {
                 val f = frame
