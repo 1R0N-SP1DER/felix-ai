@@ -66,6 +66,9 @@ class ScreenStream:
         self.seq = 0
         self.cond = threading.Condition()
         self.sent = 0
+        self.tail = ""
+        self.frames_made = 0
+        self.first_wait = 8.0
 
     def wayland(self):
         return self.env.get("XDG_SESSION_TYPE", "").lower() == "wayland" or bool(self.env.get("WAYLAND_DISPLAY"))
@@ -99,6 +102,7 @@ class ScreenStream:
                 continue
             self.proc, self.engine, self.running, self.last_ping = proc, name, True, self.clock()
             threading.Thread(target=self._read, args=(proc, name), daemon=True, name="stream-read").start()
+            threading.Thread(target=self._drain, args=(proc,), daemon=True, name="stream-err").start()
             threading.Thread(target=self._send, daemon=True, name="stream-send").start()
             threading.Thread(target=self._watch, daemon=True, name="stream-watch").start()
             return name
@@ -113,6 +117,15 @@ class ScreenStream:
     def ping(self):
         self.last_ping = self.clock()
 
+    def _drain(self, proc):
+        try:
+            for line in iter(proc.stderr.readline, b""):
+                text = line.decode("utf-8", "replace").strip()
+                if text:
+                    self.tail = text[-200:]
+        except (OSError, ValueError):
+            pass
+
     def _read(self, proc, name):
         split = JpegSplitter()
         try:
@@ -122,20 +135,16 @@ class ScreenStream:
                     break
                 for jpeg in split.feed(chunk):
                     with self.cond:
+                        self.frames_made += 1
                         self.latest, self.seq = jpeg, self.seq + 1  # overwrites an unsent picture: that is the dropping
                         self.cond.notify()
         finally:
             if self.proc is proc and self.running:
-                err = b""
-                try:
-                    err = proc.stderr.read() or b""
-                except (OSError, ValueError):
-                    pass
+                time.sleep(0.1)  # let the error reader see the last words
                 self.running = False
                 with self.cond:
                     self.cond.notify_all()
-                msg = err.decode("utf-8", "replace").strip().splitlines()
-                self.on_error(msg[-1] if msg else "%s stopped" % name)
+                self.on_error(self.tail or "%s stopped" % name)
 
     def _send(self):
         sent_seq = 0
@@ -154,8 +163,13 @@ class ScreenStream:
                 return
 
     def _watch(self):
+        began, warned = self.clock(), False
         while self.running:
             time.sleep(1.0)
+            if not warned and self.frames_made == 0 and self.clock() - began > self.first_wait:
+                warned = True
+                where = " Look at the PC screen: a box may be asking to share it." if self.engine == "portal" else ""
+                self.on_error("The PC has not produced a picture yet." + where + (" (" + self.tail + ")" if self.tail else ""))
             if self.clock() - self.last_ping > IDLE:
                 self.stop()
                 return
@@ -171,3 +185,33 @@ class ScreenStream:
                     fn()
                 except (OSError, ValueError, AttributeError):
                     pass
+
+
+def check(seconds=8):
+    """`python3 -m faze_pc.stream`: tries the PC screen capture for a few seconds and says what happened. For finding out why the phone shows nothing."""
+    got = []
+    errors = []
+    st = ScreenStream(lambda jpeg, n: got.append(len(jpeg)), errors.append)
+    try:
+        engine = st.start()
+    except RuntimeError as e:
+        print("Could not start:", e)
+        return 1
+    print("Capture method:", engine)
+    if engine == "portal":
+        print("If a box asks to share the screen, approve it now.")
+    end = time.time() + seconds
+    while time.time() < end and not errors:
+        st.ping()
+        time.sleep(0.5)
+    st.stop()
+    print("Pictures received:", len(got), ("(about %d KB each)" % (sum(got) // len(got) // 1024)) if got else "")
+    for e in errors:
+        print("Stopped with:", e)
+    if not got and not errors:
+        print("Nothing arrived. Last message from the capture program:", st.tail or "(none)")
+    return 0 if got else 1
+
+
+if __name__ == "__main__":
+    sys.exit(check())

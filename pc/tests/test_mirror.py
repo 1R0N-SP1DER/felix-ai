@@ -202,3 +202,22 @@ class H264Test(unittest.TestCase):
         d.screen_in({"t": "screen_stream_error", "message": "recorder died"})
         self.assertTrue(self.wait(lambda: any(e["t"] == "frame" for e in d.events)))
         self.assertTrue(any("recorder died" in e.get("message", "") for e in d.events if e["t"] == "mirror_error"))
+
+    def test_silent_live_video_falls_back_to_screenshots(self):
+        d, links = self.daemon()
+        d.video_grace = 0.1
+        orig_request = links.request
+
+        def request(pid, msg, timeout=15):
+            if msg["t"] == "screen_get":
+                links.sent.append(msg)
+                return {"t": "screen_ok", "jpeg": "AAAA"}
+            return orig_request(pid, msg, timeout)
+
+        links.request = request
+        d.mirror_gap = 0.0
+        d.handle({"op": "mirror_start"}, lambda e: None)
+        self.assertTrue(self.wait(lambda: any(e["t"] == "frame" for e in d.events)))
+        msgs = [e.get("message", "") for e in d.events if e["t"] == "mirror_error"]
+        self.assertTrue(any("sent no video" in m for m in msgs))
+        d.handle({"op": "mirror_stop"}, lambda e: None)
