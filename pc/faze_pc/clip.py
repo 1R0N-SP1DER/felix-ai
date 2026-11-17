@@ -19,9 +19,10 @@ def run(argv, input=None, timeout=3):
 
 
 class ClipSync:
-    def __init__(self, config, send, which=shutil.which, runner=run, interval=1.0):
+    def __init__(self, config, send, which=shutil.which, runner=run, interval=1.0, connected=lambda: True):
         self.config, self.send = config, send  # send(msg) -> number of phones it reached
         self.which, self.run, self.interval = which, runner, interval
+        self.connected = connected  # is a phone linked right now; with none, the clipboard is not even looked at
         self.last = None
         self.stopping = threading.Event()
 
@@ -48,6 +49,9 @@ class ClipSync:
         """One look at the clipboard. Sends it to the phone if it is new text the phone has not just given us."""
         if not self.enabled():
             return False
+        if not self.connected():
+            self.last = None  # anything copied while no phone was linked is never read or sent; the first look after linking is just a baseline
+            return False
         text = self.read()
         if self.last is None and text is not None:
             self.last = text  # what was already there at start is not news
@@ -60,7 +64,7 @@ class ClipSync:
     def receive(self, msg):
         """A copy from the phone. Never answered: it was a notice, not a question."""
         text = msg.get("text")
-        if not self.enabled() or not isinstance(text, str) or not text or len(text.encode()) > MAX or text == self.last:
+        if not self.enabled() or not self.connected() or not isinstance(text, str) or not text or len(text.encode()) > MAX or text == self.last:
             return None
         self.last = text  # set first: reading it back must not echo it to the phone
         self.write(text)
