@@ -35,7 +35,7 @@ class FazeCore(private val app: Application) : EngineListener {
         private set
     var linkCode by mutableStateOf("")
         private set
-    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) ?: phoneClip.handle(msg) ?: pcFrames.handle(msg) ?: screenStream.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = "" } })
+    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) ?: phoneClip.handle(msg) ?: pcFrames.handle(msg) ?: screenStream.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = ""; syncClipWatch() } })
 
     fun setLink(on: Boolean) {
         settings.linkOn = on
@@ -251,11 +251,17 @@ class FazeCore(private val app: Application) : EngineListener {
             if (on) androidx.core.content.ContextCompat.startForegroundService(app, android.content.Intent(app, LinkService::class.java))
             else app.stopService(android.content.Intent(app, LinkService::class.java))
         } catch (_: Exception) { /* Android only lets this start while the app is in front; the next time Faze opens it will */ }
-        if (on && settings.linkClip && settings.linkClipRoot) clipWatch.start() else clipWatch.stop()
+        syncClipWatch()
+    }
+
+    /** The root clipboard watcher runs only while a computer is linked: with none, nothing is watched and the clipboard is never read. */
+    fun syncClipWatch() {
+        if (settings.linkOn && settings.linkClip && settings.linkClipRoot && link.connected().isNotEmpty()) clipWatch.start() else clipWatch.stop()
     }
 
     /** Sends the phone's clipboard to the computer. Android only lets an app read it while the app is in front, so this runs on a copy and when Faze opens. */
     fun shareClipboard() {
+        if (!settings.linkClip || link.connected().isEmpty()) return // not linked: do not even read it
         try { phoneClip.changed(clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(app)?.toString()) } catch (_: Exception) { }
     }
 
