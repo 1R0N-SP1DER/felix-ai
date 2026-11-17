@@ -19,7 +19,7 @@ object ModelSheet {
     fun rows(keys: Set<String>, models: Map<String, String>): List<ModelRow> = names.map { (id, name) ->
         if (id == "auto") ModelRow(id, name, "picks the best model for each request", if (keys.any { it != "auto" && it != "offline" } || models["offline"].orEmpty().isNotEmpty()) "ok" else "warn", true)
         else if (id == "offline") ModelRow(id, name, models[id].orEmpty().let { m -> if (m.isEmpty()) "pick a model (llama.cpp in Termux, needs root)" else LocalLlama.label(m) }, if (models[id].orEmpty().isEmpty()) "warn" else "ok", true)
-        else if (id in live) ModelRow(id, name, if (id in keys) (models[id].orEmpty().let { m -> if (m.isEmpty()) "free model, picked for you" else ModelChoices.label(m) }) else "no key yet (Settings > Advanced)", if (id in keys) "ok" else "bad", true)
+        else if (id in live) ModelRow(id, name, if (id in keys) (models[id].orEmpty().let { m -> (if (m.isEmpty()) "free model, picked for you" else ModelChoices.label(m)) + (Quotas.text(name)?.let { " · $it" } ?: "") }) else "no key yet (Settings > Advanced)", if (id in keys) "ok" else "bad", true)
         else ModelRow(id, name, NOT_YET, "", false)
     }
 

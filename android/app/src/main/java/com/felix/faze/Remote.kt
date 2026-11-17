@@ -147,6 +147,7 @@ class RemoteClient(
         }
         if (cancelled()) throw Cancelled()
         if (result.status != 200) throw classify(result.status, result.body, result.headers)
+        parseQuota(result.headers)?.let { Quotas.record(label, it) }
         val calls = slots.values.filter { it.name.isNotEmpty() }.map { ToolCall(it.id, it.name, it.args) }
         return ChatResult(content.toString(), calls, streamed)
     }
