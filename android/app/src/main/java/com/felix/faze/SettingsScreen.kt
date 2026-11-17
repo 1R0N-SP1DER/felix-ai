@@ -560,7 +560,7 @@ private fun AdvancedTab(core: FazeCore) {
         SettingRow("Leave these alone", "Words from a window name below that Faze must not replace. To keep the full Gemini app: open it, come back, tap Refresh, and put a word from its name here.") {
             FieldBox(gSkip, false, Modifier.widthIn(max = 190.dp)) { gSkip = it; s.googleSkip = it }
         }
-        SettingRow("Google windows seen", if (gLast.isEmpty()) "None yet. Say Hey Google or open the Gemini app, then come back here and tap Refresh. Newest first." else gLast) {
+        SettingRow("Google windows seen", if (gLast.isEmpty()) "None yet. Say Hey Google, hold the power button, swipe the corner, or open the Gemini app, then come back here and tap Refresh. Newest first; the part in brackets is how it opened." else gLast) {
             Text("Refresh", color = Palette.Dim, fontSize = 13.sp, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { gLast = s.lastGoogleWindow }.padding(horizontal = 10.dp, vertical = 6.dp))
         }
         SettingRow("Limit Faze on the lock screen", "While the phone is locked, Faze can still talk, search and tell the time, but won't use your memories or act on your phone until you unlock.") {

@@ -35,7 +35,16 @@ class FazeAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         overlay = OverlayWindow(this, core)
+        try {
+            registerReceiver(object : android.content.BroadcastReceiver() {
+                override fun onReceive(c: android.content.Context?, i: android.content.Intent?) { screenOnAt = SystemClock.uptimeMillis() }
+            }, android.content.IntentFilter(android.content.Intent.ACTION_SCREEN_ON))
+        } catch (_: Exception) { }
     }
+
+    @Volatile private var screenOnAt = 0L
+    private var lastWindowAt = 0L
+    private var lastWindowPkg = ""
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode != KeyEvent.KEYCODE_VOLUME_UP && event.keyCode != KeyEvent.KEYCODE_VOLUME_DOWN) return false
@@ -141,9 +150,16 @@ class FazeAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null || event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
-        if (pkg !in GoogleTakeover.PACKAGES) return
+        val nowUp = SystemClock.uptimeMillis()
+        val before = lastWindowPkg
+        val since = if (lastWindowAt == 0L) null else nowUp - lastWindowAt
+        lastWindowAt = nowUp
+        if (pkg !in GoogleTakeover.PACKAGES) { lastWindowPkg = pkg; return }
         val cls = event.className?.toString().orEmpty()
-        val seen = "$pkg / $cls"
+        val recorders = try { (getSystemService(AUDIO_SERVICE) as AudioManager).activeRecordingConfigurations.size } catch (_: Exception) { -1 }
+        val print = GoogleTakeover.fingerprint(if (screenOnAt == 0L) null else nowUp - screenOnAt, LockOverlayActivity.isLocked(this), recorders, since, before)
+        lastWindowPkg = pkg
+        val seen = "$pkg / $cls  [$print]"
         val s = core.settings
         val history = GoogleTakeover.remember(s.lastGoogleWindow, seen)
         if (s.lastGoogleWindow != history) s.lastGoogleWindow = history
