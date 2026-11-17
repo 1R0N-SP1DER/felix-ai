@@ -93,3 +93,24 @@ class ClipTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClipOfflineTest(ClipTest):
+    def test_with_no_phone_linked_the_clipboard_is_never_read(self):
+        c = self.make("old")
+        online = [False]
+        c.connected = lambda: online[0]
+        calls = []
+        orig = c.run
+        c.run = lambda argv, *a, **k: calls.append(argv) or orig(argv, *a, **k)
+        self.assertFalse(c.poll())
+        self.board.text = "copied while offline"
+        self.assertFalse(c.poll())
+        c.receive({"t": "clip", "text": "from phone"})
+        self.assertEqual(calls, [])
+        self.assertEqual(self.board.text, "copied while offline")
+        online[0] = True
+        self.assertFalse(c.poll())  # first look after linking is only a baseline: the offline copy is not sent
+        self.assertEqual(self.sent, [])
+        self.board.text = "after linking"
+        self.assertTrue(c.poll())

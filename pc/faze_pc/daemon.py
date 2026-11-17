@@ -52,7 +52,7 @@ class Daemon:
         self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log, mirror_opener=self.open_mirror_window, clip_in=lambda m: self.clip.receive(m), remote=RemoteControl(self.config, log=self.store.log, notify=lambda m: self.links.notify(m)), media=Media(self.config), screen_in=lambda m: self.screen_in(m))
         self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_request=lambda pid, msg: self.peer.handle(pid, msg), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
 
-        self.clip = ClipSync(self.config, lambda m: self.links.notify(m))
+        self.clip = ClipSync(self.config, lambda m: self.links.notify(m), connected=lambda: bool(getattr(self.links, "sessions", {})))
         self.edge = EdgeWatcher(lambda: self.config.data.get("edge_open") is True and bool(self._phone()), self.open_mirror_window, lambda m: self.store.log("link", m))
 
     def _phone(self):
