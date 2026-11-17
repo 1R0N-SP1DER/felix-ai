@@ -203,7 +203,7 @@ class LiveTest(unittest.TestCase):
         states = [e["state"] for e in events if e["t"] == "voice_state"]
         self.assertEqual(states[:3], ["listening", "speaking", "listening"])
 
-    def test_tool_calls_are_answered_with_an_error(self):
+    def test_tool_calls_without_a_runner_are_answered_with_an_error(self):
         ws = FakeWs([msg(setupComplete={}), msg(toolCall={"functionCalls": [{"id": "1", "name": "x", "args": {}}]})])
         s, events, _ = self.make(lambda url: ws, mic=b"")
         t = threading.Thread(target=s.run, daemon=True)
@@ -212,6 +212,39 @@ class LiveTest(unittest.TestCase):
         s.stop()
         t.join(3)
         self.assertTrue(any("toolResponse" in m for m in ws.sent))
+
+    def test_tool_calls_run_through_the_runner(self):
+        ws = FakeWs([msg(setupComplete={}), msg(toolCall={"functionCalls": [{"id": "7", "name": "get_time", "args": {"a": "b"}}]})])
+        s, events, _ = self.make(lambda url: ws, mic=b"")
+        seen = []
+        s.runner = lambda name, args: seen.append((name, args)) or "noon"
+        t = threading.Thread(target=s.run, daemon=True)
+        t.start()
+        time.sleep(0.5)
+        s.stop()
+        t.join(3)
+        self.assertEqual(seen, [("get_time", {"a": "b"})])
+        reply = [json.loads(m) if isinstance(m, str) else m for m in ws.sent if "toolResponse" in str(m)][0]
+        self.assertEqual(reply["toolResponse"]["functionResponses"][0]["response"], {"output": "noon"})
+
+    def test_a_failing_runner_is_an_error_result_not_a_crash(self):
+        s, _, _ = self.make(lambda url: None)
+        def boom(name, args):
+            raise RuntimeError("bad key=SECRETKEY")
+        s.runner = boom
+        out = s.tool_response({"name": "x", "args": {}})
+        self.assertIn("error", out)
+        self.assertNotIn("SECRETKEY", out["error"])
+
+    def test_declarations_and_setup_carry_the_tools(self):
+        from faze_pc import tools as toolbox
+        decl = live.declarations(toolbox.specs())
+        names = {d["name"] for d in decl}
+        self.assertIn("open_app", names)
+        self.assertNotIn("parameters", [d for d in decl if d["name"] == "get_time"][0])
+        setup = live.build_setup("m", "i", "Kore", "generation", decl)["setup"]
+        self.assertEqual(setup["tools"][0]["functionDeclarations"], decl)
+        self.assertNotIn("tools", live.build_setup("m", "i", "Kore", "flat")["setup"])
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@ from .edge import EdgeWatcher
 from .h264 import H264Decoder
 from .media import Media
 from .remote import RemoteControl
-from .live import LiveSession
+from .live import LiveSession, declarations as live_declarations
 from .voice import Voice, VoiceError
 
 
@@ -170,11 +170,30 @@ class Daemon:
             return
         self.mirror_proc = self.spawn([sys.executable, "-m", "faze_pc.cli", "--mirror"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
+    def live_tool(self, name, args):
+        """A tool the Live voice asked for: same rules as typed chat (Allow / Deny card for risky ones, the shell blocklist, logged)."""
+        t = toolbox.tier(name)
+        if t is None:
+            return "There is no tool called %s." % name
+        if not isinstance(args, dict):
+            return "The arguments were not valid."
+        text = toolbox.summary(name, args)
+        if name == "run_command" and toolbox.blocked(str(args.get("command", ""))):
+            self.engine.store.log("tool", "refused: " + text)
+            return "Refused: that command looks destructive or needs administrator rights."
+        if t == toolbox.ASK and not self.engine.approver.ask(name, text, self.broadcast):
+            self.engine.store.log("tool", "denied: " + text)
+            return "The user said no (or did not answer), so this was not done."
+        ok, result = self.engine.tools.execute(name, args)
+        self.engine.store.log("tool", ("%s: " % ("ok" if ok else "failed")) + text)
+        self.broadcast({"t": "tool", "name": name, "summary": text, "ok": ok})
+        return result
+
     def start_live(self):
         """Gemini Live, a continuous spoken conversation. Runs in its own thread until stopped."""
         if self.live is not None:
             return
-        session = LiveSession(self.config, self.broadcast)
+        session = LiveSession(self.config, self.broadcast, tools=live_declarations(toolbox.specs()), runner=self.live_tool)
         self.live = session
 
         def go():
