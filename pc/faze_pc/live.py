@@ -32,7 +32,7 @@ def scrub(text):
     return re.sub(r"key=[^&\s'\"]+", "key=...", str(text))
 
 
-def build_setup(model, instruction, voice, shape):
+def build_setup(model, instruction, voice, shape, tools=None):
     speech = {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}}
     setup = {"model": model if model.startswith("models/") else "models/" + model,
              "systemInstruction": {"parts": [{"text": instruction}]},
@@ -42,7 +42,23 @@ def build_setup(model, instruction, voice, shape):
     else:
         setup["responseModalities"] = ["AUDIO"]
         setup["speechConfig"] = speech
+    if tools:
+        setup["tools"] = [{"functionDeclarations": tools}]
     return {"setup": setup}
+
+
+def declarations(specs):
+    """OpenAI-style tool specs (tools.specs()) as Gemini function declarations."""
+    out = []
+    for sp in specs:
+        fn = sp["function"]
+        params = fn.get("parameters") or {}
+        d = {"name": fn["name"], "description": fn["description"]}
+        if params.get("properties"):
+            d["parameters"] = {"type": "OBJECT", "properties": {k: {"type": "STRING", "description": v.get("description", "")} for k, v in params["properties"].items()},
+                               "required": params.get("required", [])}
+        out.append(d)
+    return out
 
 
 def parse_message(msg):
@@ -110,8 +126,9 @@ class Player:
 
 
 class LiveSession:
-    def __init__(self, config, emit, which=shutil.which, popen=subprocess.Popen, connect=None):
+    def __init__(self, config, emit, which=shutil.which, popen=subprocess.Popen, connect=None, tools=None, runner=None):
         self.config, self.emit = config, emit
+        self.tools, self.runner = tools, runner  # tools: declarations; runner(name, args) -> text
         self.which, self.popen = which, popen
         self.connect = connect or (lambda url: wsclient.Ws.connect(url, SETUP_TIMEOUT))
         self.player = Player(which, popen)
@@ -120,6 +137,14 @@ class LiveSession:
         self.rec = None
         self.speaking = False
         self.rejections = []
+
+    def tool_response(self, call):
+        if not self.runner:
+            return {"error": "tools are not available here"}
+        try:
+            return {"output": str(self.runner(call.get("name", ""), call.get("args") or {}))}
+        except Exception as e:
+            return {"error": scrub(e)[:200]}
 
     def open(self):
         key = self.config.key("gemini")
@@ -134,7 +159,7 @@ class LiveSession:
             except Exception as e:
                 raise LiveError("could not connect: " + scrub(e)[:160])
             try:
-                ws.send(json.dumps(build_setup(model, instruction, voice, shape)))
+                ws.send(json.dumps(build_setup(model, instruction, voice, shape, self.tools if self.runner else None)))
                 first = json.loads(ws.recv(timeout=SETUP_TIMEOUT))
             except Exception as e:
                 reason = scrub(e)[:300]
@@ -228,7 +253,7 @@ class LiveSession:
             self._more = False
             self.player.finish()
         elif kind == "tool_call":
-            replies = [{"id": c.get("id", ""), "name": c.get("name", ""), "response": {"error": "tools are not available in Live on the PC yet"}} for c in ev[1]]
+            replies = [{"id": c.get("id", ""), "name": c.get("name", ""), "response": self.tool_response(c)} for c in ev[1]]
             self.ws.send(json.dumps({"toolResponse": {"functionResponses": replies}}))
         elif kind == "go_away":
             raise wsclient.WsClosed(1001, "the server is ending the session")
