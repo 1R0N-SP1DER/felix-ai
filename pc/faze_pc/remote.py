@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 
 from .stream import ScreenStream
+from .uinput import UInput, can_type
 
 MAX_JPEG = 800 * 1024
 BUTTONS = {"left": "0xC0", "right": "0xC1", "middle": "0xC2"}
@@ -23,8 +24,10 @@ KEYS = {  # name -> (ydotool evdev codes, xdotool name)
 
 
 class RemoteControl:
-    def __init__(self, config, which=shutil.which, runner=None, log=None, notify=None, stream_factory=None):
+    def __init__(self, config, which=shutil.which, runner=None, log=None, notify=None, stream_factory=None, uinput=None):
         self.config, self.which = config, which
+        self.uinput = uinput if uinput is not None else UInput()
+        self.uinput_failed = False
         self.notify = notify or (lambda m: 0)
         self.stream = (stream_factory or ScreenStream)(lambda jpeg, n: self.notify({"t": "pc_frame", "jpeg": jpeg, "n": n}), lambda m: self.notify({"t": "pc_stream_error", "message": m}))
         self.run = runner or self._run
@@ -98,10 +101,56 @@ class RemoteControl:
             return "xdotool"
         return None
 
+    def direct(self, msg):
+        """The fast path: a virtual mouse and keyboard through /dev/uinput. Returns the reply, or None when it cannot be used and the slower tools should try."""
+        if self.uinput_failed:
+            return None
+        kind = msg.get("kind")
+        try:
+            self.uinput.open()
+            u = self.uinput
+            if kind == "move":
+                u.move(max(-3000, min(3000, float(msg.get("dx", 0)))), max(-3000, min(3000, float(msg.get("dy", 0)))))
+            elif kind == "click":
+                b = msg.get("button", "left")
+                if b not in BUTTONS:
+                    return {"t": "error", "message": "unknown button"}
+                u.click(b, 2 if msg.get("double") else 1)
+            elif kind == "down" or kind == "up":
+                b = msg.get("button", "left")
+                if b not in BUTTONS:
+                    return {"t": "error", "message": "unknown button"}
+                u.button(b, kind == "down")
+            elif kind == "scroll":
+                u.scroll(max(-50, min(50, int(float(msg.get("dy", 0))))))
+            elif kind == "key":
+                try:
+                    u.named_key(str(msg.get("key", "")).lower())
+                except KeyError:
+                    return {"t": "error", "message": "unknown key"}
+            elif kind == "text":
+                text = str(msg.get("text", ""))[:500]
+                if not can_type(text):
+                    return None  # letters outside a US keyboard: the other tools can type those
+                u.type_text(text)
+            else:
+                return None
+            return {"t": "pc_input_ok"}
+        except OSError:
+            self.uinput_failed = True
+            try:
+                self.uinput.close()
+            except Exception:
+                pass
+            return None
+
     def input(self, msg):
+        fast = self.direct(msg)
+        if fast is not None:
+            return fast
         be = self.backend()
         if be is None:
-            return {"t": "error", "message": "no input tool on the PC. Install ydotool (Wayland) or xdotool (X11)."}
+            return {"t": "error", "message": "no way to move the PC's mouse. Run: bash install.sh --input (in the pc folder, then log out and in), or install ydotool or xdotool."}
         kind = msg.get("kind")
         argv = None
         if kind == "move":
