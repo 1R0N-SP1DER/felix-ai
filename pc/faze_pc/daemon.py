@@ -18,6 +18,7 @@ from . import tools as toolbox
 from .peer import PeerRequests
 from .sync import Syncer
 from .clip import ClipSync
+from .notes import PhoneNotes
 from .edge import EdgeWatcher, KWinEdge
 from .h264 import H264Decoder
 from .media import Media
@@ -49,9 +50,10 @@ class Daemon:
         self.ping_gap = 3.0
         self.video_grace = 6.0  # seconds the live video gets to produce its first picture before we use screenshots instead
         self.spawn = spawn or subprocess.Popen
-        self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log, mirror_opener=self.open_mirror_window, clip_in=lambda m: self.clip.receive(m), remote=RemoteControl(self.config, log=self.store.log, notify=lambda m: self.links.notify(m)), media=Media(self.config), screen_in=lambda m: self.screen_in(m))
+        self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log, mirror_opener=self.open_mirror_window, clip_in=lambda m: self.clip.receive(m), remote=RemoteControl(self.config, log=self.store.log, notify=lambda m: self.links.notify(m)), media=Media(self.config), screen_in=lambda m: self.screen_in(m), notes_in=lambda m: self.notes.handle(m))
         self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_request=lambda pid, msg: self.peer.handle(pid, msg), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
 
+        self.notes = PhoneNotes(self.config, log=self.store.log)
         self.clip = ClipSync(self.config, lambda m: self.links.notify(m), connected=lambda: bool(getattr(self.links, "sessions", {})))
         wanted = lambda: self.config.data.get("edge_open") is True and bool(self._phone())
         self.kwin_edge = KWinEdge(wanted, self.open_mirror_window, lambda m: self.store.log("link", m), switched=lambda: self.config.data.get("edge_open") is True)
