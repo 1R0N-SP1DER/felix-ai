@@ -18,6 +18,7 @@ from . import tools as toolbox
 from .peer import PeerRequests
 from .sync import Syncer
 from .clip import ClipSync
+from .edge import EdgeWatcher
 from .h264 import H264Decoder
 from .media import Media
 from .remote import RemoteControl
@@ -51,6 +52,7 @@ class Daemon:
         self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_request=lambda pid, msg: self.peer.handle(pid, msg), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
 
         self.clip = ClipSync(self.config, lambda m: self.links.notify(m))
+        self.edge = EdgeWatcher(lambda: self.config.data.get("edge_open") is True and bool(self._phone()), self.open_mirror_window, lambda m: self.store.log("link", m))
 
     def _phone(self):
         for d in self.links.list():
@@ -406,6 +408,7 @@ class Daemon:
         daemon = self
         self.links.start()
         self.clip.start()
+        self.edge.start()
 
         class Handler(socketserver.StreamRequestHandler):
             def handle(self):

@@ -28,6 +28,7 @@ DEFAULTS = {
     "live_model": "gemini-2.5-flash-native-audio-preview-12-2025",
     "live_barge_in": False,
     "tts_model": "gemini-3.8-flash-tts",
+    "edge_open": False,
     "allow_remote": False,
     "clip_sync": True,
     "share_all": False,
