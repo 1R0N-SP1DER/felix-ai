@@ -7,6 +7,8 @@ import shutil
 import subprocess
 import tempfile
 
+from .stream import ScreenStream
+
 MAX_JPEG = 800 * 1024
 BUTTONS = {"left": "0xC0", "right": "0xC1", "middle": "0xC2"}
 XBUTTON = {"left": "1", "middle": "2", "right": "3"}
@@ -21,8 +23,10 @@ KEYS = {  # name -> (ydotool evdev codes, xdotool name)
 
 
 class RemoteControl:
-    def __init__(self, config, which=shutil.which, runner=None, log=None):
+    def __init__(self, config, which=shutil.which, runner=None, log=None, notify=None, stream_factory=None):
         self.config, self.which = config, which
+        self.notify = notify or (lambda m: 0)
+        self.stream = (stream_factory or ScreenStream)(lambda jpeg, n: self.notify({"t": "pc_frame", "jpeg": jpeg, "n": n}), lambda m: self.notify({"t": "pc_stream_error", "message": m}))
         self.run = runner or self._run
         self.log = log or (lambda kind, text: None)
         self.announced = False
@@ -39,13 +43,25 @@ class RemoteControl:
 
     def handle(self, msg):
         t = msg.get("t")
-        if t not in ("pc_screen_get", "pc_input"):
+        if t not in ("pc_screen_get", "pc_input", "pc_stream_start", "pc_stream_ping", "pc_stream_stop"):
             return None
         if not self.enabled():
             return {"t": "error", "message": "Turn on \"Let my phone see and control this PC\" in Faze's settings on the PC."}
         if not self.announced:
             self.announced = True
             self.log("link", "The phone is viewing and controlling this PC")
+        if t == "pc_stream_start":
+            try:
+                engine = self.stream.start(int(msg.get("w", 960) or 960), int(msg.get("fps", 30) or 30), int(msg.get("q", 60) or 60))
+            except RuntimeError as e:
+                return {"t": "error", "message": str(e)}
+            return {"t": "pc_stream_ok", "engine": engine}
+        if t == "pc_stream_ping":
+            self.stream.ping()
+            return {"t": "ok"}
+        if t == "pc_stream_stop":
+            self.stream.stop()
+            return {"t": "ok"}
         return self.screen(msg) if t == "pc_screen_get" else self.input(msg)
 
     # --- seeing
