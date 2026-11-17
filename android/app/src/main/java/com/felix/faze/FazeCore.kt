@@ -35,7 +35,7 @@ class FazeCore(private val app: Application) : EngineListener {
         private set
     var linkCode by mutableStateOf("")
         private set
-    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) ?: phoneClip.handle(msg) ?: pcFrames.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = "" } })
+    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) ?: phoneClip.handle(msg) ?: pcFrames.handle(msg) ?: screenStream.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = "" } })
 
     fun setLink(on: Boolean) {
         settings.linkOn = on
@@ -217,6 +217,12 @@ class FazeCore(private val app: Application) : EngineListener {
         { AndroidScreenCapture().jpeg() }, AndroidHands(app),
         { app.resources.displayMetrics.let { it.widthPixels to it.heightPixels } },
         { settings.linkScreen }, { LockOverlayActivity.isLocked(app) }, { activity.add("link", it) },
+    )
+    private val screenStream = ScreenStream(
+        { w, h -> RootScreenSource(w, h) },
+        { app.resources.displayMetrics.let { it.widthPixels to it.heightPixels } },
+        { settings.linkScreen }, { LockOverlayActivity.isLocked(app) },
+        { m -> link.notify(m) }, log = { activity.add("link", it) },
     )
     private val phoneFiles = PhoneFiles({
         val top = android.os.Environment.getExternalStorageDirectory()
