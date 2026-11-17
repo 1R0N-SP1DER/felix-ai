@@ -39,7 +39,7 @@ class PeerRequests:
             return self.chat(msg)
         if t in ("fs_roots", "fs_list", "fs_read"):
             return self.files(msg)
-        if t in ("pc_screen_get", "pc_input"):
+        if t in ("pc_screen_get", "pc_input", "pc_stream_start", "pc_stream_ping", "pc_stream_stop"):
             return self.remote.handle(msg) if self.remote else {"t": "error", "message": "remote control is not available"}
         if t in ("pc_audio_get", "pc_audio_stop", "pc_cam_get", "pc_put"):
             return self.media.handle(msg) if self.media else {"t": "error", "message": "media is not available"}
