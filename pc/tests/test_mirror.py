@@ -130,3 +130,75 @@ class MirrorWindowTest(unittest.TestCase):
         d, _ = self.make()
         d.spawn = lambda *a, **k: (_ for _ in ()).throw(OSError("no python"))
         self.assertEqual(d.peer.handle("p1", {"t": "mirror_open"})["t"], "error")
+
+
+class LiveLinks(ScreenLinks):
+    def request(self, pid, msg, timeout=15):
+        self.sent.append(msg)
+        if msg["t"] == "screen_stream_start":
+            return {"t": "screen_stream_ok"}
+        return {"t": "ok"}
+
+
+class H264Test(unittest.TestCase):
+    def daemon(self):
+        links = LiveLinks()
+        store = Store(tmp())
+        d = Daemon(config=Config(os.path.join(tmp(), "c.json")), store=store, engine=FakeEngine(store), links=links)
+        d.ping_gap = 0.05
+        d.events = []
+        d.listeners.add(d.events.append)
+        return d, links
+
+    def wait(self, f, secs=3):
+        end = time.time() + secs
+        while time.time() < end:
+            if f():
+                return True
+            time.sleep(0.02)
+        return False
+
+    def test_the_phone_streams_video_and_the_window_gets_pictures(self):
+        import base64
+        from faze_pc import h264
+        from tests.test_stream import Proc, jpeg
+        d, links = self.daemon()
+        procs = []
+        orig = h264.H264Decoder
+
+        def popen(argv, **kw):
+            p = Proc(data=jpeg(b"x") + jpeg(b"y"))
+            procs.append(p)
+            return p
+
+        import faze_pc.daemon as dm
+        dm.H264Decoder = lambda a, b: orig(a, b, which=lambda n: "/bin/ffmpeg", popen=popen)
+        try:
+            d.handle({"op": "mirror_start"}, lambda e: None)
+            self.assertTrue(self.wait(lambda: any(m["t"] == "screen_stream_ping" for m in links.sent)))
+            d.screen_in({"t": "screen_h264", "data": base64.b64encode(b"\x00\x00\x01video").decode()})
+            self.assertTrue(self.wait(lambda: any(e["t"] == "frame" for e in d.events)))
+            d.handle({"op": "mirror_stop"}, lambda e: None)
+            self.assertTrue(self.wait(lambda: any(m["t"] == "screen_stream_stop" for m in links.sent)))
+            self.assertTrue(procs[0].stopped)
+        finally:
+            dm.H264Decoder = orig
+
+    def test_when_the_phone_gives_up_it_falls_back_to_screenshots(self):
+        d, links = self.daemon()
+        links.frames = 2
+        orig_request = links.request
+
+        def request(pid, msg, timeout=15):
+            if msg["t"] == "screen_get":
+                links.sent.append(msg)
+                return {"t": "screen_ok", "jpeg": "AAAA"} if links.frames > 0 and not setattr(links, "frames", links.frames - 1) else {"t": "error", "message": "no more"}
+            return orig_request(pid, msg, timeout)
+
+        links.request = request
+        d.mirror_gap = 0.0
+        d.handle({"op": "mirror_start"}, lambda e: None)
+        self.assertTrue(self.wait(lambda: d.live_video))
+        d.screen_in({"t": "screen_stream_error", "message": "recorder died"})
+        self.assertTrue(self.wait(lambda: any(e["t"] == "frame" for e in d.events)))
+        self.assertTrue(any("recorder died" in e.get("message", "") for e in d.events if e["t"] == "mirror_error"))
