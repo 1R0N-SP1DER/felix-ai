@@ -4,6 +4,7 @@ import base64
 import shutil
 import subprocess
 import threading
+import time
 
 from .stream import JpegSplitter
 
@@ -18,6 +19,9 @@ class H264Decoder:
         self.proc = None
         self.running = False
         self.latest, self.seq = None, 0
+        self.bytes_in = 0
+        self.frames = 0
+        self.tail = ""  # the last thing ffmpeg complained about
         self.cond = threading.Condition()
         self.lock = threading.Lock()
 
@@ -27,6 +31,7 @@ class H264Decoder:
             if not self.running and not self._start():
                 return
             proc = self.proc
+        self.bytes_in += len(data)
         try:
             proc.stdin.write(data)
             proc.stdin.flush()
@@ -44,8 +49,19 @@ class H264Decoder:
             return False
         self.running = True
         threading.Thread(target=self._read, args=(self.proc,), daemon=True, name="h264-read").start()
+        threading.Thread(target=self._drain, args=(self.proc,), daemon=True, name="h264-err").start()
         threading.Thread(target=self._send, daemon=True, name="h264-send").start()
         return True
+
+    def _drain(self, proc):
+        """Keeps ffmpeg's messages flowing (a full error pipe would stall it) and remembers the last one."""
+        try:
+            for line in iter(proc.stderr.readline, b""):
+                text = line.decode("utf-8", "replace").strip()
+                if text:
+                    self.tail = text[-200:]
+        except (OSError, ValueError):
+            pass
 
     def _read(self, proc):
         split = JpegSplitter()
@@ -56,14 +72,12 @@ class H264Decoder:
             for jpeg in split.feed(chunk):
                 with self.cond:
                     self.latest, self.seq = jpeg, self.seq + 1
+                    self.frames += 1
                     self.cond.notify()
         if self.running and self.proc is proc:
-            try:
-                err = (proc.stderr.read() or b"").decode("utf-8", "replace").strip().splitlines()
-            except (OSError, ValueError):
-                err = []
+            time.sleep(0.1)  # let the error reader see ffmpeg's last words
             self.stop()
-            self.on_error(err[-1] if err else "the video decoder stopped")
+            self.on_error(self.tail or "the video decoder stopped")
 
     def _send(self):
         sent = 0

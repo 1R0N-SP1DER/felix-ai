@@ -47,6 +47,7 @@ class Daemon:
         self.h264 = None
         self.live_video = False
         self.ping_gap = 3.0
+        self.video_grace = 6.0  # seconds the live video gets to produce its first picture before we use screenshots instead
         self.spawn = spawn or subprocess.Popen
         self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log, mirror_opener=self.open_mirror_window, clip_in=lambda m: self.clip.receive(m), remote=RemoteControl(self.config, log=self.store.log, notify=lambda m: self.links.notify(m)), media=Media(self.config), screen_in=lambda m: self.screen_in(m))
         self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_request=lambda pid, msg: self.peer.handle(pid, msg), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
@@ -101,8 +102,15 @@ class Daemon:
         """Shows the phone's screen in the open windows until stopped. Live H.264 video when the phone offers it; otherwise it asks for one picture after another."""
         pid = self._phone()
         if pid and self.start_live_video(pid):
+            began = time.time()
             while self.mirroring and self.live_video:
                 time.sleep(self.ping_gap)
+                dec = self.h264
+                if dec is not None and dec.frames == 0 and time.time() - began > self.video_grace:
+                    why = "the phone sent %d KB of video but no picture came out%s" % (dec.bytes_in // 1024, (" (" + dec.tail + ")") if dec.tail else "") if dec.bytes_in else "the phone sent no video at all (its screen recorder may need root, or the phone is locked)"
+                    self.stop_live_video()
+                    self.broadcast({"t": "mirror_error", "message": "Live video did not start: " + why + ". Showing slower pictures."})
+                    break
                 try:
                     self.links.request(pid, {"t": "screen_stream_ping"}, timeout=5)
                 except link.LinkError:
@@ -110,6 +118,8 @@ class Daemon:
             if self.live_video:  # stopped by the window or the link
                 self.stop_live_video()
                 self.mirroring = False
+                return
+            if not self.mirroring:
                 return
             if self.h264 is not None:  # the phone gave up on video: carry on with screenshots
                 self.h264.stop()
