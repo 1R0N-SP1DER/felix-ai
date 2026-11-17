@@ -16,8 +16,11 @@ object GoogleTakeover {
     /** Extra words the person added, comma or space separated. */
     fun words(extra: String): List<String> = DEFAULT_WORDS + extra.lowercase().split(',', ' ', '\n').map { it.trim() }.filter { it.length >= 3 }
 
-    /** Words from the person's "leave alone" box: windows whose name has one of them are never taken over (the full Gemini app, say). */
-    fun skipWords(text: String): List<String> = text.lowercase().split(',', ' ', '\n').map { it.trim() }.filter { it.length >= 3 }
+    /** Windows that are never taken over: the full Gemini app (robin.main), the launcher's left page, the Google app, the loading gateway. Seen on the phone. */
+    val DEFAULT_SKIP = listOf("robin.main", "minusone", "googleapp.activity", "animatedgatewayactivity")
+
+    /** The built-in skips plus the words from the person's "leave alone" box (windows whose name has one are never taken over). */
+    fun skipWords(text: String): List<String> = DEFAULT_SKIP + text.lowercase().split(',', ' ', '\n').map { it.trim() }.filter { it.length >= 3 }
 
     fun matches(pkg: String?, cls: String?, words: List<String>, skip: List<String> = emptyList()): Boolean {
         if (pkg == null || cls == null || pkg !in PACKAGES) return false
