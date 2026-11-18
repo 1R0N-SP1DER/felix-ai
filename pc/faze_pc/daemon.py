@@ -20,6 +20,7 @@ from .sync import Syncer
 from .clip import ClipSync
 from .notes import PhoneNotes
 from . import modelsheet
+from .modelcopy import ModelCopy
 from .edge import EdgeWatcher, KWinEdge
 from .h264 import H264Decoder
 from .media import Media
@@ -55,6 +56,8 @@ class Daemon:
         self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_request=lambda pid, msg: self.peer.handle(pid, msg), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
 
         self.notes = PhoneNotes(self.config, log=self.store.log)
+        self.copy_lock = threading.Lock()
+        self.copying = False
         self.clip = ClipSync(self.config, lambda m: self.links.notify(m), connected=lambda: bool(getattr(self.links, "sessions", {})))
         wanted = lambda: self.config.data.get("edge_open") is True and bool(self._phone())
         self.kwin_edge = KWinEdge(wanted, self.open_mirror_window, lambda m: self.store.log("link", m), switched=lambda: self.config.data.get("edge_open") is True)
@@ -329,6 +332,27 @@ class Daemon:
         for emit in list(self.listeners):
             emit(ev)
 
+    def start_model_copy(self, emit):
+        with self.copy_lock:
+            if self.copying:
+                emit({"t": "model_copy", "text": "A copy is already running.", "progress": 0.0, "done": False, "ok": True})
+                return
+            self.copying = True
+        pid = self._phone()
+
+        def say(text, progress, done, ok):
+            self.broadcast({"t": "model_copy", "text": text, "progress": progress, "done": done, "ok": ok})
+            if done:
+                self.copying = False
+                threading.Thread(target=self.send_models, args=(self.broadcast,), daemon=True).start()
+                self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()})
+
+        if not pid:
+            say("Your phone is not connected. Link it first (Devices).", 0.0, True, False)
+            return
+        job = ModelCopy(self.config, self.links.request, pid, say, lambda: {m["name"] for m in modelsheet.ollama_models(self.config)[1]})
+        threading.Thread(target=job.go, daemon=True, name="model-copy").start()
+
     def send_models(self, emit):
         running, local = modelsheet.ollama_models(self.config)
         emit({"t": "models", "rows": modelsheet.rows(self.config, running, local), "local": local, "running": running,
@@ -360,6 +384,8 @@ class Daemon:
                 return
             emit({"t": "state", "config": self.config.public(), "chats": self.store.chats()})
             threading.Thread(target=self.send_models, args=(emit,), daemon=True).start()
+        elif op == "copy_models":
+            self.start_model_copy(emit)
         elif op == "set_effort":
             try:
                 modelsheet.set_effort(self.config, str(req.get("level", "")))
