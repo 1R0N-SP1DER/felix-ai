@@ -512,14 +512,14 @@ ApplicationWindow {
                         title: "MODEL"
                         SettingRow {
                             label: "Model"; sub: win.routeText
-                            Button { text: "Choose"; onClicked: { settings.close(); modelSheet.open() } }
+                            FazeButton { text: "Choose"; onClicked: { settings.close(); modelSheet.open() } }
                         }
                         SettingRow {
                             label: "Thinking"; sub: "How hard it thinks on a request. Higher is slower."
                             Row { spacing: 6
                                 Repeater {
                                     model: [["low", "Low"], ["medium", "Medium"], ["high", "High"]]
-                                    delegate: Button {
+                                    delegate: FazeButton {
                                         text: modelData[1]; checkable: true; checked: (win.cfg.effort || "medium") === modelData[0]
                                         onClicked: bridge.setEffort(modelData[0])
                                     }
@@ -559,7 +559,7 @@ ApplicationWindow {
                         SettingRow { label: "Folders shared with my phone"; sub: "Comma separated, read only."
                             FieldBox { shown: win.cfg.share_folders || ""; onSaved: function (v) { bridge.setSetting("share_folders", v) } } }
                         SettingRow { label: "Devices"; sub: "Pair and manage your phone."; last: true
-                            Button { text: "Open"; onClicked: { settings.close(); bridge.refreshDevices(); devicesPopup.open() } } }
+                            FazeButton { text: "Open"; onClicked: { settings.close(); bridge.refreshDevices(); devicesPopup.open() } } }
                     }
 
                     SettingsCard {
@@ -590,7 +590,7 @@ ApplicationWindow {
                     SettingsCard {
                         title: "DIAGNOSTICS"
                         SettingRow { label: "Activity log"; sub: "What Faze did on this PC, newest first."; last: true
-                            Button { text: "Open"; onClicked: { settings.close(); bridge.loadActivity() } } }
+                            FazeButton { text: "Open"; onClicked: { settings.close(); bridge.loadActivity() } } }
                     }
                     Item { Layout.preferredHeight: 24 }
                 }
@@ -612,7 +612,7 @@ ApplicationWindow {
         background: Rectangle { radius: 20; color: win.surface; border.width: 1; border.color: win.line }
         contentItem: ColumnLayout {
             spacing: 8
-            Text { text: "Choose a model"; color: win.text; font.pixelSize: 18; font.bold: true }
+            Text { text: "Choose a model"; color: win.text; font.pixelSize: 18; font.bold: true; Layout.bottomMargin: 6 }
             ScrollView {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -667,12 +667,12 @@ ApplicationWindow {
                         spacing: 6
                         Repeater {
                             model: modelSheet.sheet.efforts
-                            delegate: Button { text: modelData.name; checkable: true; checked: modelData.chosen; onClicked: bridge.setEffort(modelData.id) }
+                            delegate: FazeButton { text: modelData.name; checkable: true; checked: modelData.chosen; onClicked: bridge.setEffort(modelData.id) }
                         }
                     }
                 }
             }
-            Button { text: "Close"; onClicked: modelSheet.close(); Layout.alignment: Qt.AlignRight }
+            FazeButton { text: "Close"; onClicked: modelSheet.close(); Layout.alignment: Qt.AlignRight }
         }
     }
 }
