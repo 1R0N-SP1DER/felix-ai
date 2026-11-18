@@ -329,6 +329,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getBoolean("link_clip", true)
         set(value) = prefs.edit().putBoolean("link_clip", value).apply()
 
+    /** Let a connected computer take copies of this phone's offline models (needs root to read them). */
+    var linkModels: Boolean
+        get() = prefs.getBoolean("link_models", true)
+        set(value) = prefs.edit().putBoolean("link_models", value).apply()
+
     /** With root: send every copy to the computer, even from the background, by reading the system log and briefly opening an invisible window. */
     var linkClipRoot: Boolean
         get() = prefs.getBoolean("link_clip_root", true)
