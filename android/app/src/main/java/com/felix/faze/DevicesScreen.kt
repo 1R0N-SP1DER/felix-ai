@@ -3,6 +3,9 @@ package com.felix.faze
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -111,8 +114,21 @@ private fun DeviceCard(core: FazeCore, d: DeviceRow, onControl: () -> Unit, onMe
             }.start()
         }
     }
+    var drag by remember { mutableStateOf(0f) }
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     Column(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Palette.Glass).border(1.dp, Palette.Line, RoundedCornerShape(20.dp)).clickable(enabled = d.connected) { open = !open }.padding(16.dp),
+        modifier = Modifier.fillMaxWidth()
+            .graphicsLayer { translationX = drag }
+            .pointerInput(d.id, d.connected) {
+                if (!d.connected) return@pointerInput
+                var total = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { total = 0f },
+                    onDragEnd = { if (ThrowGesture.fires(total, size.width.toFloat())) { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); core.showPhoneOnPc(); note = "Showing this phone on ${d.name}…" }; drag = 0f },
+                    onDragCancel = { drag = 0f },
+                ) { _, amount -> total += amount; drag = ThrowGesture.pull(total, size.width.toFloat()) }
+            }
+            .clip(RoundedCornerShape(20.dp)).background(Palette.Glass).border(1.dp, Palette.Line, RoundedCornerShape(20.dp)).clickable(enabled = d.connected) { open = !open }.padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -127,7 +143,7 @@ private fun DeviceCard(core: FazeCore, d: DeviceRow, onControl: () -> Unit, onMe
                 color = Palette.Dim, fontSize = 13.sp,
             )
         }
-        if (d.connected) Text(if (open) "Tap to close" else "Tap for more", color = Palette.Muted, fontSize = 12.sp)
+        if (d.connected) Text(if (open) "Tap to close" else "Tap for more · drag sideways to show this phone here", color = Palette.Muted, fontSize = 12.sp)
         if (open && d.connected) {
             Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 DeviceChip("Browse files") {
@@ -136,6 +152,7 @@ private fun DeviceCard(core: FazeCore, d: DeviceRow, onControl: () -> Unit, onMe
                     catch (e: Exception) { note = "Could not open the Files app: ${e.message ?: ""}" }
                 }
                 DeviceChip("Send file") { picker.launch(arrayOf("*/*")) }
+                DeviceChip("Show my phone") { core.showPhoneOnPc(); note = "Showing this phone on ${d.name}…" }
                 DeviceChip("Control screen") { onControl() }
                 DeviceChip("PC sound") { onMedia("sound") }
                 DeviceChip("PC mic") { onMedia("mic") }
