@@ -537,6 +537,21 @@ ApplicationWindow {
                     }
 
                     SettingsCard {
+                        title: "MODELS ON THIS PC"
+                        SettingRow {
+                            label: "Installed in Ollama"
+                            sub: modelSheet.sheet.running ? (modelSheet.sheet.local.length === 0 ? "None yet." : modelSheet.sheet.local.map(function (m) { return m.name + " (" + m.gb + " GB)" }).join(", ")) : "Ollama is not running. Install it with: curl -fsSL https://ollama.com/install.sh | sh"
+                        }
+                        SettingRow {
+                            label: "Copy the models from my phone"
+                            sub: win.copyText !== "" ? win.copyText : "Takes the offline models on your phone (Qwen, LFM) and sets them up in Ollama, so they work here too. Your phone must be linked. A few GB can take several minutes."
+                            last: true
+                            FazeButton { text: win.copyRunning ? "Copying..." : "Copy"; enabled: !win.copyRunning; onClicked: bridge.copyModelsFromPhone() }
+                        }
+                        ProgressBar { visible: win.copyRunning; value: win.copyProgress; Layout.fillWidth: true; Layout.margins: 16 }
+                    }
+
+                    SettingsCard {
                         title: "VOICE"
                         SettingRow { label: "Speak replies aloud"
                             FazeSwitch { checked: win.cfg.speak === true; onToggled: bridge.setSetting("speak", checked ? "true" : "false") } }
@@ -599,6 +614,14 @@ ApplicationWindow {
     }
 
     // The model picker, opened from the chip at the top: the same list as the phone's, plus the models installed on this PC.
+    property string copyText: ""
+    property real copyProgress: 0
+    property bool copyRunning: false
+    Connections {
+        target: bridge
+        function onModelCopy(text, progress, done, ok) { win.copyText = text; win.copyProgress = progress; win.copyRunning = !done }
+    }
+
     Popup {
         id: modelSheet
         modal: true

@@ -1,0 +1,159 @@
+"""Copies the offline models from the phone onto this PC and sets them up in Ollama, so the same Qwen and LFM can be used here.
+Steps for each .gguf the phone has: ask the phone to stage a copy (models_stage), read it in pieces through the file messages, remove the staged copy,
+then `ollama create` from the file. Needs Ollama installed. Models Ollama already has under the same name are skipped."""
+import base64
+import os
+import re
+import shutil
+import subprocess
+import threading
+
+from . import config as cfg
+
+CHUNK = 512 * 1024
+CHATML = '''TEMPLATE """{{- range .Messages }}<|im_start|>{{ .Role }}
+{{ .Content }}<|im_end|>
+{{ end }}<|im_start|>assistant
+"""
+PARAMETER stop <|im_end|>
+'''
+
+
+def ollama_name(filename):
+    """Qwen3.5-4B-Q4_K_M.gguf -> qwen3.5:4b-q4_k_m ; LFM2.5.gguf -> lfm2.5:latest."""
+    stem = re.sub(r"\.gguf$", "", filename, flags=re.I).lower()
+    stem = re.sub(r"[^a-z0-9._-]+", "-", stem).strip("-._") or "model"
+    if "-" in stem:
+        family, tag = stem.split("-", 1)
+    else:
+        family, tag = stem, "latest"
+    return "%s:%s" % (family, tag)
+
+
+def modelfile(path):
+    return "FROM %s\n%s" % (path, CHATML)
+
+
+def run(argv, timeout=900):
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, (r.stdout + r.stderr).strip()
+    except (OSError, subprocess.SubprocessError) as e:
+        return 1, str(e)
+
+
+class ModelCopy:
+    def __init__(self, config, request, phone, say, installed, dest=None, which=shutil.which, runner=run):
+        self.config, self.request, self.phone, self.say = config, request, phone, say
+        self.installed = installed  # () -> set of Ollama model names already here
+        self.dest = dest or os.path.join(cfg.data_dir(), "models")
+        self.which, self.run = which, runner
+        self.cancelled = False
+        self.created = []
+
+    def go(self):
+        if not self.which("ollama"):
+            return self.fail("Ollama is not installed on this PC. Install it first:  curl -fsSL https://ollama.com/install.sh | sh")
+        try:
+            listing = self.request(self.phone, {"t": "models_list"}, 60)
+        except Exception as e:
+            return self.fail("Could not ask the phone: %s" % e)
+        if listing.get("t") == "error":
+            return self.fail(listing.get("message", "the phone said no"))
+        models = listing.get("models", [])
+        if not models:
+            return self.fail("The phone has no offline models it can share (it looks in Termux, Download and models).")
+        os.makedirs(self.dest, mode=0o700, exist_ok=True)
+        have = self.installed()
+        total = len(models)
+        for i, m in enumerate(models):
+            name = ollama_name(m["name"])
+            if name in have:
+                self.say("%s is already here, skipped." % name, i / total, False, True)
+                continue
+            if not self.one(m, name, i, total):
+                return
+        if not self.created:
+            return self.finish("Everything from the phone is already on this PC.")
+        self.use(self.created)
+        self.finish("Done. New in Ollama: %s." % ", ".join(self.created))
+
+    def one(self, m, name, i, total):
+        part = lambda f: (i + f) / total
+        self.say("Asking the phone to get %s ready (a few GB can take a minute)..." % m["name"], part(0), False, True)
+        try:
+            st = self.request(self.phone, {"t": "models_stage", "path": m["path"]}, 15 * 60 + 60)
+        except Exception as e:
+            return self.fail("The phone did not answer for %s: %s" % (m["name"], e))
+        if st.get("t") != "models_stage_ok":
+            return self.fail("%s: %s" % (m["name"], st.get("message", "the phone could not copy it")))
+        target = os.path.join(self.dest, m["name"])
+        ok = False
+        try:
+            ok = self.download(st, target + ".part", m["name"], i, total)
+        finally:
+            try:
+                self.request(self.phone, {"t": "models_unstage", "name": st["path"]}, 30)
+            except Exception:
+                pass
+        if not ok:
+            return False
+        os.replace(target + ".part", target)
+        self.say("Setting up %s in Ollama..." % name, part(0.95), False, True)
+        mf = os.path.join(self.dest, name.replace(":", "_") + ".Modelfile")
+        with open(mf, "w") as f:
+            f.write(modelfile(target))
+        rc, out = self.run(["ollama", "create", name, "-f", mf])
+        try:
+            os.unlink(mf)
+        except OSError:
+            pass
+        if rc != 0:
+            return self.fail("Ollama could not set up %s: %s" % (name, out.splitlines()[-1] if out else "no message"))
+        os.unlink(target)  # Ollama keeps its own copy
+        self.created.append(name)
+        return True
+
+    def download(self, st, path, label, i, total):
+        size, off = int(st.get("size", 0)), 0
+        with open(path, "wb") as f:
+            while off < size or size == 0:
+                if self.cancelled:
+                    self.fail("Cancelled.")
+                    return False
+                r = None
+                for _ in range(3):
+                    try:
+                        r = self.request(self.phone, {"t": "fs_read", "root": st["root"], "path": st["path"], "offset": off, "len": CHUNK}, 60)
+                        if r.get("t") == "fs_read_ok":
+                            break
+                    except Exception:
+                        r = None
+                if not r or r.get("t") != "fs_read_ok":
+                    self.fail("The copy of %s stopped at %d MB: %s" % (label, off // 1048576, (r or {}).get("message", "no answer from the phone")))
+                    return False
+                data = base64.b64decode(r.get("data", ""))
+                f.write(data)
+                off += len(data)
+                self.say("Copying %s: %d of %d MB" % (label, off // 1048576, size // 1048576), (i + (off / size if size else 1)) / total * 0.95, False, True)
+                if r.get("eof") or not data:
+                    break
+        if size and off != size:
+            self.fail("%s came across incomplete (%d of %d bytes)." % (label, off, size))
+            return False
+        return True
+
+    def use(self, names):
+        """Small models answer casual chat, bigger ones code and hard requests, as on the phone."""
+        for n in names:
+            if n.startswith("lfm"):
+                self.config.set("ollama_chat_model", n)
+            elif n.startswith("qwen"):
+                self.config.set("ollama_deep_model", n)
+
+    def finish(self, text):
+        self.say(text, 1.0, True, True)
+
+    def fail(self, text):
+        self.say(text, 0.0, True, False)
+        return False
