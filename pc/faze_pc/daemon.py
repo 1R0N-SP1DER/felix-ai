@@ -19,6 +19,7 @@ from .peer import PeerRequests
 from .sync import Syncer
 from .clip import ClipSync
 from .notes import PhoneNotes
+from . import modelsheet
 from .edge import EdgeWatcher, KWinEdge
 from .h264 import H264Decoder
 from .media import Media
@@ -328,6 +329,11 @@ class Daemon:
         for emit in list(self.listeners):
             emit(ev)
 
+    def send_models(self, emit):
+        running, local = modelsheet.ollama_models(self.config)
+        emit({"t": "models", "rows": modelsheet.rows(self.config, running, local), "local": local, "running": running,
+              "efforts": [{"id": i, "name": n, "chosen": i == self.config.data.get("effort")} for i, n in modelsheet.EFFORTS]})
+
     def handle(self, req, emit):
         op = req.get("op")
         if op == "state":
@@ -342,6 +348,25 @@ class Daemon:
                 emit({"t": "state", "config": self.config.public(), "chats": self.store.chats()})
             except KeyError:
                 emit({"t": "error", "message": "unknown setting: %s" % req.get("name")})
+        elif op == "models":
+            threading.Thread(target=self.send_models, args=(emit,), daemon=True).start()
+        elif op == "pick_model":
+            try:
+                modelsheet.pick(self.config, str(req.get("id", "")), str(req.get("model", "")))
+                if req.get("effort"):
+                    modelsheet.set_effort(self.config, str(req["effort"]))
+            except ValueError as e:
+                emit({"t": "error", "message": str(e)})
+                return
+            emit({"t": "state", "config": self.config.public(), "chats": self.store.chats()})
+            threading.Thread(target=self.send_models, args=(emit,), daemon=True).start()
+        elif op == "set_effort":
+            try:
+                modelsheet.set_effort(self.config, str(req.get("level", "")))
+            except ValueError as e:
+                emit({"t": "error", "message": str(e)})
+                return
+            emit({"t": "state", "config": self.config.public(), "chats": self.store.chats()})
         elif op == "chat":
             chat_id = req.get("chat") or self.store.new_chat()
             emit({"t": "chat", "id": chat_id})
