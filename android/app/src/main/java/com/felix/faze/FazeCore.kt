@@ -35,7 +35,7 @@ class FazeCore(private val app: Application) : EngineListener {
         private set
     var linkCode by mutableStateOf("")
         private set
-    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) ?: phoneClip.handle(msg) ?: pcFrames.handle(msg) ?: screenStream.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = ""; syncClipWatch() } })
+    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) ?: phoneModels.handle(msg) ?: phoneClip.handle(msg) ?: pcFrames.handle(msg) ?: screenStream.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = ""; syncClipWatch() } })
 
     fun setLink(on: Boolean) {
         settings.linkOn = on
@@ -225,10 +225,13 @@ class FazeCore(private val app: Application) : EngineListener {
         { settings.linkScreen }, { LockOverlayActivity.isLocked(app) },
         { m -> link.notify(m) }, log = { activity.add("link", it) },
     )
+    /** Copies of offline models staged for a computer to read (see PhoneModels). */
+    private val phoneModels = PhoneModels({ settings.linkModels }, { cmd, ms -> try { Su.run(cmd, ms) } catch (_: Exception) { "" } }, { activity.add("link", it) })
     private val phoneFiles = PhoneFiles({
         val top = android.os.Environment.getExternalStorageDirectory()
         val allOk = android.os.Build.VERSION.SDK_INT < 30 || android.os.Environment.isExternalStorageManager()
-        when {
+        val staged = if (settings.linkModels) listOf(PhoneModels.ROOT_NAME to File(top, "Faze/models")) else emptyList()
+        staged + when {
             settings.linkFilesAll && allOk -> listOf("All files" to top)
             settings.linkFiles || settings.linkFilesAll -> listOf("DCIM", "Pictures", "Download", "Documents", "Music", "Movies").map { it to File(top, it) }.filter { it.second.isDirectory }
             else -> emptyList()

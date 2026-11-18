@@ -315,6 +315,8 @@ private fun AgentTab(core: FazeCore) {
             })
         }
         SettingRow("Hide the notification text", "Only the app name goes to the computer, not what the notification says.") { FazeSwitch(notesHide, { notesHide = it; core.settings.linkNotesHide = it }) }
+        var modelsOn by remember { mutableStateOf(core.settings.linkModels) }
+        SettingRow("Let computers copy my offline models", "A connected computer can take copies of the .gguf models on this phone (Qwen, LFM) to run them itself. It asks the phone first and the copies are removed from the shared folder after. Needs root.") { FazeSwitch(modelsOn, { modelsOn = it; core.settings.linkModels = it }) }
         SettingRow("Let computers open my folders", "Pictures, Download, Documents, DCIM, Music and Movies, read only. Needs Access to all files (above).") { FazeSwitch(files, { files = it; core.settings.linkFiles = it }) }
         SettingRow("Let computers open all my files", "Everything on the phone's storage, not just those folders. Read only. Needs Access to all files (above).", last = true) { FazeSwitch(filesAll, { filesAll = it; core.settings.linkFilesAll = it }) }
     }
