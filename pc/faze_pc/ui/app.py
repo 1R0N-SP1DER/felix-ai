@@ -61,6 +61,7 @@ class Bridge(QObject):
     mirrorFailed = Signal(str)
     toolUsed = Signal(str, bool)
     activityLoaded = Signal("QVariantList")
+    modelsLoaded = Signal("QVariantMap")
 
     def __init__(self, floating, demo=False):
         super().__init__()
@@ -166,6 +167,8 @@ class Bridge(QObject):
                 self.toolUsed.emit(ev["summary"], bool(ev.get("ok")))
             elif t == "activity":
                 self.activityLoaded.emit([{"when": r["t"], "kind": r["kind"], "text": r["text"]} for r in ev["rows"]])
+            elif t == "models":
+                self.modelsLoaded.emit({"rows": ev["rows"], "local": ev["local"], "running": ev["running"], "efforts": ev["efforts"]})
             elif t == "note":
                 self.note.emit(ev["message"])
             elif t == "error":
@@ -307,6 +310,18 @@ class Bridge(QObject):
     def loadActivity(self):
         self._send({"op": "activity"})
 
+    @Slot()
+    def loadModels(self):
+        self._send({"op": "models"})
+
+    @Slot(str, str)
+    def pickModel(self, model_id, local_model):
+        self._send({"op": "pick_model", "id": model_id, "model": local_model})
+
+    @Slot(str)
+    def setEffort(self, level):
+        self._send({"op": "set_effort", "level": level})
+
     @Slot(str, str)
     def setSetting(self, name, value):
         self._send({"op": "set", "name": name, "value": value})
@@ -320,6 +335,12 @@ class Bridge(QObject):
             {"role": "assistant", "content": "Something quick and warm. Jollof with fried plantain? You haven't had it in a while."},
             {"role": "user", "content": "ha, you know me. why does this python function crash?"},
         ])
+        self.modelsLoaded.emit({"running": True, "local": [{"name": "lfm2.5:1.2b", "gb": 0.8}, {"name": "qwen3.5:4b", "gb": 2.6}],
+                                "efforts": [{"id": "low", "name": "Low", "chosen": False}, {"id": "medium", "name": "Medium", "chosen": True}, {"id": "high", "name": "High", "chosen": False}],
+                                "rows": [{"id": "auto", "name": "Auto", "sub": "picks the best model for each request", "dot": "ok", "chosen": True},
+                                         {"id": "ollama", "name": "This PC (Ollama)", "sub": "2 installed · chat: lfm2.5:1.2b", "dot": "ok", "chosen": False},
+                                         {"id": "gemini", "name": "Gemini", "sub": "no key yet (Settings)", "dot": "bad", "chosen": False},
+                                         {"id": "groq", "name": "Groq", "sub": "openai/gpt-oss-120b", "dot": "ok", "chosen": False}]})
         self.route.emit("Gemini · gemini-3.1-flash-lite")
         self.toolUsed.emit("Opened Firefox", True)
         if os.environ.get("FAZE_DEMO_POPUP") == "mirror":
