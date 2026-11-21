@@ -44,7 +44,12 @@ ApplicationWindow {
     ListModel { id: msgs }
     ListModel { id: activityModel }
 
-    function addMsg(role, text, reqId) { msgs.append({ "role": role, "text": text, "reqId": reqId || "", "stage": "pending" }); list.positionViewAtEnd() }
+    function addMsg(role, text, reqId) { msgs.append({ "role": role, "text": text, "reqId": reqId || "", "stage": "pending", "msgId": "", "feedback": 0 }); list.positionViewAtEnd() }
+    function lastAsk() { for (var i = msgs.count - 1; i >= 0; i--) if (msgs.get(i).role === "user") return msgs.get(i).text; return "" }
+    function setReply(id) { for (var i = msgs.count - 1; i >= 0; i--) if (msgs.get(i).role === "assistant") { msgs.setProperty(i, "msgId", id); return } }
+    function setRating(id, v) { for (var i = 0; i < msgs.count; i++) if (msgs.get(i).msgId === id) msgs.setProperty(i, "feedback", v) }
+    function dropLastPair() { for (var i = msgs.count - 1; i >= 0; i--) if (msgs.get(i).role === "user") { while (msgs.count > i) msgs.remove(msgs.count - 1); return } }
+    function isLastReply(idx) { for (var i = msgs.count - 1; i > idx; i--) if (msgs.get(i).role === "assistant") return false; return true }
     function settle(reqId, state) { for (var i = 0; i < msgs.count; i++) if (msgs.get(i).reqId === reqId) msgs.setProperty(i, "stage", state) }
 
     Connections {
@@ -55,6 +60,8 @@ ApplicationWindow {
             if (msgs.count > 0) { msgs.setProperty(msgs.count - 1, "text", msgs.get(msgs.count - 1).text + t); list.positionViewAtEnd() }
         }
         function onAssistantDone(stopped) {}
+        function onReplyId(id) { win.setReply(id) }
+        function onRated(id, v, note) { win.setRating(id, v); if (note !== "") win.addMsg("note", note) }
         function onRoute(r) { win.routeText = r }
         function onNote(m) { win.addMsg("note", m) }
         function onApproval(id, tool, summary) { win.addMsg("approve", summary, id) }
@@ -72,7 +79,7 @@ ApplicationWindow {
         function onPairFailed(m) { win.pairMsg = m }
         function onConfigChanged(c) { win.cfg = c }
         function onChatChanged(id) { win.currentChat = id; if (id === "") msgs.clear() }
-        function onHistoryLoaded(h) { msgs.clear(); for (var i = 0; i < h.length; i++) msgs.append({ "role": h[i].role, "text": h[i].content, "reqId": "", "stage": "" }); list.positionViewAtEnd() }
+        function onHistoryLoaded(h) { msgs.clear(); for (var i = 0; i < h.length; i++) msgs.append({ "role": h[i].role, "text": h[i].content, "reqId": "", "stage": "", "msgId": h[i].role === "assistant" ? (h[i].id || "") : "", "feedback": h[i].feedback || 0 }); list.positionViewAtEnd() }
     }
 
     Shortcut { sequence: "Escape"; enabled: win.floating; onActivated: win.hide() }
@@ -192,7 +199,7 @@ ApplicationWindow {
                     model: msgs
                     delegate: Item {
                         width: list.width
-                        height: bubble.height
+                        height: bubble.height + (acts.visible ? acts.height + 2 : 0)
                         readonly property bool mine: role === "user"
                         Rectangle {
                             id: bubble
@@ -235,6 +242,21 @@ ApplicationWindow {
                                 font.pixelSize: 14
                                 textFormat: Text.PlainText
                             }
+                        }
+                        // Under a Faze reply: copy, listen, thumbs up (teach it), thumbs down (forget it), and retry on the last one.
+                        Row {
+                            id: acts
+                            visible: role === "assistant" && msgId !== ""
+                            anchors.top: bubble.bottom
+                            anchors.topMargin: 2
+                            anchors.left: parent.left
+                            anchors.leftMargin: 6
+                            spacing: 2
+                            ReplyIcon { kind: "copy"; onClicked: bridge.copyText(model.text) }
+                            ReplyIcon { kind: "speaker"; onClicked: bridge.speak(model.text) }
+                            ReplyIcon { kind: "up"; tint: feedback > 0 ? win.accent : win.dim; onClicked: bridge.rate(msgId, 1) }
+                            ReplyIcon { kind: "down"; tint: feedback < 0 ? win.bad : win.dim; onClicked: bridge.rate(msgId, -1) }
+                            ReplyIcon { kind: "refresh"; visible: win.isLastReply(index) && !bridge.busy; onClicked: { var q = win.lastAsk(); if (q !== "") { win.dropLastPair(); bridge.retry(q) } } }
                         }
                     }
                 }

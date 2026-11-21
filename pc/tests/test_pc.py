@@ -186,7 +186,7 @@ class EngineTest(unittest.TestCase):
         e.chat(cid, "hey there", events.append)
         types = [x["t"] for x in events]
         self.assertEqual([x["provider"] for x in events if x["t"] == "route"], ["groq", "ollama"])
-        self.assertEqual(events[-1], {"t": "done", "text": "from ollama"})
+        self.assertEqual({k: v for k, v in events[-1].items() if k != "id"}, {"t": "done", "text": "from ollama"})
         self.assertTrue(e.limits.resting("groq"))
         self.assertEqual([m["content"] for m in e.store.history(cid)], ["hey there", "from ollama"])
         groq.close(); ollama.close()
