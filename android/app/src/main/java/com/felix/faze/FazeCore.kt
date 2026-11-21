@@ -170,8 +170,9 @@ class FazeCore(private val app: Application) : EngineListener {
             AutoMode.offlineFor(task.let { if (it == Task.CASUAL) Task.DEEP else it }, settings.autoCasualModel, settings.autoDeepModel, scanned, settings.offlineModel),
             pc = link.connected().isNotEmpty(),
         )
-        activity.add("auto", "${task.name.lowercase()} request: ${plan.take(3).joinToString(", ") { it.provider }}")
-        return plan
+        val ordered = plan.sortedBy { it.provider == avoid } // after a thumbs down, retry starts with a different model (stable: the rest keep their order)
+        activity.add("auto", "${task.name.lowercase()} request: ${ordered.take(3).joinToString(", ") { it.provider }}")
+        return ordered
     }
 
     private val voiceLines = VoiceLines(
@@ -335,6 +336,16 @@ class FazeCore(private val app: Application) : EngineListener {
     private var sttMs = 0L
 
     val learned = LearnedRoutes(File(app.filesDir, "learned_routes.json"))
+
+    /** Tool chains the person approved with a thumbs up; replayed offline with no model at all. */
+    val recipes = RecipeBook(File(app.filesDir, "recipes.json"))
+
+    /** The provider that answered last, and the one to try last on the next retry (set by a thumbs down). */
+    @Volatile private var answeredBy = ""
+    @Volatile private var avoid = ""
+
+    /** True when no online model can answer: the offline model is chosen, or there is no network. Saved recipes only replay then. */
+    private fun offlineNow(): Boolean = settings.provider == "offline" || !Online.available(app)
     private val router = FastRoute(learned, NeedleClient(transport), { settings.fastRoutes }, { settings.needleOn }, { PermissionPolicy.tier(it) == Tier.SAFE })
 
     private val localServer: LocalServer = LocalServerControl(
@@ -365,9 +376,10 @@ class FazeCore(private val app: Application) : EngineListener {
                     { settings.openrouterModel = it },
                 ),
             ),
-            { Fallbacks.plan(settings.provider, listOf("groq", "gemini", "openrouter", "nvidia").filter { settings.hasKey(it) }.toSet()) { settings.modelFor(it) } },
+            { Fallbacks.plan(settings.provider, listOf("groq", "gemini", "openrouter", "nvidia").filter { settings.hasKey(it) }.toSet()) { settings.modelFor(it) }.let { p -> if (p.size > 1) p.sortedBy { it.provider == avoid } else p } },
             { text -> main.post { status = text } },
             planFor = { messages -> if (settings.provider == "auto") autoPlan(messages) else null },
+            onUsed = { p -> answeredBy = p },
             onLimit = { p, e -> limits.note(p, e); activity.add("auto", "${ModelSheet.label(p)} is out of allowance for a while: ${(e.message ?: "").take(100)}") },
         )
         val userTools = UserTools(
@@ -386,7 +398,8 @@ class FazeCore(private val app: Application) : EngineListener {
         // A tool that takes over the screen waits for the assistant to finish speaking, unless the bubble keeps the conversation going outside the app.
         val speakingNow = { speaker.isSpeaking() || (live?.isSpeaking() ?: false) }
         liveTools = SpeechAwareTools(tools, { true }, speakingNow, { bubbleReady() })
-        engine = ChatEngine(Agent(client, SpeechAwareTools(tools, { voiceActive }, speakingNow, { bubbleReady() }), router = router), object : EngineConfig by settings {
+        engine = ChatEngine(Agent(client, SpeechAwareTools(tools, { voiceActive }, speakingNow, { bubbleReady() }), router = router, recipes = recipes, offline = { offlineNow() }), object : EngineConfig by settings {
+            override fun answeredBy(): String = this@FazeCore.answeredBy
             override fun memoryBlock(): String = if (settings.useMemory && !(settings.limitWhenLocked && LockOverlayActivity.isLocked(app))) memory.promptBlock(settings.user) else ""
             override fun speak(): Boolean = settings.speakReplies || nextAloud
         }, speaker, { block -> main.post { block() } }, executor, messages, this)
@@ -441,10 +454,43 @@ class FazeCore(private val app: Application) : EngineListener {
 
     /** [aloud]: the message was spoken, so its reply is read out too (typed ones are not, unless "Speak replies aloud" is on). */
     fun send(text: String, aloud: Boolean = false) {
+        avoid = ""
+        answeredBy = ""
         nextAloud = aloud
         timing = ""
         status = ""
         engine.send(text)
+    }
+
+    private val learner = object : Feedback.Learner {
+        override fun learnTemplate(request: String, tool: String, args: JSONObject) = router.learn(request, tool, args)
+        override fun saveRecipe(request: String, steps: List<Step>, say: String) = recipes.save(request, steps, say)
+        override fun forgetRecipe(request: String) = recipes.remove(request)
+        override fun confirmRecipe(request: String) = recipes.hit(RecipeBook.keyOf(request))
+        override fun forgetShortcut(id: Int) = learned.remove(id)
+        override fun confirmShortcut(id: Int) = learned.hit(id)
+    }
+
+    /** A thumbs up or down on a reply. [tap] is 1 or -1; the same tap again takes it back. Runs on the main thread. */
+    fun rate(replyId: Long, tap: Int) {
+        val i = messages.indexOfFirst { it.id == replyId }
+        if (i <= 0) return
+        val reply = messages[i]
+        val ask = messages[i - 1]
+        if (reply.role != "assistant" || ask.role != "user") return
+        val out = Feedback.rate(reply, ask.text, tap, learner)
+        messages[i] = reply.copy(feedback = out.feedback)
+        status = out.note
+        save()
+    }
+
+    /** Asks the same question again. After a thumbs down the model that gave that answer goes last, so another one answers. */
+    fun retry() {
+        val last = messages.lastOrNull() ?: return
+        if (last.role != "assistant" || busy) return
+        avoid = if (last.feedback < 0) last.model else ""
+        status = ""
+        engine.retry()
     }
 
     /** What is waiting to go with the next message: pictures and files picked with the + button. */

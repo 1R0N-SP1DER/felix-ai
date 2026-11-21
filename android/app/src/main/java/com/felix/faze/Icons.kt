@@ -16,7 +16,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-enum class Ico { MIC, MIC_OFF, CHEVRON, WAVE, ARROW_UP, PLUS, CAMERA, SCREEN, CLOSE, STOP }
+enum class Ico { MIC, MIC_OFF, CHEVRON, WAVE, ARROW_UP, PLUS, CAMERA, SCREEN, CLOSE, STOP, COPY, SPEAKER, THUMB_UP, THUMB_DOWN, REFRESH }
 
 /** Simple line icons drawn on a 24 x 24 grid (no icon library: the app has none). */
 @Composable
@@ -75,6 +75,25 @@ private fun DrawScope.drawIco(kind: Ico, color: Color) {
         Ico.CLOSE -> {
             seg(6f, 6f, 18f, 18f)
             seg(18f, 6f, 6f, 18f)
+        }
+        Ico.COPY -> {
+            drawRoundRect(color, p(8.5f, 8.5f), Size(11.5f * s, 11.5f * s), CornerRadius(2.5f * s), style = line)
+            poly(15.5f, 8.5f, 15.5f, 5.5f, 13f, 4f, 6f, 4f, 4f, 6f, 4f, 13f, 5.5f, 15f, 8.5f, 15f)
+        }
+        Ico.SPEAKER -> {
+            poly(4f, 9.5f, 8f, 9.5f, 12.5f, 5.5f, 12.5f, 18.5f, 8f, 14.5f, 4f, 14.5f, close = true)
+            drawArc(color, -50f, 100f, false, p(9f, 8f), Size(8f * s, 8f * s), style = line)
+            drawArc(color, -50f, 100f, false, p(7f, 5f), Size(14f * s, 14f * s), style = line)
+        }
+        Ico.THUMB_UP, Ico.THUMB_DOWN -> {
+            val up = kind == Ico.THUMB_UP
+            fun y(v: Float) = if (up) v else 24f - v
+            drawRoundRect(color, p(3.5f, minOf(y(11f), y(20.5f))), Size(3.5f * s, 9.5f * s), CornerRadius(1.2f * s), style = line)
+            poly(7f, y(11f), 11f, y(3.5f), 13f, y(4.5f), 12f, y(9.5f), 18.5f, y(9.5f), 20.5f, y(11.5f), 19f, y(19f), 17.5f, y(20.5f), 7f, y(20.5f))
+        }
+        Ico.REFRESH -> {
+            drawArc(color, -60f, 290f, false, p(4.5f, 4.5f), Size(15f * s, 15f * s), style = line)
+            poly(15.5f, 2.5f, 19.5f, 4.5f, 17.5f, 8.5f)
         }
         Ico.STOP -> drawRoundRect(color, p(6.5f, 6.5f), Size(11f * s, 11f * s), CornerRadius(2.5f * s))
     }

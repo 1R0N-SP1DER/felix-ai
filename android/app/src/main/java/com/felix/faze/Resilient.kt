@@ -38,6 +38,7 @@ class ResilientChat(
     private val pauseMs: Long = 2500,
     private val planFor: ((JSONArray) -> List<Attempt>?)? = null,
     private val onLimit: (String, RemoteError) -> Unit = { _, _ -> },
+    private val onUsed: (String) -> Unit = {},
 ) : ChatApi {
     private val retryKinds = setOf("server", "rate_limit", "network")
     private val fallbackKinds = setOf("server", "rate_limit", "network", "model", "tool_failed", "empty", "auth")
@@ -63,7 +64,9 @@ class ResilientChat(
                 var emitted = false
                 try {
                     if (previous != null && tries == 0) notice(describeSwitch(previous, a, last))
-                    return api.chat(a.model, messages, tools, { emitted = true; onToken(it) }, cancelled)
+                    val result = api.chat(a.model, messages, tools, { emitted = true; onToken(it) }, cancelled)
+                    onUsed(a.provider)
+                    return result
                 } catch (e: RemoteError) {
                     last = e
                     if (emitted || e.kind !in fallbackKinds) throw e

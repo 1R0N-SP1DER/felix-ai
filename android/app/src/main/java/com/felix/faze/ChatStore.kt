@@ -20,12 +20,27 @@ class ChatStore(private val dir: File, private val now: () -> Long = { System.cu
         return if (first.isEmpty()) "New chat" else if (first.length <= 40) first else first.take(40).trimEnd() + "…"
     }
 
+    companion object {
+        fun messageJson(m: ChatMessage): JSONObject = JSONObject().put("id", m.id).put("role", m.role).put("text", m.text).put("steps", JSONArray(m.steps))
+            .put("attachments", Attachment.toJson(m.attachments)).put("sources", Source.toJson(m.sources))
+            .put("chain", Step.toJson(m.chain)).put("via", m.via).put("viaId", m.viaId).put("model", m.model).put("feedback", m.feedback)
+
+        fun messageFrom(m: JSONObject): ChatMessage {
+            val s = m.optJSONArray("steps")
+            return ChatMessage(
+                m.getLong("id"), m.getString("role"), m.getString("text"), if (s == null) emptyList() else (0 until s.length()).map { i -> s.getString(i) },
+                Attachment.fromJson(m.optJSONArray("attachments")), Source.fromJson(m.optJSONArray("sources")),
+                Step.fromJson(m.optJSONArray("chain")), m.optString("via", ""), m.optInt("viaId", -1), m.optString("model", ""), m.optInt("feedback", 0),
+            )
+        }
+    }
+
     fun save(id: String, messages: List<ChatMessage>) {
         if (safe(id).isEmpty()) return // an id with nothing usable in it can't name a file
         val kept = messages.filter { it.text.isNotEmpty() || it.steps.isNotEmpty() || it.attachments.isNotEmpty() || it.sources.isNotEmpty() }
         if (kept.none { it.role == "user" }) return // nothing worth keeping yet
         val arr = JSONArray()
-        for (m in kept) arr.put(JSONObject().put("id", m.id).put("role", m.role).put("text", m.text).put("steps", JSONArray(m.steps)).put("attachments", Attachment.toJson(m.attachments)).put("sources", Source.toJson(m.sources)))
+        for (m in kept) arr.put(messageJson(m))
         val existing = read(file(id))
         val keepName = existing?.renamed == true // a name the person chose is not overwritten by the automatic one
         val body = JSONObject().put("id", safe(id)).put("title", if (keepName) existing!!.title else titleFor(kept)).put("renamed", keepName)
@@ -45,11 +60,7 @@ class ChatStore(private val dir: File, private val now: () -> Long = { System.cu
         return try {
             val o = JSONObject(f.readText())
             val a = o.getJSONArray("messages")
-            val list = (0 until a.length()).map {
-                val m = a.getJSONObject(it)
-                val s = m.optJSONArray("steps")
-                ChatMessage(m.getLong("id"), m.getString("role"), m.getString("text"), if (s == null) emptyList() else (0 until s.length()).map { i -> s.getString(i) }, Attachment.fromJson(m.optJSONArray("attachments")), Source.fromJson(m.optJSONArray("sources")))
-            }
+            val list = (0 until a.length()).map { messageFrom(a.getJSONObject(it)) }
             ChatRecord(o.getString("id"), o.getString("title"), o.getLong("updated"), list, o.optBoolean("renamed", false))
         } catch (e: Exception) {
             null // a damaged file is skipped, not fatal
@@ -69,7 +80,7 @@ class ChatStore(private val dir: File, private val now: () -> Long = { System.cu
         val record = load(id) ?: return
         if (name.isEmpty()) return
         val arr = JSONArray()
-        for (m in record.messages) arr.put(JSONObject().put("id", m.id).put("role", m.role).put("text", m.text).put("steps", JSONArray(m.steps)).put("attachments", Attachment.toJson(m.attachments)))
+        for (m in record.messages) arr.put(messageJson(m))
         val body = JSONObject().put("id", record.id).put("title", name).put("renamed", true).put("updated", record.updated).put("messages", arr).toString()
         file(id).writeText(body)
     }
