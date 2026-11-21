@@ -311,11 +311,11 @@ private fun AgentTab(core: FazeCore) {
     SettingsCard("Fast routes") {
         var fast by remember { mutableStateOf(core.settings.fastRoutes) }
         var needle by remember { mutableStateOf(core.settings.needleOn) }
-        var count by remember { mutableStateOf(core.learned.size()) }
+        var count by remember { mutableStateOf(core.learned.size() + core.recipes.size()) }
         SettingRow("Fast routes", "Common requests run their tool at once; the model only says what was done") { FazeSwitch(fast, { fast = it; core.settings.fastRoutes = it }) }
         SettingRow("Needle", "Also ask the Needle server in Termux (port 8765) which tool you meant. Skipped quietly when it is not running") { FazeSwitch(needle, { needle = it; core.settings.needleOn = it }) }
-        SettingRow("Learned shortcuts", if (count == 0) "None yet. A request that works is remembered by its words (never the reply)" else "$count remembered by their words", last = true) {
-            if (count > 0) Text("Forget all", color = Palette.Accent, modifier = Modifier.clickable { core.learned.clear(); count = 0 }.padding(8.dp))
+        SettingRow("Learned shortcuts", if (count == 0) "None yet. A request that works is remembered by its words (never the reply)" else "$count remembered by their words (offline they run without the model)", last = true) {
+            if (count > 0) Text("Forget all", color = Palette.Accent, modifier = Modifier.clickable { core.learned.clear(); core.recipes.clear(); count = 0 }.padding(8.dp))
         }
     }
     SettingsCard("Offline model") {

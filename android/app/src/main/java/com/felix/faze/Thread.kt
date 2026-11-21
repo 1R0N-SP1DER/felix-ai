@@ -104,6 +104,24 @@ private fun Acts(text: String, core: FazeCore, onSources: (() -> Unit)? = null) 
     }
 }
 
+/** The icon row under a Faze reply: copy, listen, thumbs up, thumbs down and (last reply only) retry. A thumbs up teaches Faze to repeat the tools offline. */
+@Composable
+private fun ReplyRow(m: ChatMessage, last: Boolean, core: FazeCore, onSources: (() -> Unit)?) {
+    val context = LocalContext.current
+    Row(modifier = Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        @Composable
+        fun Btn(kind: Ico, tint: androidx.compose.ui.graphics.Color, action: () -> Unit) {
+            Box(Modifier.clip(RoundedCornerShape(8.dp)).clickable { action() }.padding(8.dp)) { FazeIcon(kind, tint, 17.dp) }
+        }
+        Btn(Ico.COPY, Palette.Dim) { copyToClipboard(context, m.text) }
+        Btn(Ico.SPEAKER, Palette.Dim) { core.speakText(m.text) }
+        Btn(Ico.THUMB_UP, if (m.feedback > 0) Palette.Accent else Palette.Dim) { core.rate(m.id, 1) }
+        Btn(Ico.THUMB_DOWN, if (m.feedback < 0) Palette.Bad else Palette.Dim) { core.rate(m.id, -1) }
+        if (last) Btn(Ico.REFRESH, Palette.Dim) { core.retry() }
+        if (onSources != null) Text("Sources", color = Palette.Dim, fontSize = 11.8.sp, fontWeight = FontWeight.Medium, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { onSources() }.padding(horizontal = 10.dp, vertical = 4.dp))
+    }
+}
+
 /** One turn of the conversation, drawn like the web page: no bubbles, a gutter line, a small caps label, then the text. */
 @Composable
 fun TurnView(m: ChatMessage, pending: Boolean, core: FazeCore) {
@@ -121,7 +139,7 @@ fun TurnView(m: ChatMessage, pending: Boolean, core: FazeCore) {
             AttachmentRow(m.attachments)
             var sourcesOpen by remember { mutableStateOf(false) }
             val hasSources = m.sources.isNotEmpty() || m.attachments.any { it.isRemote }
-            if (!pending && m.text.isNotEmpty()) Acts(m.text, core, if (hasSources) ({ sourcesOpen = true }) else null)
+            if (!pending && m.text.isNotEmpty()) ReplyRow(m, core.messages.lastOrNull()?.id == m.id, core, if (hasSources) ({ sourcesOpen = true }) else null)
             if (sourcesOpen) SourcesDialog(m) { sourcesOpen = false }
         }
     }

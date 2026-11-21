@@ -3,7 +3,14 @@ package com.felix.faze
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 
-data class ChatMessage(val id: Long, val role: String, val text: String, val steps: List<String> = emptyList(), val attachments: List<Attachment> = emptyList(), val sources: List<Source> = emptyList())
+/**
+ * [chain] is the tool calls the reply made, [via] how they were chosen ("model", "recipe", "learned", "needle", "built-in"; [viaId] names the learned shortcut),
+ * [model] which provider answered, and [feedback] the person's rating: 1 right, -1 wrong, 0 none.
+ */
+data class ChatMessage(
+    val id: Long, val role: String, val text: String, val steps: List<String> = emptyList(), val attachments: List<Attachment> = emptyList(), val sources: List<Source> = emptyList(),
+    val chain: List<Step> = emptyList(), val via: String = "", val viaId: Int = -1, val model: String = "", val feedback: Int = 0,
+)
 
 interface SpeechOut {
     fun speak(sentence: String)
@@ -21,6 +28,9 @@ interface EngineConfig {
     /** Effort level (standard, high, max) and the response length stop (0 to 4, 2 = the AI chooses). */
     fun effort(): String = "low"
     fun lengthSetting(): Int = ResponseLength.DEFAULT
+
+    /** Which provider answered the turn that just finished (empty when not known). */
+    fun answeredBy(): String = ""
 }
 
 interface EngineListener {
@@ -73,6 +83,21 @@ class ChatEngine(
         executor.execute { run(replyId, history) }
     }
 
+    /**
+     * Main thread. Asks again: drops the last reply and the question before it, then sends that question once more.
+     * Ignored while busy or when the last turn is not a question with a reply.
+     */
+    fun retry() {
+        if (busy) return
+        val last = messages.lastOrNull()
+        if (last == null || last.role != "assistant") return
+        val ask = messages.getOrNull(messages.size - 2)
+        if (ask == null || ask.role != "user") return
+        messages.removeAt(messages.size - 1)
+        messages.removeAt(messages.size - 1)
+        send(ask.text, ask.attachments)
+    }
+
     /** Main thread: stop the reply and the speech. What was written so far stays. */
     fun stop() {
         cancel.set(true)
@@ -109,6 +134,9 @@ class ChatEngine(
         ReplyLimit.tokens = ResponseLength.tokens(config.lengthSetting())
         val reviewing = Effort.reviews(effort)
         val seen = ArrayList<Source>()
+        val chain = ArrayList<Step>()
+        var via = ""
+        var viaId = -1
         val events = AgentEvents(
             onToken = { piece ->
                 shown.append(piece)
@@ -129,6 +157,8 @@ class ChatEngine(
                 ui { update(replyId) { it.copy(steps = copy, attachments = it.attachments + made) } }
             },
         )
+        events.onStep = { name, args, ok -> chain.add(Step(name, args.toString(), ok)) }
+        events.onVia = { how, id -> via = how; viaId = id }
         events.onSource = { src ->
             if (src !in seen) {
                 seen.add(src)
@@ -157,8 +187,12 @@ class ChatEngine(
                 }
                 for (s in sentences.finish()) speech.speak(s)
             }
+            val answered = config.answeredBy()
+            val doneChain = ArrayList(chain)
+            val how = if (via.isNotEmpty()) via else if (doneChain.isNotEmpty()) "model" else ""
+            val howId = viaId
             ui {
-                update(replyId) { it.copy(text = reply) }
+                update(replyId) { it.copy(text = reply, chain = doneChain, via = how, viaId = howId, model = answered) }
                 listener.onTiming(clock() - started)
                 finish(replyId)
             }
