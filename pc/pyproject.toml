@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = ["cryptography>=41"]
 
 [project.optional-dependencies]
-ui = ["PySide6-Essentials>=6.6"]
+ui = ["PySide6-Essentials>=6.6,<6.10"]
 
 [project.scripts]
 faze = "faze_pc.cli:main"
