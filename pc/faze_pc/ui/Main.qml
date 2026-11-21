@@ -93,15 +93,17 @@ ApplicationWindow {
         border.color: win.line
         clip: true
 
-        RowLayout {
+        // Plain anchors, not a RowLayout: on some systems the layout kept re-arranging itself without end and ate all the memory.
+        Item {
             anchors.fill: parent
-            spacing: 0
 
             // Desktop: the phone's chat drawer, always open on the left.
             Rectangle {
                 visible: !win.floating
-                Layout.preferredWidth: 250
-                Layout.fillHeight: true
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: 250
                 color: win.surface
                 ColumnLayout {
                     anchors.fill: parent
@@ -149,8 +151,11 @@ ApplicationWindow {
             }
 
             ColumnLayout {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
+                anchors.left: parent.left
+                anchors.leftMargin: win.floating ? 0 : 250
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
                 spacing: 0
 
                 // Top bar, as on the phone: the model chip on the left, a few actions on the right.
