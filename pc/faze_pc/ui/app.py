@@ -41,6 +41,8 @@ class Bridge(QObject):
     assistantStart = Signal()
     token = Signal(str)
     assistantDone = Signal(bool)
+    replyId = Signal(str)
+    rated = Signal(str, int, str)
     route = Signal(str)
     note = Signal(str)
     failed = Signal(str)
@@ -124,7 +126,11 @@ class Bridge(QObject):
                 self.route.emit("%s · %s" % (ev["label"], ev["model"]))
             elif t == "token":
                 self.token.emit(ev["v"])
+            elif t == "rated":
+                self.rated.emit(ev["id"], int(ev["value"]), ev.get("note", ""))
             elif t == "done":
+                if ev.get("id"):
+                    self.replyId.emit(ev["id"])
                 self._set_busy(False)
                 self.assistantDone.emit(bool(ev.get("stopped")))
                 self._send({"op": "state"})
@@ -193,6 +199,30 @@ class Bridge(QObject):
         self.userMessage.emit(text)
         self.assistantStart.emit()
         self._send({"op": "chat", "chat": self._chat or None, "text": text})
+
+    @Slot(str, int)
+    def rate(self, message_id, tap):
+        """A thumbs up (1) or down (-1) on a reply."""
+        if self._chat and message_id:
+            self._send({"op": "rate", "chat": self._chat, "id": message_id, "tap": tap})
+
+    @Slot(str)
+    def retry(self, question):
+        """Asks the last question again: the daemon hides the old reply, and after a thumbs down another model answers."""
+        if self._busy or not self._chat or not question:
+            return
+        self._set_busy(True)
+        self.userMessage.emit(question)
+        self.assistantStart.emit()
+        self._send({"op": "chat", "chat": self._chat, "text": "", "retry": True})
+
+    @Slot(str)
+    def speak(self, text):
+        self._send({"op": "speak", "text": text})
+
+    @Slot(str)
+    def copyText(self, text):
+        QGuiApplication.clipboard().setText(text)
 
     @Slot()
     def quit(self):
@@ -339,7 +369,7 @@ class Bridge(QObject):
         self.chatsChanged.emit([{"id": "a1", "title": "Plan for the weekend", "t": 3}, {"id": "a2", "title": "Fix this Kotlin function", "t": 2}, {"id": "a3", "title": "Voice lines", "t": 1}])
         self.historyLoaded.emit([
             {"role": "user", "content": "hey, what should I eat tonight?"},
-            {"role": "assistant", "content": "Something quick and warm. Jollof with fried plantain? You haven't had it in a while."},
+            {"role": "assistant", "content": "Something quick and warm. Jollof with fried plantain? You haven't had it in a while.", "id": "d1", "feedback": 1},
             {"role": "user", "content": "ha, you know me. why does this python function crash?"},
         ])
         self.modelsLoaded.emit({"running": True, "local": [{"name": "lfm2.5:1.2b", "gb": 0.8}, {"name": "qwen3.5:4b", "gb": 2.6}],

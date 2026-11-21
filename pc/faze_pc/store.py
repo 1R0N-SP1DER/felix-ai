@@ -44,11 +44,32 @@ class Store:
         self._append(self._chat_path(cid), {"id": _id(), "t": self.now(), "dev": self.device, "role": "meta", "content": "chat started"})
         return cid
 
-    def add(self, chat_id, role, content):
-        self._append(self._chat_path(chat_id), {"id": _id(), "t": self.now(), "dev": self.device, "role": role, "content": content})
+    def add(self, chat_id, role, content, **extra):
+        """Appends a message and returns its id. `extra` (chain, via, model for a reply) is stored with it."""
+        mid = _id()
+        self._append(self._chat_path(chat_id), dict(extra, id=mid, t=self.now(), dev=self.device, role=role, content=content))
+        return mid
+
+    def rate(self, chat_id, message_id, value):
+        """A thumbs up (1), thumbs down (-1) or nothing (0) on a message. Stored as its own line, so nothing is rewritten."""
+        self._append(self._chat_path(chat_id), {"id": _id(), "t": self.now(), "dev": self.device, "role": "rating", "for": message_id, "v": int(value)})
+
+    def drop(self, chat_id, message_id):
+        """Hides a message (retry replaces a reply)."""
+        self._append(self._chat_path(chat_id), {"id": _id(), "t": self.now(), "dev": self.device, "role": "drop", "for": message_id})
+
+    @staticmethod
+    def _live(lines):
+        """The user and assistant lines that were not dropped, each with its latest rating as `feedback`."""
+        dropped = {m.get("for") for m in lines if m.get("role") == "drop"}
+        rated = {}
+        for m in lines:
+            if m.get("role") == "rating":
+                rated[m.get("for")] = m.get("v", 0)
+        return [dict(m, feedback=rated.get(m.get("id"), 0)) for m in lines if m.get("role") in ("user", "assistant") and m.get("id") not in dropped]
 
     def history(self, chat_id, limit=None):
-        msgs = [m for m in self._read(self._chat_path(chat_id)) if m.get("role") in ("user", "assistant")]
+        msgs = self._live(self._read(self._chat_path(chat_id)))
         return msgs[-limit:] if limit else msgs
 
     def chats(self):
@@ -60,7 +81,7 @@ class Store:
                 continue
             cid = name[:-6]
             msgs = self._read(os.path.join(d, name))
-            real = [m for m in msgs if m.get("role") in ("user", "assistant")]
+            real = self._live(msgs)
             if not real:
                 continue
             first = next((m["content"] for m in real if m["role"] == "user"), real[0]["content"])
@@ -77,7 +98,7 @@ class Store:
         d = os.path.join(self.root, "chats")
         for name in os.listdir(d):
             if name.endswith(".jsonl"):
-                msgs = [m for m in self._read(os.path.join(d, name)) if m.get("role") in ("user", "assistant") and m.get("dev") != "sync"]  # lines that came from a sync are already on the phone
+                msgs = [m for m in self._live(self._read(os.path.join(d, name))) if m.get("dev") != "sync"]  # lines that came from a sync are already on the phone
                 if msgs and max(m.get("t", 0) for m in msgs) > since:
                     out.append(name[:-6])
         return out

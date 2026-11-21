@@ -393,6 +393,11 @@ class Daemon:
                 emit({"t": "error", "message": str(e)})
                 return
             emit({"t": "state", "config": self.config.public(), "chats": self.store.chats()})
+        elif op == "rate":
+            value, note = self.engine.rate(req.get("chat", ""), req.get("id", ""), 1 if req.get("tap", 1) > 0 else -1)
+            emit({"t": "rated", "id": req.get("id", ""), "value": value, "note": note})
+        elif op == "speak":
+            threading.Thread(target=self.say, args=(str(req.get("text", "")), emit), daemon=True).start()
         elif op == "chat":
             chat_id = req.get("chat") or self.store.new_chat()
             emit({"t": "chat", "id": chat_id})
@@ -404,7 +409,7 @@ class Daemon:
                 emit(ev)
 
             with self.chat_lock:
-                self.engine.chat(chat_id, req.get("text", ""), watch)
+                self.engine.chat(chat_id, req.get("text", ""), watch, **({"retry": True} if req.get("retry") else {}))
             if said and self.config.data.get("speak"):
                 threading.Thread(target=self.say, args=(said[-1], emit), daemon=True).start()
         elif op == "mirror_start":
