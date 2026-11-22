@@ -46,6 +46,7 @@ jobs:
           FAZE_SCREENSHOT=shots/desktop.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(False))"
           FAZE_SCREENSHOT=shots/floating.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(True))"
           FAZE_DEMO_POPUP=devices FAZE_SCREENSHOT=shots/devices.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(False))"
+          FAZE_DEMO_POPUP=home FAZE_SCREENSHOT=shots/home.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(False))"
           FAZE_DEMO_POPUP=mirror FAZE_SCREENSHOT=shots/mirror.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(False))"
           FAZE_DEMO_POPUP=settings FAZE_SCREENSHOT=shots/settings.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(False))"
           FAZE_DEMO_POPUP=models FAZE_SCREENSHOT=shots/models.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(False))"
