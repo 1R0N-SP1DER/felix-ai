@@ -43,6 +43,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.unit.IntOffset
+import org.json.JSONObject
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -151,7 +155,37 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
     }
     DisposableEffect(Unit) { onDispose { Thread { remote.stopStream() }.start() } }
 
-    RemoteView(pc?.name, frame, problem, note, remote, onBack, onRotate = { landscape = !landscape })
+    // The PC's webcam as a small picture over the screen, its microphone, and its sound (on by default: the picture and the sound belong together).
+    var cam by remember { mutableStateOf(false) }
+    var mic by remember { mutableStateOf(false) }
+    var sound by remember { mutableStateOf(true) }
+    var camFrame by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    val soundPlayer = remember { PcAudio({ core.pcAsk(it, 10_000) }, AndroidSink(), { m -> problem = m; sound = false }) }
+    val micPlayer = remember { PcAudio({ core.pcAsk(it, 10_000) }, AndroidSink(), { m -> problem = m; mic = false }) }
+    LaunchedEffect(sound, pc != null) { if (sound && pc != null) soundPlayer.start("monitor") else soundPlayer.stop() }
+    LaunchedEffect(mic) { if (mic) micPlayer.start("mic") else micPlayer.stop() }
+    DisposableEffect(Unit) { onDispose { soundPlayer.stop(); micPlayer.stop() } }
+    LaunchedEffect(cam) {
+        while (cam) {
+            try {
+                val bytes = withContext(Dispatchers.IO) {
+                    val r = core.pcAsk(JSONObject().put("t", "pc_cam_get"), 20_000)
+                    if (r.optString("t") != "pc_cam_ok") throw java.io.IOException(r.optString("message", "no picture from the webcam"))
+                    java.util.Base64.getDecoder().decode(r.getString("jpeg"))
+                }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let { camFrame = it.asImageBitmap() }
+            } catch (e: Exception) {
+                problem = e.message ?: "could not reach the webcam"; cam = false
+            }
+            delay(100)
+        }
+    }
+
+    RemoteView(
+        pc?.name, frame, problem, note, remote, onBack, onRotate = { landscape = !landscape },
+        camFrame = camFrame, cam = cam, mic = mic, sound = sound,
+        onToggle = { which -> when (which) { "cam" -> cam = !cam; "mic" -> mic = !mic; "sound" -> sound = !sound } },
+    )
 }
 
 /**
@@ -162,6 +196,7 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
 fun RemoteView(
     pcName: String?, frame: androidx.compose.ui.graphics.ImageBitmap?, problem: String, note: String, remote: PcRemote, onBack: () -> Unit, onRotate: () -> Unit,
     startKeysOpen: Boolean = false, startArmed: Set<String> = emptySet(),
+    camFrame: androidx.compose.ui.graphics.ImageBitmap? = null, cam: Boolean = false, mic: Boolean = false, sound: Boolean = true, onToggle: (String) -> Unit = {},
 ) {
     val pc = pcName
     var typed by remember { mutableStateOf("") }
@@ -171,6 +206,8 @@ fun RemoteView(
     var armed by remember { mutableStateOf(startArmed) }
     var pointerMenu by remember { mutableStateOf(false) }
     var moreMenu by remember { mutableStateOf(false) }
+    var camX by remember { mutableStateOf(24f) }
+    var camY by remember { mutableStateOf(90f) }
 
     fun press(key: String) {
         remote.combo(RemoteKeys.combo(armed, key))
@@ -220,6 +257,20 @@ fun RemoteView(
             contentAlignment = Alignment.Center,
         ) { Text("↕", color = Palette.Dim, fontSize = 15.sp) }
 
+        // The PC's webcam: a small square you can drag anywhere. Tap the cross to turn it off.
+        if (cam) {
+            Box(
+                modifier = Modifier.offset { IntOffset(camX.toInt(), camY.toInt()) }.size(width = 168.dp, height = 126.dp).clip(RoundedCornerShape(16.dp))
+                    .border(1.dp, Palette.Glow.copy(alpha = 0.5f), RoundedCornerShape(16.dp)).background(Palette.Surface)
+                    .pointerInput(Unit) { detectDragGestures { change, drag -> change.consume(); camX += drag.x; camY += drag.y } },
+                contentAlignment = Alignment.Center,
+            ) {
+                if (camFrame != null) Image(camFrame, contentDescription = "PC webcam", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                else Text("Webcam…", color = Palette.Dim, fontSize = 12.sp)
+                Box(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).clip(RoundedCornerShape(50)).background(Palette.Glass).clickable { onToggle("cam") }.padding(6.dp)) { FazeIcon(Ico.CLOSE, Palette.Text, 14.dp) }
+            }
+        }
+
         // The floating pill: close, pointer speed, keyboard, rotate, more. The little arrow under it folds it away.
         Column(modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             if (toolsOpen) {
@@ -241,6 +292,9 @@ fun RemoteView(
                     Box {
                         RemoteTool(Ico.DOTS, moreMenu) { moreMenu = true }
                         DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
+                            DropdownMenuItem(text = { Text((if (cam) "✓  " else "     ") + "PC webcam") }, onClick = { moreMenu = false; onToggle("cam") })
+                            DropdownMenuItem(text = { Text((if (mic) "✓  " else "     ") + "Listen to PC mic") }, onClick = { moreMenu = false; onToggle("mic") })
+                            DropdownMenuItem(text = { Text((if (sound) "✓  " else "     ") + "PC sound on this phone") }, onClick = { moreMenu = false; onToggle("sound") })
                             for ((label, key) in listOf("Volume down" to "voldown", "Volume up" to "volup", "Mute" to "mute", "Play / pause" to "playpause", "Right click" to "")) {
                                 DropdownMenuItem(text = { Text(label) }, onClick = { moreMenu = false; if (key.isEmpty()) remote.click("right") else remote.key(key) })
                             }
