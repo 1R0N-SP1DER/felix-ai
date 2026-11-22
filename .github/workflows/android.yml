@@ -37,6 +37,7 @@ jobs:
         working-directory: android/app/build/screenshots
         run: |
           for f in *.png; do [ -f "$f" ] && { echo "BEGIN64 $f"; base64 -w0 "$f"; echo; echo "END64 $f"; }; done || true
+          for f in *.txt; do [ -f "$f" ] && { echo "TEXT $f"; head -30 "$f"; }; done || true
 
       - name: Build the debug APK
         working-directory: android

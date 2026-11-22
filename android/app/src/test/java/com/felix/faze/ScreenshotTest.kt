@@ -34,11 +34,17 @@ class ScreenshotTest {
     @get:Rule val rule = createComposeRule()
 
     private fun shot(name: String, content: @Composable () -> Unit) {
-        rule.setContent(content)
-        rule.waitForIdle()
-        val bmp = rule.onRoot().captureToImage().asAndroidBitmap()
         val dir = File("build/screenshots")
         dir.mkdirs()
+        rule.mainClock.autoAdvance = false // never wait for the screen to go idle: something may animate for ever
+        rule.setContent(content)
+        rule.mainClock.advanceTimeBy(500)
+        val bmp = try {
+            rule.onRoot().captureToImage().asAndroidBitmap()
+        } catch (e: Throwable) {
+            File(dir, "$name.txt").writeText(e.toString() + "\n" + e.stackTrace.take(25).joinToString("\n"))
+            throw e
+        }
         FileOutputStream(File(dir, "$name.png")).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
         assertTrue(File(dir, "$name.png").length() > 1000)
     }
