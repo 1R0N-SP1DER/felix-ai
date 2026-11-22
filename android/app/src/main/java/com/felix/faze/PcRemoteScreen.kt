@@ -1,12 +1,19 @@
 package com.felix.faze
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
 import android.graphics.BitmapFactory
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,11 +21,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
@@ -31,19 +40,38 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private fun Context.findActivity(): Activity? {
+    var c: Context = this
+    while (c is ContextWrapper) {
+        if (c is Activity) return c
+        c = c.baseContext
+    }
+    return null
+}
+
 /**
- * Control the connected PC from the phone, like a remote receiver: its screen on top, and the picture works as a touchpad. Drag to move the
- * mouse, tap to click, double tap to double click, hold to right click. The strip on the right scrolls; the keys below type on the PC.
+ * Control the connected PC from the phone: the PC's live screen fills the whole display in landscape, and everything else floats over it.
+ * The picture is a touchpad (drag to move, tap to click, double tap, hold for right click, hold and drag to drag). The top pill collapses; the key
+ * bar types on the PC and arms Ctrl, Shift, Alt and Win for shortcuts. The rotate button switches between landscape and portrait.
  */
 @Composable
 fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
@@ -53,6 +81,33 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
     var typed by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
     val remote = remember { core.pcRemote { problem = it } }
+
+    val ctx = LocalContext.current
+    val act = remember(ctx) { ctx.findActivity() }
+    var landscape by remember { mutableStateOf(true) }
+    var toolsOpen by remember { mutableStateOf(true) }
+    var keysOpen by remember { mutableStateOf(false) }
+    var speed by remember { mutableStateOf(PointerSpeed.NORMAL) }
+    var armed by remember { mutableStateOf(setOf<String>()) }
+    var pointerMenu by remember { mutableStateOf(false) }
+    var moreMenu by remember { mutableStateOf(false) }
+
+    BackHandler { onBack() }
+
+    // Full screen: no status or navigation bar (a swipe from the edge shows them for a moment), and the orientation is ours while this is open.
+    DisposableEffect(act) {
+        val before = act?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        val controller = act?.let { WindowCompat.getInsetsController(it.window, it.window.decorView) }
+        controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller?.hide(WindowInsetsCompat.Type.systemBars())
+        onDispose {
+            act?.requestedOrientation = before
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+    LaunchedEffect(landscape) {
+        act?.requestedOrientation = if (landscape) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+    }
 
     // The live stream: the computer pushes pictures, the newest is drawn. If it cannot stream, fall back to asking for one picture at a time.
     var streaming by remember { mutableStateOf(false) }
@@ -104,51 +159,141 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
     }
     DisposableEffect(Unit) { onDispose { Thread { remote.stopStream() }.start() } }
 
-    Column(modifier = Modifier.fillMaxSize().background(Palette.Bg)) {
-        PageHeader(if (pc != null) "Control ${pc.name}${if (note.isNotEmpty()) " · live ($note)" else ""}" else "Control PC", onBack)
+    fun press(key: String) {
+        remote.combo(RemoteKeys.combo(armed, key))
+        armed = emptySet()
+    }
+
+    Box(
+        modifier = Modifier.fillMaxSize().background(Palette.Bg).drawBehind {
+            drawRect(Brush.radialGradient(listOf(Palette.GlowSoft, Color.Transparent), center = Offset(size.width, 0f), radius = size.maxDimension * 0.7f))
+        },
+    ) {
         if (pc == null) {
-            Text("No computer is connected. Pair one from Devices.", color = Palette.Dim, modifier = Modifier.padding(16.dp))
-            return@Column
+            Column(modifier = Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("No computer is connected. Pair one from Devices.", color = Palette.Dim)
+                Text("Back", color = Palette.Accent, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, modifier = Modifier.clip(RoundedCornerShape(14.dp)).clickable { onBack() }.padding(horizontal = 18.dp, vertical = 10.dp))
+            }
+            return@Box
         }
-        if (problem.isNotEmpty()) Text(problem, color = Palette.Dim, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-        Row(modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Box(
-                modifier = Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(12.dp)).background(Palette.Surface)
-                    .pointerInput(Unit) {
-                        detectTapGestures(onTap = { remote.click() }, onDoubleTap = { remote.click(double = true) }, onLongPress = { remote.click("right") })
+
+        // The PC's screen, which is also the touchpad.
+        Box(
+            modifier = Modifier.fillMaxSize()
+                .pointerInput(speed) {
+                    detectTapGestures(onTap = { remote.click() }, onDoubleTap = { remote.click(double = true) }, onLongPress = { remote.click("right") })
+                }
+                .pointerInput(speed) { detectDragGestures { change, drag -> change.consume(); remote.move(drag.x * speed.factor, drag.y * speed.factor) } }
+                .pointerInput(speed) { detectDragGesturesAfterLongPress(onDragStart = { remote.button(true) }, onDragEnd = { remote.button(false) }, onDragCancel = { remote.button(false) }) { change, drag -> change.consume(); remote.move(drag.x * speed.factor, drag.y * speed.factor) } },
+            contentAlignment = Alignment.Center,
+        ) {
+            val f = frame
+            if (f != null) Image(f, contentDescription = "PC screen", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+            else Text("Waiting for the PC…", color = Palette.Dim)
+        }
+
+        // A thin strip on the right edge scrolls.
+        Box(
+            modifier = Modifier.align(Alignment.CenterEnd).width(26.dp).fillMaxHeight(0.5f).clip(RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp)).background(Palette.Glass)
+                .pointerInput(Unit) {
+                    var acc = 0f
+                    detectDragGestures { change, drag ->
+                        change.consume()
+                        acc += drag.y
+                        val lines = (acc / 24f).toInt()
+                        if (lines != 0) { acc -= lines * 24f; remote.scroll(-lines) }
                     }
-                    .pointerInput(Unit) { detectDragGestures { change, drag -> change.consume(); remote.move(drag.x * 1.8f, drag.y * 1.8f) } }
-                    .pointerInput(Unit) { detectDragGesturesAfterLongPress(onDragStart = { remote.button(true) }, onDragEnd = { remote.button(false) }, onDragCancel = { remote.button(false) }) { change, drag -> change.consume(); remote.move(drag.x * 1.8f, drag.y * 1.8f) } },
-                contentAlignment = Alignment.Center,
-            ) {
-                val f = frame
-                if (f != null) Image(f, contentDescription = "PC screen", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
-                else Text("Waiting for the PC…", color = Palette.Dim)
-            }
-            Box(
-                modifier = Modifier.width(34.dp).fillMaxHeight().clip(RoundedCornerShape(12.dp)).background(Palette.Surface2)
-                    .pointerInput(Unit) {
-                        var acc = 0f
-                        detectDragGestures { change, drag ->
-                            change.consume()
-                            acc += drag.y
-                            val lines = (acc / 24f).toInt()
-                            if (lines != 0) { acc -= lines * 24f; remote.scroll(-lines) }
+                },
+            contentAlignment = Alignment.Center,
+        ) { Text("↕", color = Palette.Dim, fontSize = 15.sp) }
+
+        // The floating pill: close, pointer speed, keyboard, rotate, more. The little arrow under it folds it away.
+        Column(modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            if (toolsOpen) {
+                val shape = RoundedCornerShape(22.dp)
+                Row(
+                    modifier = Modifier.clip(shape).background(Palette.Glass).border(1.dp, Palette.Glow.copy(alpha = 0.35f), shape).padding(horizontal = 8.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RemoteTool(Ico.CLOSE, false) { onBack() }
+                    Box(Modifier.width(1.dp).height(22.dp).background(Palette.Dim.copy(alpha = 0.25f)))
+                    Box {
+                        RemoteTool(Ico.POINTER, pointerMenu) { pointerMenu = true }
+                        DropdownMenu(expanded = pointerMenu, onDismissRequest = { pointerMenu = false }) {
+                            for (s in PointerSpeed.values()) DropdownMenuItem(text = { Text((if (s == speed) "✓  " else "     ") + s.label + " pointer") }, onClick = { speed = s; pointerMenu = false })
                         }
-                    },
-                contentAlignment = Alignment.Center,
-            ) { Text("↕", color = Palette.Dim, fontSize = 18.sp) }
-        }
-        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            for ((label, key) in listOf("Left" to "", "Right" to "", "Enter" to "enter", "⌫" to "backspace", "Esc" to "esc", "Tab" to "tab", "←" to "left", "↑" to "up", "↓" to "down", "→" to "right", "Super" to "super", "Vol−" to "voldown", "Vol+" to "volup", "Play" to "playpause")) {
-                Text(label, color = Palette.Text, fontSize = 13.sp, modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(Palette.Surface2).clickable {
-                    when (label) { "Left" -> remote.click(); "Right" -> remote.click("right"); else -> remote.key(key) }
-                }.padding(horizontal = 12.dp, vertical = 9.dp))
+                    }
+                    RemoteTool(Ico.KEYBOARD, keysOpen) { keysOpen = !keysOpen }
+                    RemoteTool(Ico.ROTATE, false) { landscape = !landscape }
+                    Box {
+                        RemoteTool(Ico.DOTS, moreMenu) { moreMenu = true }
+                        DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
+                            for ((label, key) in listOf("Volume down" to "voldown", "Volume up" to "volup", "Mute" to "mute", "Play / pause" to "playpause", "Right click" to "")) {
+                                DropdownMenuItem(text = { Text(label) }, onClick = { moreMenu = false; if (key.isEmpty()) remote.click("right") else remote.key(key) })
+                            }
+                        }
+                    }
+                }
+            }
+            Box(modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable { toolsOpen = !toolsOpen }.padding(horizontal = 18.dp, vertical = 4.dp)) {
+                FazeIcon(Ico.CHEVRON, Palette.Dim, 18.dp, Modifier.rotate(if (toolsOpen) 180f else 0f))
             }
         }
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            TextField(typed, { typed = it }, modifier = Modifier.weight(1f), singleLine = true, placeholder = { Text("Type on the PC") })
-            Text("Send", color = Palette.Accent, modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { if (typed.isNotEmpty()) { remote.text(typed); typed = "" } }.padding(horizontal = 12.dp, vertical = 10.dp))
+
+        if (problem.isNotEmpty() || note.isNotEmpty()) {
+            Text(
+                if (problem.isNotEmpty()) problem else "Live · $note",
+                color = Palette.Dim, fontSize = 11.sp,
+                modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = if (keysOpen) 120.dp else 8.dp).clip(RoundedCornerShape(10.dp)).background(Palette.Glass).padding(horizontal = 10.dp, vertical = 5.dp),
+            )
+        }
+
+        // The key bar. Tap Ctrl, Shift, Alt or Win to arm it, then the next key goes with it; letters for the usual shortcuts appear while one is armed.
+        if (keysOpen) {
+            Column(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Palette.Glass).padding(horizontal = 8.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (armed.isNotEmpty()) {
+                    Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        KeyChip("Send " + armed.joinToString("+"), true) { remote.combo(RemoteKeys.MODS.filter { it in armed }); armed = emptySet() }
+                        for (k in RemoteKeys.QUICK) KeyChip(k.uppercase(), false) { press(k) }
+                    }
+                }
+                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    KeyChip("ESC", false) { press("esc") }
+                    KeyChip("Shift", "shift" in armed) { armed = RemoteKeys.toggle(armed, "shift") }
+                    KeyChip("Ctrl", "ctrl" in armed) { armed = RemoteKeys.toggle(armed, "ctrl") }
+                    KeyChip("Alt", "alt" in armed) { armed = RemoteKeys.toggle(armed, "alt") }
+                    KeyChip("Win", "super" in armed) { armed = RemoteKeys.toggle(armed, "super") }
+                    KeyChip("Tab", false) { press("tab") }
+                    KeyChip("Enter", false) { press("enter") }
+                    KeyChip("⌫", false) { press("backspace") }
+                    KeyChip("←", false) { press("left") }
+                    KeyChip("↑", false) { press("up") }
+                    KeyChip("↓", false) { press("down") }
+                    KeyChip("→", false) { press("right") }
+                    KeyChip("F5", false) { press("f5") }
+                }
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TextField(typed, { typed = it }, modifier = Modifier.weight(1f), singleLine = true, placeholder = { Text("Type on the PC") })
+                    Text("Send", color = Palette.Accent, modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { if (typed.isNotEmpty()) { remote.text(typed); typed = "" } }.padding(horizontal = 12.dp, vertical = 10.dp))
+                }
+            }
         }
     }
+}
+
+/** One icon of the floating pill. */
+@Composable
+private fun RemoteTool(ico: Ico, active: Boolean, onClick: () -> Unit) {
+    Box(modifier = Modifier.clip(RoundedCornerShape(14.dp)).clickable { onClick() }.padding(horizontal = 12.dp, vertical = 10.dp), contentAlignment = Alignment.Center) {
+        FazeIcon(ico, if (active) Palette.Accent else Palette.Text, 21.dp)
+    }
+}
+
+/** One key of the key bar; lit while armed. */
+@Composable
+private fun KeyChip(label: String, lit: Boolean, onClick: () -> Unit) {
+    Text(
+        label, color = if (lit) Palette.AccentInk else Palette.Text, fontSize = 13.sp,
+        modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(if (lit) Palette.Accent else Palette.Surface2).clickable { onClick() }.padding(horizontal = 12.dp, vertical = 9.dp),
+    )
 }
