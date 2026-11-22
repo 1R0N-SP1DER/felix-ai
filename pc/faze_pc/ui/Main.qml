@@ -6,7 +6,7 @@ ApplicationWindow {
     id: win
     readonly property bool floating: bridge !== null && bridge.floating
     visible: true
-    width: floating ? 560 : 1000
+    width: floating ? 560 : 1240
     height: floating ? 660 : 700
     minimumWidth: floating ? 420 : 720
     minimumHeight: 460
@@ -188,8 +188,20 @@ ApplicationWindow {
                     }
                 }
 
+                Home {
+                    visible: msgs.count === 0
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    user: (win.cfg && win.cfg.user_name) ? win.cfg.user_name : "there"
+                    seed: win.currentChat
+                    mode: (bridge !== null && bridge.busy) ? "thinking" : ((bridge !== null && bridge.listening) ? "listening" : "idle")
+                    model: (win.cfg && win.cfg.provider) ? win.cfg.provider : "auto"
+                    onPick: function (t) { input.text = t; input.forceActiveFocus(); input.cursorPosition = t.length }
+                }
+
                 ListView {
                     id: list
+                    visible: msgs.count > 0
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     Layout.leftMargin: 18
@@ -322,6 +334,22 @@ ApplicationWindow {
                             MouseArea { anchors.fill: parent; onClicked: { if (bridge.busy) bridge.stop(); else { bridge.send(input.text); input.text = "" } } }
                         }
                     }
+                }
+            }
+
+            // Desktop, wide window: the phone's panel on the right.
+            Dock {
+                visible: !win.floating && win.width >= 1060
+                Layout.preferredWidth: 280
+                Layout.fillHeight: true
+                devices: win.devices
+                onAction: function (name) {
+                    if (name === "screen") bridge.openMirrorWindow()
+                    else if (name === "voice") bridge.startVoiceChat()
+                    else if (name === "live") bridge.startLive()
+                    else if (name === "devices") { bridge.refreshDevices(); devicesPopup.open() }
+                    else if (name === "activity") bridge.loadActivity()
+                    else if (name === "settings") settings.open()
                 }
             }
         }

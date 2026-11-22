@@ -367,6 +367,11 @@ class Bridge(QObject):
         self.configChanged.emit({"provider": "auto", "keys": {"groq": True, "gemini": False, "openrouter": False, "nvidia": False, "custom": False},
                                  "models": {}, "ollama_chat_model": "qwen2.5:1.5b", "ollama_deep_model": "qwen2.5:1.5b", "user_name": "Felix"})
         self.chatsChanged.emit([{"id": "a1", "title": "Plan for the weekend", "t": 3}, {"id": "a2", "title": "Fix this Kotlin function", "t": 2}, {"id": "a3", "title": "Voice lines", "t": 1}])
+        if os.environ.get("FAZE_DEMO_POPUP") == "home":
+            self.route.emit("Gemini · gemini-3.1-flash-lite")
+            self.devicesChanged.emit([{"id": "p1", "name": "Felix's phone", "state": "connected", "address": "192.168.43.1"}])
+            return
+        self.devicesChanged.emit([{"id": "p1", "name": "Felix's phone", "state": "connected", "address": "192.168.43.1"}])
         self.historyLoaded.emit([
             {"role": "user", "content": "hey, what should I eat tonight?"},
             {"role": "assistant", "content": "Something quick and warm. Jollof with fried plantain? You haven't had it in a while.", "id": "d1", "feedback": 1},
