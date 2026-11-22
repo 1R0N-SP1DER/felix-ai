@@ -6,13 +6,11 @@ import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Shader
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import java.io.File
-import java.io.FileOutputStream
+import com.github.takahirom.roborazzi.captureRoboImage
 import java.util.concurrent.Executor
 import org.json.JSONObject
 import org.junit.Assert.assertTrue
@@ -36,16 +34,14 @@ class ScreenshotTest {
     private fun shot(name: String, content: @Composable () -> Unit) {
         val dir = File("build/screenshots")
         dir.mkdirs()
-        rule.mainClock.autoAdvance = false // never wait for the screen to go idle: something may animate for ever
+        System.setProperty("roborazzi.test.record", "true") // no Gradle plugin here: ask the library to just write the picture
         rule.setContent(content)
-        rule.mainClock.advanceTimeBy(500)
-        val bmp = try {
-            rule.onRoot().captureToImage().asAndroidBitmap()
+        try {
+            rule.onRoot().captureRoboImage(File(dir, "$name.png").path)
         } catch (e: Throwable) {
             File(dir, "$name.txt").writeText(e.toString() + "\n" + e.stackTrace.take(25).joinToString("\n"))
             throw e
         }
-        FileOutputStream(File(dir, "$name.png")).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
         assertTrue(File(dir, "$name.png").length() > 1000)
     }
 

@@ -80,5 +80,7 @@ dependencies {
     // Screenshot tests: the screens are drawn on the JVM with Robolectric's real graphics and saved as pictures (printed in the CI log).
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.43.1")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.43.1")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
