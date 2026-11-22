@@ -57,6 +57,9 @@ class PcRemote(private val ask: (JSONObject, Long) -> JSONObject, private val wo
     fun key(name: String) = worker.execute { input("key", "key" to name) }
     fun text(text: String) = worker.execute { input("text", "text" to text) }
 
+    /** Presses the keys together, like Ctrl+Shift+T: in order, released in reverse. */
+    fun combo(keys: List<String>) = worker.execute { input("combo", "keys" to org.json.JSONArray(keys)) }
+
     /** [quick] inputs (movement, scrolling) are sent without waiting for an answer, so a fast drag is not slowed by round trips. Clicks and keys wait, so a refusal is reported. */
     private fun input(kind: String, vararg kv: Pair<String, Any>, quick: Boolean = false) {
         try {

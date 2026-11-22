@@ -16,7 +16,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-enum class Ico { MIC, MIC_OFF, CHEVRON, WAVE, ARROW_UP, PLUS, CAMERA, SCREEN, CLOSE, STOP, COPY, SPEAKER, THUMB_UP, THUMB_DOWN, REFRESH }
+enum class Ico { MIC, MIC_OFF, CHEVRON, WAVE, ARROW_UP, PLUS, CAMERA, SCREEN, CLOSE, STOP, COPY, SPEAKER, THUMB_UP, THUMB_DOWN, REFRESH, POINTER, KEYBOARD, ROTATE, DOTS, GRID }
 
 /** Simple line icons drawn on a 24 x 24 grid (no icon library: the app has none). */
 @Composable
@@ -94,6 +94,28 @@ private fun DrawScope.drawIco(kind: Ico, color: Color) {
         Ico.REFRESH -> {
             drawArc(color, -60f, 290f, false, p(4.5f, 4.5f), Size(15f * s, 15f * s), style = line)
             poly(15.5f, 2.5f, 19.5f, 4.5f, 17.5f, 8.5f)
+        }
+        Ico.POINTER -> poly(6.5f, 3.5f, 18f, 12.5f, 12.2f, 13.6f, 9.2f, 19.5f, close = true)
+        Ico.KEYBOARD -> {
+            drawRoundRect(color, p(3f, 6f), Size(18f * s, 12f * s), CornerRadius(2.5f * s), style = line)
+            seg(7f, 10f, 8f, 10f); seg(11.5f, 10f, 12.5f, 10f); seg(16f, 10f, 17f, 10f)
+            seg(8f, 14f, 16f, 14f)
+        }
+        Ico.ROTATE -> {
+            drawArc(color, -60f, 280f, false, p(4.5f, 4.5f), Size(15f * s, 15f * s), style = line)
+            poly(15f, 2.5f, 19.5f, 4.8f, 17.2f, 9.2f)
+            drawRoundRect(color, p(9.5f, 9.5f), Size(5f * s, 5f * s), CornerRadius(1.2f * s), style = line)
+        }
+        Ico.DOTS -> {
+            drawCircle(color, 1.6f * s, p(12f, 5.5f))
+            drawCircle(color, 1.6f * s, p(12f, 12f))
+            drawCircle(color, 1.6f * s, p(12f, 18.5f))
+        }
+        Ico.GRID -> {
+            drawRoundRect(color, p(4f, 4f), Size(6.5f * s, 6.5f * s), CornerRadius(1.5f * s), style = line)
+            drawRoundRect(color, p(13.5f, 4f), Size(6.5f * s, 6.5f * s), CornerRadius(1.5f * s), style = line)
+            drawRoundRect(color, p(4f, 13.5f), Size(6.5f * s, 6.5f * s), CornerRadius(1.5f * s), style = line)
+            drawRoundRect(color, p(13.5f, 13.5f), Size(6.5f * s, 6.5f * s), CornerRadius(1.5f * s), style = line)
         }
         Ico.STOP -> drawRoundRect(color, p(6.5f, 6.5f), Size(11f * s, 11f * s), CornerRadius(2.5f * s))
     }
