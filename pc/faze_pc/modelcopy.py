@@ -11,6 +11,7 @@ import threading
 from . import config as cfg
 
 CHUNK = 512 * 1024
+MIN_BYTES = 100 * 1024 * 1024  # smaller .gguf files are test vocabularies (llama.cpp ships dozens of ggml-vocab-*.gguf), not models you can chat with
 CHATML = '''TEMPLATE """{{- range .Messages }}<|im_start|>{{ .Role }}
 {{ .Content }}<|im_end|>
 {{ end }}<|im_start|>assistant
@@ -34,6 +35,17 @@ def modelfile(path):
     return "FROM %s\n%s" % (path, CHATML)
 
 
+def real_model(m):
+    """Chat models only: not llama.cpp's vocabulary test files, and not anything too small to be a model."""
+    name = str(m.get("name", "")).lower()
+    return "vocab" not in name and int(m.get("size", 0) or 0) >= MIN_BYTES
+
+
+def shared_dir():
+    """A folder Ollama's own service user can read. Ollama opens the file itself, and a home folder (private on Ubuntu) would refuse it."""
+    return os.path.join("/var/tmp", "faze-models-%d" % os.getuid())
+
+
 def run(argv, timeout=900):
     try:
         r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
@@ -43,10 +55,11 @@ def run(argv, timeout=900):
 
 
 class ModelCopy:
-    def __init__(self, config, request, phone, say, installed, dest=None, which=shutil.which, runner=run):
+    def __init__(self, config, request, phone, say, installed, dest=None, which=shutil.which, runner=run, running=None):
         self.config, self.request, self.phone, self.say = config, request, phone, say
         self.installed = installed  # () -> set of Ollama model names already here
-        self.dest = dest or os.path.join(cfg.data_dir(), "models")
+        self.dest = dest or shared_dir()
+        self.running = running  # () -> whether Ollama answers; None skips the check
         self.which, self.run = which, runner
         self.cancelled = False
         self.created = []
@@ -54,16 +67,19 @@ class ModelCopy:
     def go(self):
         if not self.which("ollama"):
             return self.fail("Ollama is not installed on this PC. Install it first:  curl -fsSL https://ollama.com/install.sh | sh")
+        if self.running is not None and not self.running():
+            return self.fail("Ollama is installed but not running. Start it with:  systemctl start ollama   (or run  ollama serve  in a terminal), then try again.")
         try:
             listing = self.request(self.phone, {"t": "models_list"}, 60)
         except Exception as e:
             return self.fail("Could not ask the phone: %s" % e)
         if listing.get("t") == "error":
             return self.fail(listing.get("message", "the phone said no"))
-        models = listing.get("models", [])
+        models = [m for m in listing.get("models", []) if real_model(m)]
         if not models:
             return self.fail("The phone has no offline models it can share (it looks in Termux, Download and models).")
-        os.makedirs(self.dest, mode=0o700, exist_ok=True)
+        os.makedirs(self.dest, exist_ok=True)
+        os.chmod(self.dest, 0o755)  # readable by the Ollama service; the files are removed again once Ollama has its own copy
         have = self.installed()
         total = len(models)
         for i, m in enumerate(models):

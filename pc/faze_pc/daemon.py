@@ -350,7 +350,7 @@ class Daemon:
         if not pid:
             say("Your phone is not connected. Link it first (Devices).", 0.0, True, False)
             return
-        job = ModelCopy(self.config, self.links.request, pid, say, lambda: {m["name"] for m in modelsheet.ollama_models(self.config)[1]})
+        job = ModelCopy(self.config, self.links.request, pid, say, lambda: {m["name"] for m in modelsheet.ollama_models(self.config)[1]}, running=lambda: modelsheet.ollama_models(self.config)[0])
         threading.Thread(target=job.go, daemon=True, name="model-copy").start()
 
     def send_models(self, emit):

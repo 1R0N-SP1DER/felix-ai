@@ -35,6 +35,13 @@ class Phone:
 
 
 class CopyTest(unittest.TestCase):
+    def setUp(self):
+        self._min = modelcopy.MIN_BYTES
+        modelcopy.MIN_BYTES = 1  # the fake models here are a few bytes
+
+    def tearDown(self):
+        modelcopy.MIN_BYTES = self._min
+
     def make(self, files, have=(), tools=("ollama",), rc=0, **kw):
         self.dir = tempfile.mkdtemp()
         self.cfg = Config(os.path.join(self.dir, "c.json"))
@@ -68,6 +75,24 @@ class CopyTest(unittest.TestCase):
         self.assertEqual(self.cfg.data["ollama_chat_model"], "lfm2.5:1.2b-q8_0")
         self.assertEqual(self.cfg.data["ollama_deep_model"], "qwen3.5:4b-q4_k_m")
         self.assertTrue(self.says[-1][2] and self.says[-1][3])
+
+    def test_vocabulary_test_files_and_tiny_files_are_not_copied(self):
+        modelcopy.MIN_BYTES = 1000
+        big = os.urandom(2000)
+        mc = self.make({"ggml-vocab-aquila.gguf": big, "tiny.gguf": b"abc", "LFM2.5-1.2B-Q8_0.gguf": big})
+        mc.go()
+        creates = [c[2] for c in self.cmds if c[:2] == ["ollama", "create"]]
+        self.assertEqual(creates, ["lfm2.5:1.2b-q8_0"])
+
+    def test_says_so_when_ollama_is_not_running(self):
+        mc = self.make({"x.gguf": b"abc"})
+        mc.running = lambda: False
+        mc.go()
+        self.assertIn("not running", self.says[-1][0])
+        self.assertEqual(self.phone.sent, [])
+
+    def test_default_folder_is_readable_by_the_ollama_service(self):
+        self.assertTrue(modelcopy.shared_dir().startswith("/var/tmp/"))
 
     def test_the_downloaded_bytes_are_exact(self):
         big = os.urandom(1_300_000)
