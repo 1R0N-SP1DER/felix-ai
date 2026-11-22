@@ -76,6 +76,16 @@ class UInputTest(unittest.TestCase):
         with self.assertRaises(KeyError):
             u.named_key("nope")
 
+    def test_combo_presses_in_order_and_releases_in_reverse(self):
+        u = self.make()
+        u.open()
+        u.combo(["ctrl", "shift", "t"])
+        self.assertEqual(self.k.events(2), [(1, 29, 1), (1, 42, 1), (1, 20, 1), (1, 20, 0), (1, 42, 0), (1, 29, 0)])
+        u.hold("alt", True)
+        self.assertEqual(self.k.events(2)[-1], (1, 56, 1))
+        with self.assertRaises(KeyError):
+            u.combo(["ctrl", "nope"])
+
     def test_cannot_type_what_a_us_keyboard_lacks(self):
         self.assertTrue(uinput.can_type("Hello, World! 123\n"))
         self.assertFalse(uinput.can_type("héllo"))
