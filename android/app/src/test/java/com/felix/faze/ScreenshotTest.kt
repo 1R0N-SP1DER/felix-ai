@@ -76,6 +76,10 @@ class ScreenshotTest {
         RemoteView("Felix-PC", desktop(), "", "", remote(), {}, {}, startKeysOpen = true, startArmed = setOf("ctrl"))
     }
 
+    @Test fun remoteWithTheWebcamSquare() = shot("remote_cam") {
+        RemoteView("Felix-PC", desktop(), "", "", remote(), {}, {}, camFrame = desktop(), cam = true, mic = true)
+    }
+
     @Test fun remoteWithNoComputer() = shot("remote_no_pc") {
         RemoteView(null, null, "", "", remote(), {}, {})
     }
