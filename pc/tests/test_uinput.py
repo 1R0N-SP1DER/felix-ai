@@ -126,3 +126,35 @@ class RemoteDirectTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PadTest(unittest.TestCase):
+    def make(self):
+        k = Kernel()
+        return k, uinput.UInput(opener=k.opener, ioctl=k.ioctl, writer=k.write, closer=lambda fd: None, sleep=lambda s: None)
+
+    def test_pad_makes_a_controller_and_writes_only_changes(self):
+        k, u = self.make()
+        u.pad({"lx": 1.0, "ly": 0, "rx": 0, "ry": -0.5, "buttons": ["A", "LT", "UP"]})
+        ev = k.events(1)
+        self.assertIn((uinput.EV_KEY, 0x130, 1), ev)
+        self.assertIn((uinput.EV_ABS, 0x00, 32767), ev)
+        self.assertIn((uinput.EV_ABS, 0x04, -16384), ev)
+        self.assertIn((uinput.EV_ABS, 0x02, 255), ev)
+        self.assertIn((uinput.EV_ABS, 0x11, -1), ev)
+        before = len(k.writes[1])
+        u.pad({"lx": 1.0, "ly": 0, "rx": 0, "ry": -0.5, "buttons": ["A", "LT", "UP"]})
+        self.assertEqual(before, len(k.writes[1]))
+        u.pad({"buttons": []})
+        later = k.events(1)[len(ev):]
+        self.assertIn((uinput.EV_KEY, 0x130, 0), later)
+        self.assertIn((uinput.EV_ABS, 0x00, 0), later)
+        self.assertIn((uinput.EV_ABS, 0x11, 0), later)
+
+    def test_remote_pad_message_without_state_is_an_error(self):
+        k, u = self.make()
+        cfg = Config(); cfg.dir = tmp()
+        from tests.test_remote import RemoteTest
+        r = RemoteControl(cfg, uinput=u)
+        self.assertEqual("error", r.direct({"kind": "pad"})["t"])
+        self.assertEqual("pc_input_ok", r.direct({"kind": "pad", "state": {"buttons": ["B"]}})["t"])

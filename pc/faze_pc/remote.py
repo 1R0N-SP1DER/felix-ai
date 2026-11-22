@@ -133,6 +133,11 @@ class RemoteControl:
                     u.hold(str(msg.get("key", "")), kind == "keydown")
                 except KeyError:
                     return {"t": "error", "message": "unknown key"}
+            elif kind == "pad":
+                state = msg.get("state")
+                if not isinstance(state, dict):
+                    return {"t": "error", "message": "no controller state"}
+                u.pad(state)
             elif kind == "combo":
                 try:
                     u.combo(self.combo_names(msg))
