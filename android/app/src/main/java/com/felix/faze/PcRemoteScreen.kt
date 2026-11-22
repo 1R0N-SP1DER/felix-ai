@@ -286,7 +286,14 @@ fun RemoteView(
                     KeyChip("F5", false) { press("f5") }
                 }
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    TextField(typed, { typed = it }, modifier = Modifier.weight(1f), singleLine = true, placeholder = { Text("Type on the PC") })
+                    TextField(
+                        typed, { typed = it }, modifier = Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(12.dp), placeholder = { Text("Type on the PC") },
+                        colors = androidx.compose.material3.TextFieldDefaults.colors(
+                            focusedContainerColor = Palette.Surface2, unfocusedContainerColor = Palette.Surface2, focusedTextColor = Palette.Text, unfocusedTextColor = Palette.Text,
+                            focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, cursorColor = Palette.Accent,
+                            focusedPlaceholderColor = Palette.Dim, unfocusedPlaceholderColor = Palette.Dim,
+                        ),
+                    )
                     Text("Send", color = Palette.Accent, modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { if (typed.isNotEmpty()) { remote.text(typed); typed = "" } }.padding(horizontal = 12.dp, vertical = 10.dp))
                 }
             }
