@@ -69,10 +69,10 @@ fun GamepadOverlay(pad: PadState, modifier: Modifier = Modifier) {
         Cluster(Alignment.TopEnd, 28.dp, 8.dp) { PadButton("RT", pad, 64.dp, 38.dp); PadButton("RB", pad, 64.dp, 38.dp, x = (-74).dp) }
         Stick(pad, true, Modifier.align(Alignment.CenterStart).padding(start = 36.dp, bottom = 70.dp))
         Cluster(Alignment.BottomStart, 190.dp, 16.dp) {
-            PadButton("UP", pad, 44.dp, 44.dp, x = 48.dp); PadButton("LEFT", pad, 44.dp, 44.dp, y = 48.dp)
-            PadButton("RIGHT", pad, 44.dp, 44.dp, x = 96.dp, y = 48.dp); PadButton("DOWN", pad, 44.dp, 44.dp, x = 48.dp, y = 96.dp)
+            PadButton("UP", pad, 44.dp, 44.dp, label = "▲", x = 48.dp); PadButton("LEFT", pad, 44.dp, 44.dp, label = "◀", y = 48.dp)
+            PadButton("RIGHT", pad, 44.dp, 44.dp, label = "▶", x = 96.dp, y = 48.dp); PadButton("DOWN", pad, 44.dp, 44.dp, label = "▼", x = 48.dp, y = 96.dp)
         }
-        Cluster(Alignment.CenterEnd, 36.dp, 0.dp) {
+        Cluster(Alignment.CenterEnd, 80.dp, 0.dp) {
             PadButton("Y", pad, 52.dp, 52.dp, x = 58.dp, round = true); PadButton("X", pad, 52.dp, 52.dp, y = 58.dp, round = true)
             PadButton("B", pad, 52.dp, 52.dp, x = 116.dp, y = 58.dp, round = true); PadButton("A", pad, 52.dp, 52.dp, x = 58.dp, y = 116.dp, round = true)
         }
