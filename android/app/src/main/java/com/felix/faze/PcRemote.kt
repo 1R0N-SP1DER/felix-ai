@@ -55,6 +55,8 @@ class PcRemote(private val ask: (JSONObject, Long) -> JSONObject, private val wo
     fun click(button: String = "left", double: Boolean = false) = worker.execute { input("click", "button" to button, "double" to double) }
     fun scroll(lines: Int) = worker.execute { input("scroll", "dy" to lines, quick = true) }
     fun key(name: String) = worker.execute { input("key", "key" to name) }
+    /** The whole controller state (sticks and held buttons); sent without waiting. */
+    fun pad(state: JSONObject) = worker.execute { input("pad", "state" to state, quick = true) }
     fun text(text: String) = worker.execute { input("text", "text" to text) }
 
     /** Presses the keys together, like Ctrl+Shift+T: in order, released in reverse. */

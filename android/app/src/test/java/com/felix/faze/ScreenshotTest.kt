@@ -80,6 +80,10 @@ class ScreenshotTest {
         RemoteView("Felix-PC", desktop(), "", "", remote(), {}, {}, camFrame = desktop(), cam = true, mic = true)
     }
 
+    @Test fun remoteWithTheGamepad() = shot("remote_pad") {
+        RemoteView("Felix-PC", desktop(), "", "", remote(), {}, {}, startPad = true)
+    }
+
     @Test fun remoteWithNoComputer() = shot("remote_no_pc") {
         RemoteView(null, null, "", "", remote(), {}, {})
     }
