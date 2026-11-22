@@ -151,7 +151,7 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
     }
     DisposableEffect(Unit) { onDispose { Thread { remote.stopStream() }.start() } }
 
-    RemoteView(pc?.name, frame, problem, note, remote, onBack) { landscape = !landscape }
+    RemoteView(pc?.name, frame, problem, note, remote, onBack, onRotate = { landscape = !landscape })
 }
 
 /**
