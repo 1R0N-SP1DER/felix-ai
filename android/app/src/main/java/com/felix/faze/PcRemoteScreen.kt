@@ -78,20 +78,12 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
     val pc = core.deviceRows().firstOrNull { it.connected }
     var frame by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     var problem by remember { mutableStateOf("") }
-    var typed by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
     val remote = remember { core.pcRemote { problem = it } }
 
     val ctx = LocalContext.current
     val act = remember(ctx) { ctx.findActivity() }
     var landscape by remember { mutableStateOf(true) }
-    var toolsOpen by remember { mutableStateOf(true) }
-    var keysOpen by remember { mutableStateOf(false) }
-    var speed by remember { mutableStateOf(PointerSpeed.NORMAL) }
-    var armed by remember { mutableStateOf(setOf<String>()) }
-    var pointerMenu by remember { mutableStateOf(false) }
-    var moreMenu by remember { mutableStateOf(false) }
-
     BackHandler { onBack() }
 
     // Full screen: no status or navigation bar (a swipe from the edge shows them for a moment), and the orientation is ours while this is open.
@@ -159,6 +151,27 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
     }
     DisposableEffect(Unit) { onDispose { Thread { remote.stopStream() }.start() } }
 
+    RemoteView(pc?.name, frame, problem, note, remote, onBack, onRotate = { landscape = !landscape })
+}
+
+/**
+ * What is drawn over the PC's picture: the touchpad, the scroll strip, the floating pill and the key bar. It holds no connection of its own,
+ * so it can be drawn with a made-up picture (the screenshot tests do exactly that).
+ */
+@Composable
+fun RemoteView(
+    pcName: String?, frame: androidx.compose.ui.graphics.ImageBitmap?, problem: String, note: String, remote: PcRemote, onBack: () -> Unit, onRotate: () -> Unit,
+    startKeysOpen: Boolean = false, startArmed: Set<String> = emptySet(),
+) {
+    val pc = pcName
+    var typed by remember { mutableStateOf("") }
+    var toolsOpen by remember { mutableStateOf(true) }
+    var keysOpen by remember { mutableStateOf(startKeysOpen) }
+    var speed by remember { mutableStateOf(PointerSpeed.NORMAL) }
+    var armed by remember { mutableStateOf(startArmed) }
+    var pointerMenu by remember { mutableStateOf(false) }
+    var moreMenu by remember { mutableStateOf(false) }
+
     fun press(key: String) {
         remote.combo(RemoteKeys.combo(armed, key))
         armed = emptySet()
@@ -224,7 +237,7 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
                         }
                     }
                     RemoteTool(Ico.KEYBOARD, keysOpen) { keysOpen = !keysOpen }
-                    RemoteTool(Ico.ROTATE, false) { landscape = !landscape }
+                    RemoteTool(Ico.ROTATE, false) { onRotate() }
                     Box {
                         RemoteTool(Ico.DOTS, moreMenu) { moreMenu = true }
                         DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
@@ -273,7 +286,14 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
                     KeyChip("F5", false) { press("f5") }
                 }
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    TextField(typed, { typed = it }, modifier = Modifier.weight(1f), singleLine = true, placeholder = { Text("Type on the PC") })
+                    TextField(
+                        typed, { typed = it }, modifier = Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(12.dp), placeholder = { Text("Type on the PC") },
+                        colors = androidx.compose.material3.TextFieldDefaults.colors(
+                            focusedContainerColor = Palette.Surface2, unfocusedContainerColor = Palette.Surface2, focusedTextColor = Palette.Text, unfocusedTextColor = Palette.Text,
+                            focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, cursorColor = Palette.Accent,
+                            focusedPlaceholderColor = Palette.Dim, unfocusedPlaceholderColor = Palette.Dim,
+                        ),
+                    )
                     Text("Send", color = Palette.Accent, modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { if (typed.isNotEmpty()) { remote.text(typed); typed = "" } }.padding(horizontal = 12.dp, vertical = 10.dp))
                 }
             }
