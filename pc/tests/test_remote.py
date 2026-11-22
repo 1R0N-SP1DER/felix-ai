@@ -91,3 +91,31 @@ class RemoteTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ComboTest(unittest.TestCase):
+    def make(self, tools):
+        cfg = Config(os.path.join(tmp(), "c.json"))
+        cfg.data["allow_remote"] = True
+        self.rig = Rig(tools)
+        return RemoteControl(cfg, which=self.rig.which, runner=self.rig.run, uinput=NoUInput())
+
+    def test_combo_and_held_keys_with_ydotool(self):
+        r = self.make(["ydotool"])
+        self.assertEqual(r.handle({"t": "pc_input", "kind": "combo", "keys": ["ctrl", "shift", "t"]})["t"], "pc_input_ok")
+        self.assertEqual(self.rig.calls[0], ["ydotool", "key", "29:1", "42:1", "20:1", "20:0", "42:0", "29:0"])
+        r.handle({"t": "pc_input", "kind": "keydown", "key": "alt"})
+        r.handle({"t": "pc_input", "kind": "keyup", "key": "alt"})
+        self.assertEqual(self.rig.calls[1], ["ydotool", "key", "56:1"])
+        self.assertEqual(self.rig.calls[2], ["ydotool", "key", "56:0"])
+
+    def test_combo_with_xdotool(self):
+        r = self.make(["xdotool"])
+        r.handle({"t": "pc_input", "kind": "combo", "keys": ["ctrl", "c"]})
+        self.assertEqual(self.rig.calls[0], ["xdotool", "key", "ctrl+c"])
+
+    def test_unknown_keys_are_refused(self):
+        r = self.make(["ydotool"])
+        self.assertEqual(r.handle({"t": "pc_input", "kind": "combo", "keys": ["ctrl", "nope"]})["t"], "error")
+        self.assertEqual(r.handle({"t": "pc_input", "kind": "combo", "keys": []})["t"], "error")
+        self.assertEqual(self.rig.calls, [])

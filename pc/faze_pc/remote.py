@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 
 from .stream import ScreenStream
-from .uinput import UInput, can_type
+from .uinput import UInput, can_type, code_for
 
 MAX_JPEG = 800 * 1024
 BUTTONS = {"left": "0xC0", "right": "0xC1", "middle": "0xC2"}
@@ -128,6 +128,16 @@ class RemoteControl:
                     u.named_key(str(msg.get("key", "")).lower())
                 except KeyError:
                     return {"t": "error", "message": "unknown key"}
+            elif kind == "keydown" or kind == "keyup":
+                try:
+                    u.hold(str(msg.get("key", "")), kind == "keydown")
+                except KeyError:
+                    return {"t": "error", "message": "unknown key"}
+            elif kind == "combo":
+                try:
+                    u.combo(self.combo_names(msg))
+                except KeyError:
+                    return {"t": "error", "message": "unknown key"}
             elif kind == "text":
                 text = str(msg.get("text", ""))[:500]
                 if not can_type(text):
@@ -143,6 +153,11 @@ class RemoteControl:
             except Exception:
                 pass
             return None
+
+    @staticmethod
+    def combo_names(msg):
+        keys = msg.get("keys", [])
+        return [str(k).lower() for k in keys[:5]] if isinstance(keys, list) else []
 
     def input(self, msg):
         fast = self.direct(msg)
@@ -172,6 +187,21 @@ class RemoteControl:
             if not k:
                 return {"t": "error", "message": "unknown key"}
             argv = ["ydotool", "key"] + k[0].split() if be == "ydotool" else ["xdotool", "key", k[1]]
+        elif kind in ("keydown", "keyup", "combo"):
+            names = [str(msg.get("key", "")).lower()] if kind != "combo" else self.combo_names(msg)
+            codes = [code_for(n) for n in names]
+            if not names or None in codes:
+                return {"t": "error", "message": "unknown key"}
+            if be == "ydotool":
+                if kind == "combo":
+                    seq = ["%d:1" % c for c in codes] + ["%d:0" % c for c in reversed(codes)]
+                else:
+                    seq = ["%d:%d" % (codes[0], 1 if kind == "keydown" else 0)]
+                argv = ["ydotool", "key"] + seq
+            else:
+                xnames = {"shift": "shift", "ctrl": "ctrl", "alt": "alt", "super": "super", "enter": "Return", "esc": "Escape", "backspace": "BackSpace", "tab": "Tab", "space": "space"}
+                x = [xnames.get(n, n) for n in names]
+                argv = ["xdotool", {"keydown": "keydown", "keyup": "keyup"}.get(kind, "key"), "+".join(x) if kind == "combo" else x[0]]
         elif kind == "text":
             text = str(msg.get("text", ""))[:500]
             if not text:

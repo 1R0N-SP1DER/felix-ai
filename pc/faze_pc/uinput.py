@@ -14,7 +14,8 @@ BTN = {"left": 0x110, "right": 0x111, "middle": 0x112}
 KEY_LEFTSHIFT = 42
 
 NAMED = {"enter": 28, "backspace": 14, "delete": 111, "tab": 15, "esc": 1, "space": 57, "up": 103, "down": 108, "left": 105, "right": 106,
-         "home": 102, "end": 107, "pageup": 104, "pagedown": 109, "super": 125, "volup": 115, "voldown": 114, "mute": 113, "playpause": 164}
+         "home": 102, "end": 107, "pageup": 104, "pagedown": 109, "super": 125, "volup": 115, "voldown": 114, "mute": 113, "playpause": 164,
+         "shift": 42, "ctrl": 29, "alt": 56, "f1": 59, "f2": 60, "f3": 61, "f4": 62, "f5": 63, "f6": 64, "f7": 65, "f8": 66, "f9": 67, "f10": 68, "f11": 87, "f12": 88}
 
 
 def _layout():
@@ -39,6 +40,16 @@ def _layout():
 
 
 LAYOUT = _layout()
+
+
+def code_for(name):
+    """The key code for a name: a named key (shift, ctrl, f5...) or a single letter, digit or symbol. None when unknown."""
+    name = str(name).lower()
+    if name in NAMED:
+        return NAMED[name]
+    if len(name) == 1 and name in LAYOUT:
+        return LAYOUT[name][0]
+    return None
 
 
 def can_type(text):
@@ -125,6 +136,20 @@ class UInput:
         if code is None:
             raise KeyError(name)
         self.key(code)
+
+    def hold(self, name, down):
+        """Presses or releases one key and leaves it so (a modifier held while the next thing is tapped)."""
+        code = code_for(name)
+        if code is None:
+            raise KeyError(name)
+        self._emit(self.keyboard, [(EV_KEY, code, 1 if down else 0)])
+
+    def combo(self, names):
+        """Presses the keys in order and releases them in reverse, like Ctrl+Shift+T."""
+        codes = [code_for(n) for n in names]
+        if not codes or None in codes:
+            raise KeyError(",".join(map(str, names)))
+        self._emit(self.keyboard, [(EV_KEY, c, 1) for c in codes] + [(EV_KEY, c, 0) for c in reversed(codes)])
 
     def type_text(self, text):
         for c in text:
