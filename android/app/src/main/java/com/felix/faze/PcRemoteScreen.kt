@@ -196,7 +196,7 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
 fun RemoteView(
     pcName: String?, frame: androidx.compose.ui.graphics.ImageBitmap?, problem: String, note: String, remote: PcRemote, onBack: () -> Unit, onRotate: () -> Unit,
     startKeysOpen: Boolean = false, startArmed: Set<String> = emptySet(),
-    camFrame: androidx.compose.ui.graphics.ImageBitmap? = null, cam: Boolean = false, mic: Boolean = false, sound: Boolean = true, onToggle: (String) -> Unit = {},
+    camFrame: androidx.compose.ui.graphics.ImageBitmap? = null, cam: Boolean = false, mic: Boolean = false, sound: Boolean = true, onToggle: (String) -> Unit = {}, startPad: Boolean = false,
 ) {
     val pc = pcName
     var typed by remember { mutableStateOf("") }
@@ -206,6 +206,8 @@ fun RemoteView(
     var armed by remember { mutableStateOf(startArmed) }
     var pointerMenu by remember { mutableStateOf(false) }
     var moreMenu by remember { mutableStateOf(false) }
+    var padOn by remember { mutableStateOf(startPad) }
+    val padState = remember(remote) { PadState { remote.pad(it) } }
     var camX by remember { mutableStateOf(24f) }
     var camY by remember { mutableStateOf(90f) }
 
@@ -257,6 +259,8 @@ fun RemoteView(
             contentAlignment = Alignment.Center,
         ) { Text("↕", color = Palette.Dim, fontSize = 15.sp) }
 
+        if (padOn) GamepadOverlay(padState)
+
         // The PC's webcam: a small square you can drag anywhere. Tap the cross to turn it off.
         if (cam) {
             Box(
@@ -292,6 +296,7 @@ fun RemoteView(
                     Box {
                         RemoteTool(Ico.DOTS, moreMenu) { moreMenu = true }
                         DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
+                            DropdownMenuItem(text = { Text((if (padOn) "✓  " else "     ") + "Gamepad") }, onClick = { moreMenu = false; padOn = !padOn; if (!padOn) padState.releaseAll() })
                             DropdownMenuItem(text = { Text((if (cam) "✓  " else "     ") + "PC webcam") }, onClick = { moreMenu = false; onToggle("cam") })
                             DropdownMenuItem(text = { Text((if (mic) "✓  " else "     ") + "Listen to PC mic") }, onClick = { moreMenu = false; onToggle("mic") })
                             DropdownMenuItem(text = { Text((if (sound) "✓  " else "     ") + "PC sound on this phone") }, onClick = { moreMenu = false; onToggle("sound") })
