@@ -1,5 +1,6 @@
 package com.felix.faze
 
+import androidx.compose.runtime.remember
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.LinearGradient
@@ -82,6 +83,15 @@ class ScreenshotTest {
 
     @Test fun remoteWithTheGamepad() = shot("remote_pad") {
         RemoteView("Felix-PC", desktop(), "", "", remote(), {}, {}, startPad = true)
+    }
+
+    @Test fun remoteEditingTheGamepad() = shot("remote_pad_edit") {
+        RemoteView("Felix-PC", desktop(), "", "", remote(), {}, {}, startEdit = true)
+    }
+
+    @Test fun remoteWithTheRacingLayout() = shot("remote_pad_racing") {
+        val l = remember { PadLayouts.memory().also { it.select("Racing") } }
+        RemoteView("Felix-PC", desktop(), "", "", remote(), {}, {}, startPad = true, layouts = l)
     }
 
     @Test fun remoteWithNoComputer() = shot("remote_no_pc") {

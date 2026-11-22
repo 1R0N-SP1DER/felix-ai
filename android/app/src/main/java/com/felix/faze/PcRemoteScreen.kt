@@ -181,9 +181,15 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
         }
     }
 
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val layouts = remember {
+        val prefs = ctx.getSharedPreferences("faze_pad", android.content.Context.MODE_PRIVATE)
+        PadLayouts({ prefs.getString("layouts", null) }, { prefs.edit().putString("layouts", it).apply() })
+    }
     RemoteView(
         pc?.name, frame, problem, note, remote, onBack, onRotate = { landscape = !landscape },
         camFrame = camFrame, cam = cam, mic = mic, sound = sound,
+        layouts = layouts,
         onToggle = { which -> when (which) { "cam" -> cam = !cam; "mic" -> mic = !mic; "sound" -> sound = !sound } },
     )
 }
@@ -196,7 +202,7 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
 fun RemoteView(
     pcName: String?, frame: androidx.compose.ui.graphics.ImageBitmap?, problem: String, note: String, remote: PcRemote, onBack: () -> Unit, onRotate: () -> Unit,
     startKeysOpen: Boolean = false, startArmed: Set<String> = emptySet(),
-    camFrame: androidx.compose.ui.graphics.ImageBitmap? = null, cam: Boolean = false, mic: Boolean = false, sound: Boolean = true, onToggle: (String) -> Unit = {}, startPad: Boolean = false,
+    camFrame: androidx.compose.ui.graphics.ImageBitmap? = null, cam: Boolean = false, mic: Boolean = false, sound: Boolean = true, onToggle: (String) -> Unit = {}, startPad: Boolean = false, startEdit: Boolean = false, layouts: PadLayouts = remember { PadLayouts.memory() },
 ) {
     val pc = pcName
     var typed by remember { mutableStateOf("") }
@@ -206,7 +212,8 @@ fun RemoteView(
     var armed by remember { mutableStateOf(startArmed) }
     var pointerMenu by remember { mutableStateOf(false) }
     var moreMenu by remember { mutableStateOf(false) }
-    var padOn by remember { mutableStateOf(startPad) }
+    var padOn by remember { mutableStateOf(startPad || startEdit) }
+    var padEdit by remember { mutableStateOf(startEdit) }
     val padState = remember(remote) { PadState { remote.pad(it) } }
     var camX by remember { mutableStateOf(24f) }
     var camY by remember { mutableStateOf(90f) }
@@ -259,7 +266,7 @@ fun RemoteView(
             contentAlignment = Alignment.Center,
         ) { Text("↕", color = Palette.Dim, fontSize = 15.sp) }
 
-        if (padOn) GamepadOverlay(padState)
+        if (padOn) GamepadOverlay(padState, layouts, padEdit, onDone = { padEdit = false })
 
         // The PC's webcam: a small square you can drag anywhere. Tap the cross to turn it off.
         if (cam) {
@@ -296,7 +303,11 @@ fun RemoteView(
                     Box {
                         RemoteTool(Ico.DOTS, moreMenu) { moreMenu = true }
                         DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
-                            DropdownMenuItem(text = { Text((if (padOn) "✓  " else "     ") + "Gamepad") }, onClick = { moreMenu = false; padOn = !padOn; if (!padOn) padState.releaseAll() })
+                            DropdownMenuItem(text = { Text((if (padOn) "✓  " else "     ") + "Gamepad") }, onClick = { moreMenu = false; padOn = !padOn; padEdit = false; if (!padOn) padState.releaseAll() })
+                            if (padOn) {
+                                DropdownMenuItem(text = { Text("     Next layout (" + layouts.current + ")") }, onClick = { moreMenu = false; layouts.next() })
+                                DropdownMenuItem(text = { Text("     Edit gamepad layout") }, onClick = { moreMenu = false; padEdit = true })
+                            }
                             DropdownMenuItem(text = { Text((if (cam) "✓  " else "     ") + "PC webcam") }, onClick = { moreMenu = false; onToggle("cam") })
                             DropdownMenuItem(text = { Text((if (mic) "✓  " else "     ") + "Listen to PC mic") }, onClick = { moreMenu = false; onToggle("mic") })
                             DropdownMenuItem(text = { Text((if (sound) "✓  " else "     ") + "PC sound on this phone") }, onClick = { moreMenu = false; onToggle("sound") })
