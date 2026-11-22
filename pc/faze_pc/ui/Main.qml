@@ -268,7 +268,7 @@ ApplicationWindow {
                             ReplyIcon { kind: "speaker"; onClicked: bridge.speak(model.text) }
                             ReplyIcon { kind: "up"; tint: feedback > 0 ? win.accent : win.dim; onClicked: bridge.rate(msgId, 1) }
                             ReplyIcon { kind: "down"; tint: feedback < 0 ? win.bad : win.dim; onClicked: bridge.rate(msgId, -1) }
-                            ReplyIcon { kind: "refresh"; visible: win.isLastReply(index) && !bridge.busy; onClicked: { var q = win.lastAsk(); if (q !== "") { win.dropLastPair(); bridge.retry(q) } } }
+                            ReplyIcon { kind: "refresh"; visible: win.isLastReply(index) && bridge !== null && !bridge.busy; onClicked: { var q = win.lastAsk(); if (q !== "") { win.dropLastPair(); bridge.retry(q) } } }
                         }
                     }
                 }

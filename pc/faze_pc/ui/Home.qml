@@ -58,9 +58,8 @@ Item {
             color: "#A5B1CA"
             font.pixelSize: 15
         }
-        Flow {
+        Row {
             Layout.alignment: Qt.AlignHCenter
-            Layout.fillWidth: true
             spacing: 8
             Repeater {
                 model: root.starters
