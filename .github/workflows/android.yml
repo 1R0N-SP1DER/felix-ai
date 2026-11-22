@@ -32,6 +32,12 @@ jobs:
         working-directory: android
         run: gradle testDebugUnitTest --stacktrace
 
+      - name: Print the screenshots into the log, so they can be read without downloading
+        if: always()
+        working-directory: android/app/build/screenshots
+        run: |
+          for f in *.png; do [ -f "$f" ] && { echo "BEGIN64 $f"; base64 -w0 "$f"; echo; echo "END64 $f"; }; done || true
+
       - name: Build the debug APK
         working-directory: android
         run: gradle assembleDebug --stacktrace
@@ -42,6 +48,14 @@ jobs:
         with:
           name: test-report
           path: android/app/build/reports/tests/
+
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: android/app/build/screenshots/*.png
+          if-no-files-found: ignore
 
       - name: Keep the APK
         uses: actions/upload-artifact@v4

@@ -50,6 +50,7 @@ android {
     }
     testOptions {
         unitTests.isReturnDefaultValues = true
+        unitTests.isIncludeAndroidResources = true // Robolectric, for the screenshot tests
     }
 }
 
@@ -76,4 +77,8 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    // Screenshot tests: the screens are drawn on the JVM with Robolectric's real graphics and saved as pictures (printed in the CI log).
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
