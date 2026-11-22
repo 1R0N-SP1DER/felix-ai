@@ -181,9 +181,9 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
         }
     }
 
-    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val padCtx = androidx.compose.ui.platform.LocalContext.current
     val layouts = remember {
-        val prefs = ctx.getSharedPreferences("faze_pad", android.content.Context.MODE_PRIVATE)
+        val prefs = padCtx.getSharedPreferences("faze_pad", android.content.Context.MODE_PRIVATE)
         PadLayouts({ prefs.getString("layouts", null) }, { prefs.edit().putString("layouts", it).apply() })
     }
     RemoteView(
