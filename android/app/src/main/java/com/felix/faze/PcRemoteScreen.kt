@@ -62,6 +62,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.asAndroidBitmap
 
 private fun Context.findActivity(): Activity? {
     var c: Context = this
@@ -186,8 +188,47 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
         val prefs = padCtx.getSharedPreferences("faze_pad", android.content.Context.MODE_PRIVATE)
         PadLayouts({ prefs.getString("layouts", null) }, { prefs.edit().putString("layouts", it).apply() })
     }
+    var panel by remember { mutableStateOf("") }
+    var procs by remember { mutableStateOf<List<ProcRow>>(emptyList()) }
+    var devices by remember { mutableStateOf<List<DeviceRow>>(emptyList()) }
+    var panelError by remember { mutableStateOf("") }
+    LaunchedEffect(panel) {
+        while (panel.isNotEmpty()) {
+            try {
+                val r = withContext(Dispatchers.IO) { core.pcAsk(JSONObject().put("t", if (panel == "tasks") "pc_procs" else "pc_devices"), 15_000) }
+                if (r.optString("t") == "error") throw java.io.IOException(r.optString("message"))
+                if (panel == "tasks") procs = r.getJSONArray("procs").let { a -> (0 until a.length()).map { a.getJSONObject(it).let { o -> ProcRow(o.getInt("pid"), o.getString("name"), o.optDouble("cpu"), o.optDouble("mem")) } } }
+                else devices = r.getJSONArray("devices").let { a -> (0 until a.length()).map { a.getJSONObject(it).let { o -> DeviceRow(o.getString("kind"), o.getString("name")) } } }
+                panelError = ""
+            } catch (e: Exception) { panelError = e.message ?: "the PC did not answer" }
+            delay(if (panel == "tasks") 2500 else 8000)
+        }
+    }
+    val scope = rememberCoroutineScope()
+    fun act(what: String) {
+        when {
+            what == "tasks" || what == "devices" -> { panel = what; procs = emptyList(); devices = emptyList(); panelError = "" }
+            what == "close" -> panel = ""
+            what == "shot" -> {
+                val f = frame
+                android.widget.Toast.makeText(padCtx, if (f != null && saveToGallery(padCtx, f.asAndroidBitmap(), "faze-pc-" + System.currentTimeMillis())) "Saved to Pictures/Faze" else "No picture to save yet", android.widget.Toast.LENGTH_SHORT).show()
+            }
+            what == "photo" -> {
+                val f = camFrame
+                android.widget.Toast.makeText(padCtx, if (f != null && saveToGallery(padCtx, f.asAndroidBitmap(), "faze-cam-" + System.currentTimeMillis())) "Photo saved to Pictures/Faze" else "Turn on the remote camera first", android.widget.Toast.LENGTH_SHORT).show()
+            }
+            what.startsWith("end:") || what.startsWith("force:") -> scope.launch {
+                val pid = what.substringAfter(":").toIntOrNull() ?: return@launch
+                try {
+                    val r = withContext(Dispatchers.IO) { core.pcAsk(JSONObject().put("t", "pc_kill").put("pid", pid).put("force", what.startsWith("force:")), 10_000) }
+                    panelError = if (r.optString("t") == "error") r.optString("message") else ""
+                } catch (e: Exception) { panelError = e.message ?: "the PC did not answer" }
+            }
+        }
+    }
     RemoteView(
         pc?.name, frame, problem, note, remote, onBack, onRotate = { landscape = !landscape },
+        panel = panel, procs = procs, devices = devices, panelError = panelError, onAction = { act(it) },
         camFrame = camFrame, cam = cam, mic = mic, sound = sound,
         layouts = layouts,
         onToggle = { which -> when (which) { "cam" -> cam = !cam; "mic" -> mic = !mic; "sound" -> sound = !sound } },
@@ -203,6 +244,7 @@ fun RemoteView(
     pcName: String?, frame: androidx.compose.ui.graphics.ImageBitmap?, problem: String, note: String, remote: PcRemote, onBack: () -> Unit, onRotate: () -> Unit,
     startKeysOpen: Boolean = false, startArmed: Set<String> = emptySet(),
     camFrame: androidx.compose.ui.graphics.ImageBitmap? = null, cam: Boolean = false, mic: Boolean = false, sound: Boolean = true, onToggle: (String) -> Unit = {}, startPad: Boolean = false, startEdit: Boolean = false, layouts: PadLayouts = remember { PadLayouts.memory() },
+    panel: String = "", procs: List<ProcRow> = emptyList(), devices: List<DeviceRow> = emptyList(), panelError: String = "", onAction: (String) -> Unit = {}, startDrawing: Boolean = false,
 ) {
     val pc = pcName
     var typed by remember { mutableStateOf("") }
@@ -212,6 +254,7 @@ fun RemoteView(
     var armed by remember { mutableStateOf(startArmed) }
     var pointerMenu by remember { mutableStateOf(false) }
     var moreMenu by remember { mutableStateOf(false) }
+    var drawing by remember { mutableStateOf(startDrawing) }
     var padOn by remember { mutableStateOf(startPad || startEdit) }
     var padEdit by remember { mutableStateOf(startEdit) }
     val padState = remember(remote) { PadState { remote.pad(it) } }
@@ -268,6 +311,10 @@ fun RemoteView(
 
         if (padOn) GamepadOverlay(padState, layouts, padEdit, onDone = { padEdit = false })
 
+        if (drawing) DrawLayer(onDone = { drawing = false })
+        if (panel == "tasks") TaskPanel(procs, panelError, { pid, force -> onAction((if (force) "force:" else "end:") + pid) }, { onAction("close") })
+        if (panel == "devices") DevicePanel(devices, panelError, { onAction("close") })
+
         // The PC's webcam: a small square you can drag anywhere. Tap the cross to turn it off.
         if (cam) {
             Box(
@@ -308,8 +355,13 @@ fun RemoteView(
                                 DropdownMenuItem(text = { Text("     Next layout (" + layouts.current + ")") }, onClick = { moreMenu = false; layouts.next() })
                                 DropdownMenuItem(text = { Text("     Edit gamepad layout") }, onClick = { moreMenu = false; padEdit = true })
                             }
-                            DropdownMenuItem(text = { Text((if (cam) "✓  " else "     ") + "PC webcam") }, onClick = { moreMenu = false; onToggle("cam") })
-                            DropdownMenuItem(text = { Text((if (mic) "✓  " else "     ") + "Listen to PC mic") }, onClick = { moreMenu = false; onToggle("mic") })
+                            DropdownMenuItem(text = { Text((if (drawing) "✓  " else "     ") + "Drawing") }, onClick = { moreMenu = false; drawing = !drawing })
+                            DropdownMenuItem(text = { Text("     Screen shot") }, onClick = { moreMenu = false; onAction("shot") })
+                            DropdownMenuItem(text = { Text((if (cam) "✓  " else "     ") + "Remote camera (PC webcam)") }, onClick = { moreMenu = false; onToggle("cam") })
+                            DropdownMenuItem(text = { Text("     Take photo (from the webcam)") }, onClick = { moreMenu = false; onAction("photo") })
+                            DropdownMenuItem(text = { Text((if (mic) "✓  " else "     ") + "Remote microphone (listen)") }, onClick = { moreMenu = false; onToggle("mic") })
+                            DropdownMenuItem(text = { Text("     Task manager") }, onClick = { moreMenu = false; onAction("tasks") })
+                            DropdownMenuItem(text = { Text("     Device manager") }, onClick = { moreMenu = false; onAction("devices") })
                             DropdownMenuItem(text = { Text((if (sound) "✓  " else "     ") + "PC sound on this phone") }, onClick = { moreMenu = false; onToggle("sound") })
                             for ((label, key) in listOf("Volume down" to "voldown", "Volume up" to "volup", "Mute" to "mute", "Play / pause" to "playpause", "Right click" to "")) {
                                 DropdownMenuItem(text = { Text(label) }, onClick = { moreMenu = false; if (key.isEmpty()) remote.click("right") else remote.key(key) })
