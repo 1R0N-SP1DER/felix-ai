@@ -18,6 +18,7 @@ ApplicationWindow {
     readonly property color surface: "#0E1421"
     readonly property color surface2: "#151D2F"
     readonly property color accent: "#5CC8FF"
+    readonly property color accent2: "#3D7BFF"
     readonly property color ink: "#04101C"
     readonly property color text: "#E9EEFB"
     readonly property color dim: "#A5B1CA"
@@ -106,60 +107,25 @@ ApplicationWindow {
         border.width: win.floating ? 1 : 0
         border.color: win.line
         clip: true
+        Ambient { anchors.fill: parent; visible: !win.floating }
 
         RowLayout {
             anchors.fill: parent
             spacing: 0
 
-            // Desktop: the phone's chat drawer, always open on the left.
-            Rectangle {
+            // Desktop: the phone's chats drawer as a permanent glass column.
+            Sidebar {
                 visible: !win.floating
-                Layout.preferredWidth: 250
+                Layout.preferredWidth: 292
                 Layout.fillHeight: true
-                color: win.surface
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 14
-                    spacing: 10
-                    Text { text: "FAZE"; color: win.accent; font.pixelSize: 20; font.bold: true; font.letterSpacing: 3 }
-                    Button {
-                        Layout.fillWidth: true
-                        text: "+  New chat"
-                        onClicked: bridge.newChat()
-                        contentItem: Text { text: parent.text; color: win.ink; font.bold: true; horizontalAlignment: Text.AlignHCenter }
-                        background: Rectangle { radius: 14; color: win.accent }
-                    }
-                    ListView {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        clip: true
-                        spacing: 4
-                        model: win.chats
-                        delegate: Rectangle {
-                            width: ListView.view.width
-                            height: 40
-                            radius: 12
-                            color: modelData.id === win.currentChat ? "#2482AFFF" : (hover.hovered ? "#0FFFFFFF" : "transparent")
-                            HoverHandler { id: hover }
-                            Text { anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 8; verticalAlignment: Text.AlignVCenter; text: modelData.title; color: win.text; elide: Text.ElideRight; font.pixelSize: 13 }
-                            MouseArea { anchors.fill: parent; onClicked: bridge.openChat(modelData.id) }
-                        }
-                    }
-                    Button {
-                        Layout.fillWidth: true
-                        text: "Devices   (" + win.devices.filter(function (d) { return d.state === "connected" }).length + " connected)"
-                        onClicked: { bridge.refreshDevices(); devicesPopup.open() }
-                        contentItem: Text { text: parent.text; color: win.dim; horizontalAlignment: Text.AlignHCenter }
-                        background: Rectangle { radius: 14; color: "#08FFFFFF"; border.width: 1; border.color: win.line }
-                    }
-                    Button {
-                        Layout.fillWidth: true
-                        text: "Settings"
-                        onClicked: settings.open()
-                        contentItem: Text { text: parent.text; color: win.dim; horizontalAlignment: Text.AlignHCenter }
-                        background: Rectangle { radius: 14; color: "#08FFFFFF"; border.width: 1; border.color: win.line }
-                    }
-                }
+                chats: win.chats
+                current: win.currentChat
+                connected: win.devices.filter(function (d) { return d.state === "connected" }).length
+                user: (win.cfg && win.cfg.user_name) ? win.cfg.user_name : "You"
+                onNewChat: bridge.newChat()
+                onOpenChat: function (id) { bridge.openChat(id) }
+                onOpenSettings: settings.open()
+                onOpenDevices: { bridge.refreshDevices(); devicesPopup.open() }
             }
 
             ColumnLayout {
@@ -174,13 +140,14 @@ ApplicationWindow {
                     Layout.margins: 14
                     spacing: 8
                     Rectangle {
-                        radius: 14
-                        color: "#08FFFFFF"
+                        radius: 16
+                        color: chipHover.hovered ? "#14FFFFFF" : "#0DFFFFFF"
                         border.width: 1
-                        border.color: win.line
-                        implicitHeight: 32
-                        implicitWidth: chip.implicitWidth + 24
-                        Text { id: chip; anchors.centerIn: parent; text: "●  " + win.shownRoute + "  ▾"; color: win.dim; font.pixelSize: 12 }
+                        border.color: chipHover.hovered ? win.accent : win.line
+                        implicitHeight: 34
+                        implicitWidth: chip.implicitWidth + 28
+                        HoverHandler { id: chipHover }
+                        Text { id: chip; anchors.centerIn: parent; text: "●  " + win.shownRoute + "  ▾"; color: win.text; font.pixelSize: 13 }
                         MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: modelSheet.open() }
                     }
                     Item { Layout.fillWidth: true; Layout.preferredHeight: 32; DragHandler { enabled: win.floating; onActiveChanged: if (active) win.startSystemMove() } }
@@ -224,78 +191,100 @@ ApplicationWindow {
                     spacing: 10
                     model: msgs
                     delegate: Item {
+                        id: turn
                         width: list.width
-                        height: bubble.height + (acts.visible ? acts.height + 2 : 0)
                         readonly property bool mine: role === "user"
-                        Rectangle {
-                            id: bubble
-                            anchors.right: mine ? parent.right : undefined
-                            anchors.left: mine ? undefined : parent.left
-                            width: Math.min(Math.max(body.implicitWidth + 28, role === "approve" ? 230 : 0), list.width * 0.82)
-                            height: body.implicitHeight + 22 + (role === "approve" ? 48 : 0)
-                            radius: 18
-                            color: role === "user" ? "#2482AFFF" : (role === "error" ? "#22FF7A8A" : (role === "approve" ? "#1AFFC857" : win.surface))
-                            border.width: 1
-                            border.color: role === "error" ? win.bad : win.line
-                            Row {
-                                visible: role === "approve"
-                                anchors.left: parent.left; anchors.bottom: parent.bottom
-                                anchors.leftMargin: 14; anchors.bottomMargin: 10
-                                spacing: 8
-                                Rectangle {
-                                    visible: stage === "pending"
-                                    width: 84; height: 30; radius: 15; color: win.accent
-                                    Text { anchors.centerIn: parent; text: "Allow"; color: win.ink; font.bold: true }
-                                    MouseArea { anchors.fill: parent; onClicked: { bridge.answer(reqId, true); win.settle(reqId, "allowed") } }
-                                }
-                                Rectangle {
-                                    visible: stage === "pending"
-                                    width: 84; height: 30; radius: 15; color: "#10FFFFFF"; border.width: 1; border.color: win.line
-                                    Text { anchors.centerIn: parent; text: "Deny"; color: win.dim }
-                                    MouseArea { anchors.fill: parent; onClicked: { bridge.answer(reqId, false); win.settle(reqId, "denied") } }
-                                }
-                                Text { visible: stage !== "pending"; text: stage === "allowed" ? "Allowed" : "Denied"; color: win.muted; font.pixelSize: 12; height: 30; verticalAlignment: Text.AlignVCenter }
-                            }
+                        readonly property int colW: Math.min(780, list.width - 24)
+                        height: col.height + 22
+                        Column {
+                            id: col
+                            x: Math.max(0, (list.width - colW) / 2)
+                            width: colW
+                            y: 10
+                            spacing: 6
                             Text {
-                                id: body
-                                anchors.top: parent.top
-                                anchors.topMargin: 11
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                width: Math.min(implicitWidth, list.width * 0.82 - 28)
-                                text: model.text === "" ? "…" : model.text
-                                color: role === "note" ? win.muted : (role === "error" ? win.bad : win.text)
-                                wrapMode: Text.Wrap
-                                font.pixelSize: 14
-                                textFormat: Text.PlainText
+                                visible: role === "user" || role === "assistant"
+                                text: mine ? "YOU" : "FAZE"
+                                color: win.muted; font.pixelSize: 11; font.weight: Font.DemiBold; font.letterSpacing: 1.6
                             }
-                        }
-                        // Under a Faze reply: copy, listen, thumbs up (teach it), thumbs down (forget it), and retry on the last one.
-                        Row {
-                            id: acts
-                            visible: role === "assistant" && msgId !== ""
-                            anchors.top: bubble.bottom
-                            anchors.topMargin: 2
-                            anchors.left: parent.left
-                            anchors.leftMargin: 6
-                            spacing: 2
-                            ReplyIcon { kind: "copy"; onClicked: bridge.copyText(model.text) }
-                            ReplyIcon { kind: "speaker"; onClicked: bridge.speak(model.text) }
-                            ReplyIcon { kind: "up"; tint: feedback > 0 ? win.accent : win.dim; onClicked: bridge.rate(msgId, 1) }
-                            ReplyIcon { kind: "down"; tint: feedback < 0 ? win.bad : win.dim; onClicked: bridge.rate(msgId, -1) }
-                            ReplyIcon { kind: "refresh"; visible: win.isLastReply(index) && bridge !== null && !bridge.busy; onClicked: { var q = win.lastAsk(); if (q !== "") { win.dropLastPair(); bridge.retry(q) } } }
+                            Item {
+                                width: parent.width
+                                height: Math.max(body.implicitHeight, role === "approve" ? 20 : 0) + (role === "approve" ? 44 : 0)
+                                Rectangle {
+                                    width: 2; height: parent.height; radius: 1
+                                    visible: role === "user" || role === "assistant"
+                                    gradient: Gradient {
+                                        GradientStop { position: 0; color: mine ? win.accent : "#4282AFFF" }
+                                        GradientStop { position: 1; color: mine ? win.accent2 : "#2182AFFF" }
+                                    }
+                                }
+                                Rectangle {
+                                    visible: role === "approve" || role === "error" || role === "note"
+                                    anchors.fill: parent
+                                    radius: role === "note" ? 14 : 14
+                                    color: role === "error" ? "#22FF7A8A" : (role === "approve" ? "#1AF3C969" : "#08FFFFFF")
+                                    border.width: 1
+                                    border.color: role === "error" ? win.bad : (role === "approve" ? "#4DF3C969" : win.line)
+                                }
+                                Text {
+                                    id: body
+                                    x: (role === "approve" || role === "error" || role === "note") ? 14 : 16
+                                    y: (role === "approve" || role === "error" || role === "note") ? 10 : 0
+                                    width: parent.width - x - ((role === "approve" || role === "error" || role === "note") ? 14 : 0)
+                                    text: model.text === "" ? "…" : model.text
+                                    color: role === "note" ? win.muted : (role === "error" ? win.bad : win.text)
+                                    wrapMode: Text.Wrap
+                                    font.pixelSize: 15
+                                    lineHeight: 1.25
+                                    textFormat: Text.PlainText
+                                }
+                                Row {
+                                    visible: role === "approve"
+                                    anchors.left: parent.left; anchors.bottom: parent.bottom
+                                    anchors.leftMargin: 14; anchors.bottomMargin: 8
+                                    spacing: 8
+                                    Rectangle {
+                                        visible: stage === "pending"
+                                        width: 84; height: 30; radius: 15
+                                        gradient: Gradient { orientation: Gradient.Horizontal; GradientStop { position: 0; color: win.accent } GradientStop { position: 1; color: win.accent2 } }
+                                        Text { anchors.centerIn: parent; text: "Allow"; color: win.ink; font.bold: true }
+                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { bridge.answer(reqId, true); win.settle(reqId, "allowed") } }
+                                    }
+                                    Rectangle {
+                                        visible: stage === "pending"
+                                        width: 84; height: 30; radius: 15; color: "#10FFFFFF"; border.width: 1; border.color: win.line
+                                        Text { anchors.centerIn: parent; text: "Deny"; color: win.dim }
+                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { bridge.answer(reqId, false); win.settle(reqId, "denied") } }
+                                    }
+                                    Text { visible: stage !== "pending"; text: stage === "allowed" ? "Allowed" : "Denied"; color: win.muted; font.pixelSize: 12; height: 30; verticalAlignment: Text.AlignVCenter }
+                                }
+                            }
+                            // Under a Faze reply: copy, listen, thumbs up (teach it), thumbs down (forget it), and retry on the last one.
+                            Row {
+                                id: acts
+                                visible: role === "assistant" && msgId !== ""
+                                leftPadding: 10
+                                spacing: 2
+                                ReplyIcon { kind: "copy"; onClicked: bridge.copyText(model.text) }
+                                ReplyIcon { kind: "speaker"; onClicked: bridge.speak(model.text) }
+                                ReplyIcon { kind: "up"; tint: feedback > 0 ? win.accent : win.dim; onClicked: bridge.rate(msgId, 1) }
+                                ReplyIcon { kind: "down"; tint: feedback < 0 ? win.bad : win.dim; onClicked: bridge.rate(msgId, -1) }
+                                ReplyIcon { kind: "refresh"; visible: win.isLastReply(index) && bridge !== null && !bridge.busy; onClicked: { var q = win.lastAsk(); if (q !== "") { win.dropLastPair(); bridge.retry(q) } } }
+                            }
                         }
                     }
                 }
 
                 // The input bar, as on the phone: a rounded field with the send button that turns into stop.
                 Rectangle {
-                    Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignHCenter
+                    Layout.preferredWidth: Math.min(780, parent.width - 28)
                     Layout.margins: 14
-                    radius: 24
-                    color: win.surface2
+                    radius: 28
+                    color: "#A80E1422"
                     border.width: 1
                     border.color: input.activeFocus ? win.accent : win.line
-                    implicitHeight: Math.max(52, Math.min(input.implicitHeight + 18, 160))
+                    implicitHeight: Math.max(56, Math.min(input.implicitHeight + 18, 160))
                     RowLayout {
                         anchors.fill: parent
                         anchors.leftMargin: 18
@@ -320,7 +309,7 @@ ApplicationWindow {
                         Rectangle {
                             Layout.alignment: Qt.AlignVCenter
                             implicitWidth: 38; implicitHeight: 38; radius: 19
-                            color: win.surface; border.width: 1; border.color: win.line
+                            color: "#0DFFFFFF"; border.width: 1; border.color: win.line
                             Row { anchors.centerIn: parent; spacing: 2
                                 Repeater { model: [6, 12, 16, 10, 5]; Rectangle { width: 2.5; height: modelData; radius: 1; color: win.text; anchors.verticalCenter: parent.verticalCenter } } }
                             MouseArea { anchors.fill: parent; onClicked: bridge.startVoiceChat() }
@@ -328,7 +317,7 @@ ApplicationWindow {
                         Rectangle {
                             Layout.alignment: Qt.AlignVCenter
                             implicitWidth: 52; implicitHeight: 38; radius: 19
-                            color: win.surface; border.width: 1; border.color: win.line
+                            color: "#0DFFFFFF"; border.width: 1; border.color: win.line
                             Text { anchors.centerIn: parent; text: "Live"; color: win.accent; font.pixelSize: 13; font.bold: true }
                             MouseArea { anchors.fill: parent; onClicked: bridge.startLive() }
                         }
@@ -343,7 +332,7 @@ ApplicationWindow {
                         Rectangle {
                             Layout.alignment: Qt.AlignVCenter
                             implicitWidth: 38; implicitHeight: 38; radius: 19
-                            color: win.accent
+                            gradient: Gradient { orientation: Gradient.Horizontal; GradientStop { position: 0; color: win.accent } GradientStop { position: 1; color: win.accent2 } }
                             Text { anchors.centerIn: parent; text: (bridge !== null && bridge.busy) ? "■" : "↑"; color: win.ink; font.pixelSize: 17; font.bold: true }
                             MouseArea { anchors.fill: parent; onClicked: { if (bridge.busy) bridge.stop(); else { bridge.send(input.text); input.text = "" } } }
                         }
