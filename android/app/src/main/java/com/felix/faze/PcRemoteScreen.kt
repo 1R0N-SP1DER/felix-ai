@@ -113,7 +113,7 @@ fun PcRemoteScreen(core: FazeCore, overlayOnly: Boolean = false, onBack: () -> U
         if (pc == null || overlayOnly) return@LaunchedEffect
         core.pcFrames.reset()
         try {
-            val q = RemoteQuality.params(core.settings.remoteQuality, ctx.resources.displayMetrics.let { maxOf(it.widthPixels, it.heightPixels) })
+            val q = RemoteQuality.params(core.settings.remoteQuality, ctx.resources.displayMetrics.let { maxOf(it.widthPixels, it.heightPixels) }, core.settings.remoteFps)
             val engine = withContext(Dispatchers.IO) { remote.startStream(q.width, q.fps, q.quality) }
             streaming = true
             problem = ""

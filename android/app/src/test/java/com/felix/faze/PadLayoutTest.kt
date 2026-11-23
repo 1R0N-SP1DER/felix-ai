@@ -73,4 +73,11 @@ class PadKeysTest {
         assertEquals(2400, RemoteQuality.params("match", 2400).width)
         assertEquals(2560, RemoteQuality.params("match", 3200).width)
     }
+
+    @Test fun frameRateIsOneOfTheChoices() {
+        assertEquals(30, RemoteQuality.params("720", 2400).fps)
+        assertEquals(60, RemoteQuality.params("720", 2400, 60).fps)
+        assertEquals(15, RemoteQuality.params("1080", 2400, 15).fps)
+        assertEquals(30, RemoteQuality.params("720", 2400, 24).fps)
+    }
 }
