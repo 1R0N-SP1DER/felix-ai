@@ -86,6 +86,12 @@ fun PcRemoteScreen(core: FazeCore, overlayOnly: Boolean = false, onBack: () -> U
     var problem by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
     val remote = remember { core.pcRemote { problem = it } }
+    // What the stream is made of right now; the chip at the bottom left changes these while it plays.
+    var quality by remember { mutableStateOf(core.settings.remoteQuality) }
+    var fps by remember { mutableStateOf(core.settings.remoteFps) }
+    var codec by remember { mutableStateOf(core.settings.remoteCodec) }
+    var video by remember { mutableStateOf(false) }   // the hardware decoder is drawing the picture
+    val longEdge = LocalContext.current.resources.displayMetrics.let { maxOf(it.widthPixels, it.heightPixels) }
 
     val ctx = LocalContext.current
     val act = remember(ctx) { ctx.findActivity() }
@@ -109,15 +115,18 @@ fun PcRemoteScreen(core: FazeCore, overlayOnly: Boolean = false, onBack: () -> U
 
     // The live stream: the computer pushes pictures, the newest is drawn. If it cannot stream, fall back to asking for one picture at a time.
     var streaming by remember { mutableStateOf(false) }
-    LaunchedEffect(pc?.id) {
+    LaunchedEffect(pc?.id, quality, fps, codec) {
         if (pc == null || overlayOnly) return@LaunchedEffect
         core.pcFrames.reset()
+        video = false
         try {
-            val q = RemoteQuality.params(core.settings.remoteQuality, ctx.resources.displayMetrics.let { maxOf(it.widthPixels, it.heightPixels) }, core.settings.remoteFps)
-            val engine = withContext(Dispatchers.IO) { remote.startStream(q.width, q.fps, q.quality) }
+            val q = RemoteQuality.params(quality, longEdge, fps)
+            val engine = withContext(Dispatchers.IO) { remote.startStream(q.width, q.fps, q.quality, codec) }
             streaming = true
             problem = ""
             note = engine
+            video = remote.streamCodec == "h264"
+            if (codec == "h264" && !video) problem = "This PC does not do fast video yet (update Faze on the PC). Using normal video."
         } catch (e: Exception) {
             problem = (e.message ?: "could not start the PC screen") + " Showing slower pictures instead."
         }
@@ -135,7 +144,19 @@ fun PcRemoteScreen(core: FazeCore, overlayOnly: Boolean = false, onBack: () -> U
                 note = ""
                 problem = "$why Showing slower pictures instead."
             }
-            if (streaming) {
+            if (streaming && video) {
+                // Fast video: the decoder takes the units itself. Only watch that it starts, and fall back to normal video if it does not.
+                if (now - pinged > 3000) { pinged = now; launch(Dispatchers.IO) { remote.pingStream() } }
+                if (core.pcFrames.seq > 0) sawFrame = true
+                if (!sawFrame && (core.pcFrames.error.isNotEmpty() || now - began > 6000)) {
+                    val why = core.pcFrames.error.ifEmpty { "No video arrived." }
+                    launch(Dispatchers.IO) { remote.stopStream() }
+                    problem = "Fast video did not start: $why Using normal video."
+                    codec = "jpeg"
+                    return@LaunchedEffect
+                }
+                delay(100)
+            } else if (streaming) {
                 if (now - pinged > 3000) { pinged = now; launch(Dispatchers.IO) { remote.pingStream() } }
                 val latest = core.pcFrames.latest()
                 if (latest != null && latest.first != shown) {
@@ -233,6 +254,12 @@ fun PcRemoteScreen(core: FazeCore, overlayOnly: Boolean = false, onBack: () -> U
         camFrame = camFrame, cam = cam, mic = mic, sound = sound,
         layouts = layouts,
         shape = core.settings.remoteShape, overlayOnly = overlayOnly,
+        video = if (video) ({ val g = RemoteQuality.params(quality, longEdge, fps); VideoSurface(core.pcFrames, g.width, g.width * 9 / 16, core.settings.remoteShape) { m -> problem = "Fast video stopped: $m Using normal video."; codec = "jpeg" } }) else null,
+        streamCodec = codec, streamQuality = quality, streamFps = fps,
+        onStream = { c, qual, f ->
+            codec = c; quality = qual; fps = f
+            core.settings.remoteCodec = c; core.settings.remoteQuality = qual; core.settings.remoteFps = f
+        },
         onToggle = { which -> when (which) { "cam" -> cam = !cam; "mic" -> mic = !mic; "sound" -> sound = !sound } },
     )
 }
@@ -247,7 +274,9 @@ fun RemoteView(
     startKeysOpen: Boolean = false, startArmed: Set<String> = emptySet(),
     camFrame: androidx.compose.ui.graphics.ImageBitmap? = null, cam: Boolean = false, mic: Boolean = false, sound: Boolean = true, onToggle: (String) -> Unit = {}, startPad: Boolean = false, startEdit: Boolean = false, layouts: PadLayouts = remember { PadLayouts.memory() },
     panel: String = "", procs: List<ProcRow> = emptyList(), devices: List<PcDeviceRow> = emptyList(), panelError: String = "", onAction: (String) -> Unit = {}, startDrawing: Boolean = false, shape: String = "stretch", overlayOnly: Boolean = false,
+    video: (@Composable () -> Unit)? = null, streamCodec: String = "jpeg", streamQuality: String = "720", streamFps: Int = 30, onStream: (String, String, Int) -> Unit = { _, _, _ -> }, startStreamPanel: Boolean = false,
 ) {
+    var streamPanel by remember { mutableStateOf(startStreamPanel) }
     val pc = pcName
     var typed by remember { mutableStateOf("") }
     var toolsOpen by remember { mutableStateOf(true) }
@@ -295,6 +324,7 @@ fun RemoteView(
         ) {
             val f = frame
             if (overlayOnly) Text("Controller only. The picture is off.", color = Palette.Muted, fontSize = 13.sp)
+            else if (video != null) video()
             else if (f != null) Image(f, contentDescription = "PC screen", contentScale = when (shape) { "fit" -> ContentScale.Fit; "fill" -> ContentScale.Crop; else -> ContentScale.FillBounds }, modifier = Modifier.fillMaxSize())
             else Text("Waiting for the PC…", color = Palette.Dim)
         }
@@ -382,11 +412,16 @@ fun RemoteView(
         }
 
         if (problem.isNotEmpty() || note.isNotEmpty()) {
-            Text(
-                if (problem.isNotEmpty()) problem else "Live · $note",
-                color = Palette.Dim, fontSize = 11.sp,
-                modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = if (keysOpen) 120.dp else 8.dp).clip(RoundedCornerShape(10.dp)).background(Palette.Glass).padding(horizontal = 10.dp, vertical = 5.dp),
-            )
+            Column(modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = if (keysOpen) 120.dp else 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (streamPanel && !overlayOnly) StreamPanel(streamCodec, streamQuality, streamFps, onStream)
+                Row(
+                    modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(Palette.Glass).clickable(enabled = !overlayOnly) { streamPanel = !streamPanel }.padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(if (problem.isNotEmpty()) problem else "Live · $note" + (if (streamCodec == "h264") " · H.264" else ""), color = Palette.Dim, fontSize = 11.sp)
+                    if (!overlayOnly) FazeIcon(Ico.CHEVRON, Palette.Accent, 14.dp, Modifier.rotate(if (streamPanel) 0f else 180f))
+                }
+            }
         }
 
         // The key bar. Tap Ctrl, Shift, Alt or Win to arm it, then the next key goes with it; letters for the usual shortcuts appear while one is armed.
@@ -444,4 +479,45 @@ private fun KeyChip(label: String, lit: Boolean, onClick: () -> Unit) {
         label, color = if (lit) Palette.AccentInk else Palette.Text, fontSize = 13.sp,
         modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(if (lit) Palette.Accent else Palette.Surface2).clickable { onClick() }.padding(horizontal = 12.dp, vertical = 9.dp),
     )
+}
+
+/** The little panel over the Live chip: the faster codec on or off, the resolution and the frame rate. Every change applies at once (the stream restarts with the new settings). */
+@Composable
+fun StreamPanel(codec: String, quality: String, fps: Int, onChange: (String, String, Int) -> Unit) {
+    Column(
+        modifier = Modifier.clip(RoundedCornerShape(16.dp)).background(Palette.Glass).padding(12.dp).width(260.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Faster video (H.264)", color = Palette.Text, fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                Text("Hardware decoded, least delay. Needs the PC to encode it.", color = Palette.Muted, fontSize = 10.sp)
+            }
+            FazeSwitch(codec == "h264", { onChange(if (it) "h264" else "jpeg", quality, fps) })
+        }
+        StreamPick("Resolution", RemoteQuality.CHOICES.firstOrNull { it.first == quality }?.second ?: quality, RemoteQuality.CHOICES.map { it.second }) { label ->
+            onChange(codec, RemoteQuality.CHOICES.first { it.second == label }.first, fps)
+        }
+        StreamPick("Frame rate", "$fps fps", RemoteQuality.FPS_CHOICES.map { "$it fps" }) { label -> onChange(codec, quality, label.substringBefore(" ").toInt()) }
+    }
+}
+
+@Composable
+private fun StreamPick(label: String, value: String, options: List<String>, onPick: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = Palette.Dim, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        Box {
+            Row(
+                modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Palette.Surface2).clickable { open = true }.padding(horizontal = 12.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(value, color = Palette.Text, fontSize = 12.sp)
+                FazeIcon(Ico.CHEVRON, Palette.Dim, 14.dp)
+            }
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                for (o in options) DropdownMenuItem(text = { Text((if (o == value) "✓  " else "     ") + o) }, onClick = { open = false; onPick(o) })
+            }
+        }
+    }
 }
