@@ -26,7 +26,12 @@ e.load(QUrl.fromLocalFile(sys.argv[1]))
 def snap():
     w = e.rootObjects()[0]
     from PySide6.QtQuick import QQuickWindow
-    img = QQuickWindow.grabWindow(w)
+    try:
+        import shiboken6
+        q = shiboken6.wrapInstance(shiboken6.getCppPointer(w)[0], QQuickWindow)
+        img = q.grabWindow()
+    except Exception:
+        img = w.screen().grabWindow(w.winId()).toImage()
     sys.stderr.write("screenshot %s: %s\n" % (sys.argv[2], "saved" if (not img.isNull()) and img.save(sys.argv[2]) else "could not be saved"))
     app.quit()
 QTimer.singleShot(1500, snap)
