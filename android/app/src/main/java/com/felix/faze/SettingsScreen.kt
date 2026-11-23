@@ -307,6 +307,14 @@ private fun AgentTab(core: FazeCore) {
         SettingRow("Let computers copy my offline models", "A connected computer can take copies of the .gguf models on this phone (Qwen, LFM) to run them itself. The copies are removed from the shared folder after. Needs root.") { FazeSwitch(modelsOn, { modelsOn = it; core.settings.linkModels = it }) }
         var mediaOn by remember { mutableStateOf(core.settings.linkMedia) }
         SettingRow("Let computers use my camera and microphone", "A connected computer can ask for this phone's camera pictures and microphone sound (to use as a webcam and mic). Off unless you turn it on. Android only allows it while Faze is open on screen.") { FazeSwitch(mediaOn, { mediaOn = it; core.settings.linkMedia = it }) }
+        var quality by remember { mutableStateOf(core.settings.remoteQuality) }
+        SettingRow("Control screen quality", "Lower is quicker: fewer pixels to send, so less delay on a weak link. Match phone uses this phone's own resolution.") {
+            Row { for ((id, label) in RemoteQuality.CHOICES) ChoiceChip(label, quality == id) { quality = id; core.settings.remoteQuality = id } }
+        }
+        var shape by remember { mutableStateOf(core.settings.remoteShape) }
+        SettingRow("Control screen shape", "Stretch uses every pixel of this phone's screen. Fill crops the edges instead of stretching. Fit shows the whole picture with bars.") {
+            Row { for ((id, label) in listOf("stretch" to "Stretch", "fill" to "Fill", "fit" to "Fit")) ChoiceChip(label, shape == id) { shape = id; core.settings.remoteShape = id } }
+        }
         SettingRow("Let computers open my folders", "Pictures, Download, Documents, DCIM, Music and Movies, read only. Needs Access to all files (above).") { FazeSwitch(files, { files = it; core.settings.linkFiles = it }) }
         SettingRow("Let computers open all my files", "Everything on the phone's storage, not just those folders. Read only. Needs Access to all files (above).", last = true) { FazeSwitch(filesAll, { filesAll = it; core.settings.linkFilesAll = it }) }
     }
@@ -675,4 +683,10 @@ private fun ActivityLogDialog(core: FazeCore, onClose: () -> Unit) {
             }
         }
     }
+}
+
+
+@Composable
+private fun ChoiceChip(label: String, on: Boolean, onClick: () -> Unit) {
+    Text(label, color = if (on) Palette.AccentInk else Palette.Text, fontSize = 12.sp, modifier = Modifier.padding(start = 4.dp).clip(RoundedCornerShape(10.dp)).background(if (on) Palette.Accent else Palette.Surface2).clickable { onClick() }.padding(horizontal = 10.dp, vertical = 7.dp))
 }

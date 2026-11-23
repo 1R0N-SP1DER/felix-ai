@@ -113,7 +113,8 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
         if (pc == null) return@LaunchedEffect
         core.pcFrames.reset()
         try {
-            val engine = withContext(Dispatchers.IO) { remote.startStream() }
+            val q = RemoteQuality.params(core.settings.remoteQuality, ctx.resources.displayMetrics.let { maxOf(it.widthPixels, it.heightPixels) })
+            val engine = withContext(Dispatchers.IO) { remote.startStream(q.width, q.fps, q.quality) }
             streaming = true
             problem = ""
             note = engine
@@ -231,6 +232,7 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
         panel = panel, procs = procs, devices = devices, panelError = panelError, onAction = { act(it) },
         camFrame = camFrame, cam = cam, mic = mic, sound = sound,
         layouts = layouts,
+        shape = core.settings.remoteShape,
         onToggle = { which -> when (which) { "cam" -> cam = !cam; "mic" -> mic = !mic; "sound" -> sound = !sound } },
     )
 }
@@ -244,7 +246,7 @@ fun RemoteView(
     pcName: String?, frame: androidx.compose.ui.graphics.ImageBitmap?, problem: String, note: String, remote: PcRemote, onBack: () -> Unit, onRotate: () -> Unit,
     startKeysOpen: Boolean = false, startArmed: Set<String> = emptySet(),
     camFrame: androidx.compose.ui.graphics.ImageBitmap? = null, cam: Boolean = false, mic: Boolean = false, sound: Boolean = true, onToggle: (String) -> Unit = {}, startPad: Boolean = false, startEdit: Boolean = false, layouts: PadLayouts = remember { PadLayouts.memory() },
-    panel: String = "", procs: List<ProcRow> = emptyList(), devices: List<PcDeviceRow> = emptyList(), panelError: String = "", onAction: (String) -> Unit = {}, startDrawing: Boolean = false,
+    panel: String = "", procs: List<ProcRow> = emptyList(), devices: List<PcDeviceRow> = emptyList(), panelError: String = "", onAction: (String) -> Unit = {}, startDrawing: Boolean = false, shape: String = "stretch",
 ) {
     val pc = pcName
     var typed by remember { mutableStateOf("") }
@@ -253,11 +255,13 @@ fun RemoteView(
     var speed by remember { mutableStateOf(PointerSpeed.NORMAL) }
     var armed by remember { mutableStateOf(startArmed) }
     var pointerMenu by remember { mutableStateOf(false) }
+    var touchOn by remember { mutableStateOf(true) }
+    val touch = androidx.compose.runtime.rememberUpdatedState(touchOn)
     var moreMenu by remember { mutableStateOf(false) }
     var drawing by remember { mutableStateOf(startDrawing) }
     var padOn by remember { mutableStateOf(startPad || startEdit) }
     var padEdit by remember { mutableStateOf(startEdit) }
-    val padState = remember(remote) { PadState { remote.pad(it) } }
+    val padState = remember(remote) { PadState({ k, down -> if (down) remote.keyDown(k) else remote.keyUp(k) }, { remote.pad(it) }) }
     var camX by remember { mutableStateOf(24f) }
     var camY by remember { mutableStateOf(90f) }
 
@@ -283,14 +287,14 @@ fun RemoteView(
         Box(
             modifier = Modifier.fillMaxSize()
                 .pointerInput(speed) {
-                    detectTapGestures(onTap = { remote.click() }, onDoubleTap = { remote.click(double = true) }, onLongPress = { remote.click("right") })
+                    detectTapGestures(onTap = { if (touch.value) remote.click() }, onDoubleTap = { if (touch.value) remote.click(double = true) }, onLongPress = { if (touch.value) remote.click("right") })
                 }
-                .pointerInput(speed) { detectDragGestures { change, drag -> change.consume(); remote.move(drag.x * speed.factor, drag.y * speed.factor) } }
-                .pointerInput(speed) { detectDragGesturesAfterLongPress(onDragStart = { remote.button(true) }, onDragEnd = { remote.button(false) }, onDragCancel = { remote.button(false) }) { change, drag -> change.consume(); remote.move(drag.x * speed.factor, drag.y * speed.factor) } },
+                .pointerInput(speed) { detectDragGestures { change, drag -> change.consume(); if (touch.value) remote.move(drag.x * speed.factor, drag.y * speed.factor) } }
+                .pointerInput(speed) { detectDragGesturesAfterLongPress(onDragStart = { if (touch.value) remote.button(true) }, onDragEnd = { if (touch.value) remote.button(false) }, onDragCancel = { if (touch.value) remote.button(false) }) { change, drag -> change.consume(); if (touch.value) remote.move(drag.x * speed.factor, drag.y * speed.factor) } },
             contentAlignment = Alignment.Center,
         ) {
             val f = frame
-            if (f != null) Image(f, contentDescription = "PC screen", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+            if (f != null) Image(f, contentDescription = "PC screen", contentScale = when (shape) { "fit" -> ContentScale.Fit; "fill" -> ContentScale.Crop; else -> ContentScale.FillBounds }, modifier = Modifier.fillMaxSize())
             else Text("Waiting for the PC…", color = Palette.Dim)
         }
 
@@ -311,7 +315,7 @@ fun RemoteView(
 
         if (padOn) GamepadOverlay(padState, layouts, padEdit, onDone = { padEdit = false })
 
-        if (drawing) DrawLayer(onDone = { drawing = false })
+        if (drawing) DrawLayer(onDone = { drawing = false; remote.draw("clear") }, onDraw = { op, color, x, y -> remote.draw(op, color, x, y) })
         if (panel == "tasks") TaskPanel(procs, panelError, { pid, force -> onAction((if (force) "force:" else "end:") + pid) }, { onAction("close") })
         if (panel == "devices") DevicePanel(devices, panelError, { onAction("close") })
 
@@ -340,8 +344,9 @@ fun RemoteView(
                     RemoteTool(Ico.CLOSE, false) { onBack() }
                     Box(Modifier.width(1.dp).height(22.dp).background(Palette.Dim.copy(alpha = 0.25f)))
                     Box {
-                        RemoteTool(Ico.POINTER, pointerMenu) { pointerMenu = true }
+                        RemoteTool(Ico.POINTER, touchOn) { pointerMenu = true }
                         DropdownMenu(expanded = pointerMenu, onDismissRequest = { pointerMenu = false }) {
+                            DropdownMenuItem(text = { Text(if (touchOn) "Phone touch moves the mouse: on" else "Phone touch moves the mouse: off") }, onClick = { touchOn = !touchOn; pointerMenu = false })
                             for (s in PointerSpeed.values()) DropdownMenuItem(text = { Text((if (s == speed) "✓  " else "     ") + s.label + " pointer") }, onClick = { speed = s; pointerMenu = false })
                         }
                     }
@@ -427,7 +432,7 @@ fun RemoteView(
 @Composable
 private fun RemoteTool(ico: Ico, active: Boolean, onClick: () -> Unit) {
     Box(modifier = Modifier.clip(RoundedCornerShape(14.dp)).clickable { onClick() }.padding(horizontal = 12.dp, vertical = 10.dp), contentAlignment = Alignment.Center) {
-        FazeIcon(ico, if (active) Palette.Accent else Palette.Text, 21.dp)
+        FazeIcon(ico, if (active) Palette.Accent else (if (ico == Ico.POINTER) Palette.Muted else Palette.Text), 21.dp)
     }
 }
 

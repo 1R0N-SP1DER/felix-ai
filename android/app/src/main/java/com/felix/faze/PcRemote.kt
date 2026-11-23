@@ -57,6 +57,11 @@ class PcRemote(private val ask: (JSONObject, Long) -> JSONObject, private val wo
     fun key(name: String) = worker.execute { input("key", "key" to name) }
     /** The whole controller state (sticks and held buttons); sent without waiting. */
     fun pad(state: JSONObject) = worker.execute { input("pad", "state" to state, quick = true) }
+    /** A key of the PC's keyboard held down or let go (used by gamepad buttons bound to keys). */
+    fun keyDown(key: String) = worker.execute { input("keydown", "key" to key, quick = true) }
+    fun keyUp(key: String) = worker.execute { input("keyup", "key" to key, quick = true) }
+    /** What the phone's drawing looks like so far, for the PC to draw too: op is start, move, end or clear; x and y are 0..1 of the picture. */
+    fun draw(op: String, color: String = "", x: Float = 0f, y: Float = 0f) = worker.execute { input("draw", "op" to op, "color" to color, "x" to x.toDouble(), "y" to y.toDouble(), quick = true) }
     fun text(text: String) = worker.execute { input("text", "text" to text) }
 
     /** Presses the keys together, like Ctrl+Shift+T: in order, released in reverse. */

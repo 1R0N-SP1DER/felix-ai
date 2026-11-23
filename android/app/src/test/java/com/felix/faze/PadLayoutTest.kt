@@ -48,3 +48,29 @@ class PadLayoutTest {
         for (l in PadPresets.all()) for (p in l.parts) assertTrue("${l.name}/${p.id}", p.binds.all { it in PadNames.ALL })
     }
 }
+
+class PadKeysTest {
+    @Test fun keyboardKeysAreWrittenWithAPrefixAndPlainNamesStayOnTheController() {
+        assertEquals(listOf("key:space", "A", "key:w"), PadNames.parse("key:SPACE, a, k:w"))
+        assertEquals(listOf("key:ctrl", "key:c"), PadNames.parse("key:ctrl + key:c"))
+        assertTrue(PadNames.parse("key:banana, key:").isEmpty())
+    }
+
+    @Test fun keyButtonsGoToTheKeyboardNotTheControllerState() {
+        val sent = mutableListOf<org.json.JSONObject>(); val keys = mutableListOf<String>()
+        val pad = PadState({ k, d -> keys += (if (d) "+" else "-") + k }, { sent += it })
+        pad.button("key:space", true); pad.button("key:space", true); pad.button("key:space", false)
+        assertEquals(listOf("+space", "-space"), keys)
+        assertEquals(0, sent.size)
+        pad.button("key:w", true); pad.releaseAll()
+        assertEquals("-w", keys.last())
+    }
+
+    @Test fun qualityChoicesMapToWidths() {
+        assertEquals(640, RemoteQuality.params("360", 2400).width)
+        assertEquals(1280, RemoteQuality.params("720", 2400).width)
+        assertEquals(1920, RemoteQuality.params("1080", 2400).width)
+        assertEquals(2400, RemoteQuality.params("match", 2400).width)
+        assertEquals(2560, RemoteQuality.params("match", 3200).width)
+    }
+}

@@ -34,6 +34,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -59,18 +61,20 @@ private val INK = listOf(Color(0xFFFF5A5A), Color(0xFFFFD166), Color(0xFF6BE675)
 
 /** Draw on top of the PC's picture with a finger: marks stay until cleared. The picture below is not touched. */
 @Composable
-fun DrawLayer(onDone: () -> Unit, modifier: Modifier = Modifier) {
+fun DrawLayer(onDone: () -> Unit, modifier: Modifier = Modifier, onDraw: (String, String, Float, Float) -> Unit = { _, _, _, _ -> }) {
     val strokes = remember { mutableStateListOf<Pair<Color, List<Offset>>>() }
     var ink by remember { mutableStateOf(INK[0]) }
     var live by remember { mutableStateOf<List<Offset>>(emptyList()) }
-    Box(modifier.fillMaxSize()) {
+    var size by remember { mutableStateOf(androidx.compose.ui.unit.IntSize(1, 1)) }
+    fun hex(c: Color) = "#%06X".format(0xFFFFFF and c.toArgb())
+    Box(modifier.fillMaxSize().onSizeChanged { size = it }) {
         Canvas(
             Modifier.fillMaxSize().pointerInput(ink) {
                 detectDragGestures(
-                    onDragStart = { live = listOf(it) },
-                    onDragEnd = { if (live.size > 1) strokes.add(ink to live); live = emptyList() },
-                    onDragCancel = { live = emptyList() },
-                ) { change, _ -> change.consume(); live = live + change.position }
+                    onDragStart = { live = listOf(it); onDraw("start", hex(ink), it.x / size.width, it.y / size.height) },
+                    onDragEnd = { if (live.size > 1) strokes.add(ink to live); live = emptyList(); onDraw("end", "", 0f, 0f) },
+                    onDragCancel = { live = emptyList(); onDraw("end", "", 0f, 0f) },
+                ) { change, _ -> change.consume(); live = live + change.position; onDraw("move", "", change.position.x / size.width, change.position.y / size.height) }
             },
         ) {
             fun draw(c: Color, pts: List<Offset>) {
@@ -86,8 +90,8 @@ fun DrawLayer(onDone: () -> Unit, modifier: Modifier = Modifier) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             for (c in INK) Box(Modifier.padding(4.dp).size(28.dp).clip(CircleShape).background(c).border(if (c == ink) 3.dp else 1.dp, if (c == ink) Palette.Accent else Palette.Muted, CircleShape).clickable { ink = c })
-            Text("Undo", color = Palette.Text, fontSize = 13.sp, modifier = Modifier.padding(4.dp).clip(RoundedCornerShape(10.dp)).background(Palette.Surface2).clickable { if (strokes.isNotEmpty()) strokes.removeAt(strokes.lastIndex) }.padding(horizontal = 12.dp, vertical = 8.dp))
-            Text("Clear", color = Palette.Text, fontSize = 13.sp, modifier = Modifier.padding(4.dp).clip(RoundedCornerShape(10.dp)).background(Palette.Surface2).clickable { strokes.clear() }.padding(horizontal = 12.dp, vertical = 8.dp))
+            Text("Undo", color = Palette.Text, fontSize = 13.sp, modifier = Modifier.padding(4.dp).clip(RoundedCornerShape(10.dp)).background(Palette.Surface2).clickable { if (strokes.isNotEmpty()) { strokes.removeAt(strokes.lastIndex); onDraw("clear", "", 0f, 0f); strokes.forEach { st -> st.second.forEachIndexed { i, o -> onDraw(if (i == 0) "start" else "move", hex(st.first), o.x / size.width, o.y / size.height) }; onDraw("end", "", 0f, 0f) } } }.padding(horizontal = 12.dp, vertical = 8.dp))
+            Text("Clear", color = Palette.Text, fontSize = 13.sp, modifier = Modifier.padding(4.dp).clip(RoundedCornerShape(10.dp)).background(Palette.Surface2).clickable { strokes.clear(); onDraw("clear", "", 0f, 0f) }.padding(horizontal = 12.dp, vertical = 8.dp))
             Text("Done", color = Palette.AccentInk, fontSize = 13.sp, modifier = Modifier.padding(4.dp).clip(RoundedCornerShape(10.dp)).background(Palette.Accent).clickable { onDone() }.padding(horizontal = 12.dp, vertical = 8.dp))
         }
     }

@@ -42,7 +42,7 @@ import org.json.JSONObject
 import kotlin.math.hypot
 
 /** The whole controller as one small state: four stick directions, two triggers' worth of buttons, and which buttons are held. Every change sends the full state, so a lost message heals on the next one. */
-class PadState(private val send: (JSONObject) -> Unit) {
+class PadState(private val key: (String, Boolean) -> Unit = { _, _ -> }, private val send: (JSONObject) -> Unit) {
     private val axes = linkedMapOf("lx" to 0f, "ly" to 0f, "rx" to 0f, "ry" to 0f)
     private val held = linkedSetOf<String>()
 
@@ -58,12 +58,19 @@ class PadState(private val send: (JSONObject) -> Unit) {
         axes[p + "x"] = x.coerceIn(-1f, 1f); axes[p + "y"] = y.coerceIn(-1f, 1f); send(json())
     }
 
+    private val keysHeld = linkedSetOf<String>()
+
     fun button(name: String, down: Boolean) {
+        if (PadNames.isKey(name)) {
+            if (if (down) keysHeld.add(name) else keysHeld.remove(name)) key(PadNames.label(name), down)
+            return
+        }
         if (!(if (down) held.add(name) else held.remove(name))) return
         send(json())
     }
 
     fun releaseAll() {
+        keysHeld.toList().forEach { key(PadNames.label(it), false) }; keysHeld.clear()
         axes.keys.forEach { axes[it] = 0f }; held.clear(); send(json())
     }
 
@@ -133,7 +140,7 @@ fun GamepadOverlay(pad: PadState, layouts: PadLayouts, editing: Boolean, onDone:
             text = {
                 Column {
                     OutlinedTextField(label, { label = it }, label = { Text("Name on the button") }, singleLine = true)
-                    if (part.kind == "button") OutlinedTextField(binds, { binds = it }, label = { Text("Presses (A, LS + RS, UP…)") }, singleLine = true)
+                    if (part.kind == "button") OutlinedTextField(binds, { binds = it }, label = { Text("Presses: A, LS + RS … or keys: key:space, key:w") }, singleLine = true)
                 }
             },
             confirmButton = { TextButton({ layouts.setParts(layouts.active.parts.map { if (it.id == part.id) it.copy(label = label.take(12), binds = if (part.kind == "button") PadNames.parse(binds) else it.binds) else it }); dialog = null }) { Text("Save") } },
@@ -216,6 +223,6 @@ private fun PartView(p: PadPart, pad: PadState, boxW: Float, boxH: Float, editin
     }
     Box(m, contentAlignment = Alignment.Center) {
         if (p.kind == "stick") Box(Modifier.offset { IntOffset(tx.toInt(), ty.toInt()) }.size(52.dp).clip(CircleShape).background(Palette.Accent.copy(alpha = 0.5f)).border(1.dp, Palette.Accent, CircleShape))
-        else Text(p.label.ifEmpty { p.binds.joinToString("+") }, color = Palette.Text, fontSize = if (p.size < 50) 12.sp else 14.sp)
+        else Text(p.label.ifEmpty { p.binds.joinToString("+") { PadNames.label(it) } }, color = Palette.Text, fontSize = if (p.size < 50) 12.sp else 14.sp)
     }
 }

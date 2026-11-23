@@ -34,8 +34,21 @@ data class PadLayout(val name: String, val parts: List<PadPart>) {
 object PadNames {
     val ALL = listOf("A", "B", "X", "Y", "LB", "RB", "LT", "RT", "BACK", "START", "GUIDE", "LS", "RS", "UP", "DOWN", "LEFT", "RIGHT")
 
-    /** "a, ls+rs" -> [A, LS, RS]; names the controller does not have are dropped. */
-    fun parse(text: String): List<String> = text.uppercase().split(',', '+', ' ', ';').map { it.trim() }.filter { it in ALL }.distinct()
+    /** Keys of the PC's keyboard a button may press, written key:space, key:w, key:ctrl... (a plain A is the controller's A button). */
+    val KEYS = (('a'..'z') + ('0'..'9')).map { it.toString() } + listOf("space", "enter", "esc", "tab", "shift", "ctrl", "alt", "super", "backspace", "delete", "up", "down", "left", "right", "home", "end", "pageup", "pagedown") + (1..12).map { "f$it" }
+
+    /** "a, ls+rs, key:space" -> [A, LS, RS, key:space]; names the controller and keyboard do not have are dropped. */
+    fun parse(text: String): List<String> = text.split(',', '+', ' ', ';').map { it.trim() }.filter { it.isNotEmpty() }.mapNotNull { t ->
+        val low = t.lowercase()
+        when {
+            low.startsWith("key:") || low.startsWith("k:") -> low.substringAfter(":").takeIf { it in KEYS }?.let { "key:$it" }
+            t.uppercase() in ALL -> t.uppercase()
+            else -> null
+        }
+    }.distinct()
+
+    fun isKey(bind: String) = bind.startsWith("key:")
+    fun label(bind: String) = bind.removePrefix("key:")
 }
 
 /** Steering from the phone's tilt: which way is "sideways" depends on how the screen is turned. */
