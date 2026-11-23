@@ -28,6 +28,16 @@ ApplicationWindow {
     property string routeText: "Auto"
     property var chats: []
     property var cfg: ({})
+    // What the picker chip shows: the choice itself the moment it is made (not only after the next reply), else the route the last reply took.
+    readonly property string shownRoute: (cfg.provider && cfg.provider !== "auto")
+        ? (cfg.provider === "ollama" ? "This PC · " + (cfg.ollama_chat_model || "Ollama") : ({"gemini": "Gemini", "groq": "Groq", "openrouter": "OpenRouter", "nvidia": "NVIDIA", "custom": "Custom"})[cfg.provider] || cfg.provider)
+        : routeText
+    function choose(id, model) {
+        var c = JSON.parse(JSON.stringify(cfg))
+        c.provider = id
+        if (id === "ollama" && model) { c.ollama_chat_model = model; c.ollama_deep_model = model }
+        cfg = c
+    }
     property string currentChat: ""
     property var devices: []
     property var levels: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
@@ -166,7 +176,7 @@ ApplicationWindow {
                         border.color: win.line
                         implicitHeight: 32
                         implicitWidth: chip.implicitWidth + 24
-                        Text { id: chip; anchors.centerIn: parent; text: "●  " + win.routeText + "  ▾"; color: win.dim; font.pixelSize: 12 }
+                        Text { id: chip; anchors.centerIn: parent; text: "●  " + win.shownRoute + "  ▾"; color: win.dim; font.pixelSize: 12 }
                         MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: modelSheet.open() }
                     }
                     Item { Layout.fillWidth: true; Layout.preferredHeight: 32; DragHandler { enabled: win.floating; onActiveChanged: if (active) win.startSystemMove() } }
@@ -561,7 +571,7 @@ ApplicationWindow {
                     SettingsCard {
                         title: "MODEL"
                         SettingRow {
-                            label: "Model"; sub: win.routeText
+                            label: "Model"; sub: win.shownRoute
                             FazeButton { text: "Choose"; onClicked: { settings.close(); modelSheet.open() } }
                         }
                         SettingRow {
@@ -716,7 +726,7 @@ ApplicationWindow {
                                         Text { text: modelData.sub; color: win.muted; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true }
                                     }
                                 }
-                                MouseArea { anchors.fill: parent; onClicked: { bridge.pickModel(modelData.id, ""); if (modelData.id !== "ollama") modelSheet.close() } }
+                                MouseArea { anchors.fill: parent; onClicked: { win.choose(modelData.id, ""); bridge.pickModel(modelData.id, ""); if (modelData.id !== "ollama") modelSheet.close() } }
                             }
                             Repeater {
                                 model: modelData.id === "ollama" ? modelSheet.sheet.local : []
@@ -730,7 +740,7 @@ ApplicationWindow {
                                     RowLayout { anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12
                                         Text { text: modelData.name; color: win.text; font.pixelSize: 13; Layout.fillWidth: true }
                                         Text { text: modelData.gb + " GB"; color: win.muted; font.pixelSize: 11 } }
-                                    MouseArea { anchors.fill: parent; onClicked: { bridge.pickModel("ollama", modelData.name); modelSheet.close() } }
+                                    MouseArea { anchors.fill: parent; onClicked: { win.choose("ollama", modelData.name); bridge.pickModel("ollama", modelData.name); modelSheet.close() } }
                                 }
                             }
                         }

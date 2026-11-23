@@ -173,3 +173,102 @@ class ModelCopy:
     def fail(self, text):
         self.say(text, 0.0, True, False)
         return False
+
+
+def drop_dir():
+    """Where you drag model files: ~/Downloads/faze."""
+    return os.path.join(os.path.expanduser("~"), "Downloads", "faze")
+
+
+class DropFolder:
+    """Watches the drop folder. A finished .gguf in it is moved to the folder Ollama can read, set up in Ollama, and then gone from the drop folder."""
+    def __init__(self, config, say, installed, running=None, folder=None, dest=None, which=shutil.which, runner=run, clock=None):
+        import time
+        self.config, self.say, self.installed, self.running = config, say, installed, running
+        self.folder, self.dest = folder or drop_dir(), dest or shared_dir()
+        self.which, self.run = which, runner
+        self.clock = clock or time.time
+        self.sizes = {}
+        self.busy = False
+
+    def scan(self):
+        """One look at the folder. Returns the Ollama names created this time."""
+        if self.busy:
+            return []
+        try:
+            files = [f for f in os.listdir(self.folder) if f.lower().endswith(".gguf")]
+        except OSError:
+            return []
+        ready = []
+        for f in files:
+            path = os.path.join(self.folder, f)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            settled = self.sizes.get(f) == st.st_size and self.clock() - st.st_mtime > 3  # same size twice in a row: still being copied otherwise
+            self.sizes[f] = st.st_size
+            if settled and real_model({"name": f, "size": st.st_size}):
+                ready.append(f)
+        for gone in set(self.sizes) - set(files):
+            self.sizes.pop(gone)
+        if not ready:
+            return []
+        self.busy = True
+        try:
+            return self.import_all(ready)
+        finally:
+            self.busy = False
+
+    def import_all(self, files):
+        if not self.which("ollama"):
+            self.say("Ollama is not installed on this PC, so the models in the drop folder wait. Install it:  curl -fsSL https://ollama.com/install.sh | sh", 0.0, True, False)
+            return []
+        if self.running is not None and not self.running():
+            self.say("Ollama is not running, so the models in the drop folder wait. Start it with:  systemctl start ollama", 0.0, True, False)
+            return []
+        os.makedirs(self.dest, exist_ok=True)
+        os.chmod(self.dest, 0o755)
+        have, made = self.installed(), []
+        for i, f in enumerate(files):
+            name = ollama_name(f)
+            src = os.path.join(self.folder, f)
+            if name in have:
+                self.say("%s is already in Ollama; removed the copy from the drop folder." % name, i / len(files), False, True)
+                self.remove(src)
+                continue
+            self.say("Setting up %s in Ollama (this can take a minute)..." % name, i / len(files), False, True)
+            target = os.path.join(self.dest, f)
+            try:
+                shutil.move(src, target)  # a rename when both are on the same disk
+                os.chmod(target, 0o644)
+            except OSError as e:
+                self.say("Could not move %s out of the drop folder: %s" % (f, e), 0.0, True, False)
+                return made
+            mf = os.path.join(self.dest, name.replace(":", "_") + ".Modelfile")
+            with open(mf, "w") as fh:
+                fh.write(modelfile(target))
+            rc, out = self.run(["ollama", "create", name, "-f", mf])
+            self.remove(mf)
+            if rc != 0:
+                try:
+                    shutil.move(target, src)  # give the file back, nothing lost
+                except OSError:
+                    pass
+                self.say("Ollama could not set up %s: %s" % (name, out.splitlines()[-1] if out else "no message"), 0.0, True, False)
+                return made
+            self.remove(target)
+            made.append(name)
+        if made:
+            ModelCopy.use(self, made)
+            self.say("Done. New in Ollama: %s. The files are gone from the drop folder." % ", ".join(made), 1.0, True, True)
+        else:
+            self.say("Nothing new in the drop folder.", 1.0, True, True)
+        return made
+
+    @staticmethod
+    def remove(path):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass

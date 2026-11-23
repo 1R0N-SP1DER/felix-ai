@@ -1,10 +1,12 @@
 """One chat turn: build the conversation, pick the models (Auto or the chosen one), stream the answer, fall through on limits."""
 import os
 import threading
+import time
 
 import json
 
 from . import auto
+from . import modelsheet
 from . import recipes as recipebook
 from . import tools as toolbox
 from .providers import LABELS, Abort, ProviderError, base_for, stream_chat
@@ -25,7 +27,7 @@ MAX_ROUNDS = 6
 
 
 class Engine:
-    def __init__(self, config, store, limits=None, online=auto.online, streamer=stream_chat, tools=None, approver=None, recipes=None):
+    def __init__(self, config, store, limits=None, online=auto.online, streamer=stream_chat, tools=None, approver=None, recipes=None, local=None):
         self.config = config
         self.store = store
         self.tools = tools or toolbox.Tools(config, store)
@@ -36,6 +38,28 @@ class Engine:
         self.recipes = recipes or recipebook.RecipeBook(os.path.join(store.root, "recipes.json"))
         self._abort = None
         self._lock = threading.Lock()
+        self._local = local  # () -> names of the models Ollama has, [] when unknown; tests pass their own
+        self._seen = (0.0, [])
+
+    def installed(self):
+        """The models Ollama has, looked up at most every 15 seconds."""
+        at, names = self._seen
+        if time.monotonic() - at > 15:
+            try:
+                names = self._local() if self._local else [m["name"] for m in modelsheet.ollama_models(self.config, timeout=0.6)[1]]
+            except Exception:
+                names = []
+            self._seen = (time.monotonic(), names)
+        return names
+
+    def local_model(self, name):
+        """The configured Ollama model if it is installed; otherwise one that is (same family first), so a default name nobody pulled does not leave the chat empty."""
+        have = self.installed()
+        if not have or name in have or name + ":latest" in have:
+            return name
+        import re
+        family = (re.match(r"[a-z]+", name.lower()) or [""])[0]
+        return next((m for m in have if family and m.lower().startswith(family)), have[0])
 
     def system_prompt(self):
         text = PERSONA.format(user=self.config.data.get("user_name") or "there")
@@ -53,11 +77,11 @@ class Engine:
         task = auto.kind_of(text, c.data.get("effort", "medium"))
         planned = auto.plan(
             task, self.online(), c.keyed(), self.limits.resting, c.model,
-            (c.data["ollama_chat_model"], c.data["ollama_deep_model"]),
+            (self.local_model(c.data["ollama_chat_model"]), self.local_model(c.data["ollama_deep_model"])),
         )
         chosen = c.data.get("provider", "auto")
         if chosen != "auto":
-            model = c.data["ollama_chat_model"] if chosen == "ollama" else c.model(chosen)
+            model = self.local_model(c.data["ollama_chat_model"]) if chosen == "ollama" else c.model(chosen)
             first = [(chosen, model)] if model else []
             return task, first + [a for a in planned if a[0] != chosen]
         return task, sorted(planned, key=lambda a: a[0] == avoid) if avoid else planned  # after a thumbs down, retry starts with another model
@@ -131,6 +155,8 @@ class Engine:
         for _ in range(MAX_ROUNDS):
             calls = []
             extra = {"tools": specs, "calls": calls} if specs else {}
+            if provider == "ollama":
+                extra["timeout"] = 600  # the first answer waits while Ollama loads the model into memory, which takes minutes for a big one
             on_token = lambda piece: (sent.append(piece), emit({"t": "token", "v": piece}))
             try:
                 answer = self.streamer(base, key, model, msgs, on_token, abort, **extra)
