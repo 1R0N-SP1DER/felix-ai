@@ -12,8 +12,36 @@ PORTAL = "org.freedesktop.portal.Desktop"
 PATH = "/org/freedesktop/portal/desktop"
 
 
-def gst_args(fd, node, width, fps, quality):
-    """The gst-launch command that turns the PipeWire stream into JPEG pictures on stdout."""
+ENCODERS = ("x264enc", "vah264enc", "nvh264enc")   # CPU first: it always works; the hardware ones can be chosen with FAZE_H264_ENCODER
+
+
+def encoder_args(name, kbps, fps):
+    if name == "x264enc":
+        return ["x264enc", "tune=zerolatency", "speed-preset=ultrafast", "bitrate=%d" % kbps, "key-int-max=%d" % fps, "bframes=0", "byte-stream=true", "option-string=aud=1"]
+    if name == "vah264enc":
+        return ["vah264enc", "bitrate=%d" % kbps, "key-int-max=%d" % fps, "b-frames=0", "rate-control=cbr"]
+    if name == "nvh264enc":
+        return ["nvh264enc", "bitrate=%d" % kbps, "gop-size=%d" % fps, "zerolatency=true", "bframes=0", "rc-mode=cbr"]
+    raise ValueError(name)
+
+
+def pick_encoder(have, preferred=""):
+    """The first usable H.264 encoder, or None. have(name) says whether GStreamer has that element."""
+    order = ([preferred] if preferred in ENCODERS else []) + list(ENCODERS)
+    for name in order:
+        if have(name):
+            return name
+    return None
+
+
+def gst_args(fd, node, width, fps, quality, encoder=None, kbps=0):
+    """The gst-launch command that turns the PipeWire stream into JPEG pictures (or, with an encoder, H.264 access units) on stdout."""
+    if encoder:
+        return ["gst-launch-1.0", "-q", "pipewiresrc", "fd=%d" % fd, "path=%d" % node, "do-timestamp=true", "!",
+                "videorate", "!", "video/x-raw,framerate=%d/1" % fps, "!",
+                "videoscale", "!", "video/x-raw,width=%d" % (width // 2 * 2), "!",
+                "videoconvert", "!", "video/x-raw,format=I420", "!"] + encoder_args(encoder, kbps, fps) + [
+                "!", "h264parse", "config-interval=-1", "!", "video/x-h264,stream-format=byte-stream,alignment=au", "!", "fdsink", "fd=1"]
     return ["gst-launch-1.0", "-q", "pipewiresrc", "fd=%d" % fd, "path=%d" % node, "do-timestamp=true", "!",
             "videorate", "!", "video/x-raw,framerate=%d/1" % fps, "!",
             "videoscale", "!", "video/x-raw,width=%d" % width, "!",
@@ -32,6 +60,7 @@ def fail(code, message):
 
 def main(argv):
     width, fps, quality = (int(a) for a in argv[:3])
+    h264 = len(argv) > 3 and argv[3] == "h264"
     try:
         import gi
         gi.require_version("Gio", "2.0")
@@ -41,6 +70,14 @@ def main(argv):
     import shutil
     if not shutil.which("gst-launch-1.0"):
         fail(2, "GStreamer is missing. Install it: sudo apt install gstreamer1.0-tools gstreamer1.0-pipewire gstreamer1.0-plugins-good")
+
+    encoder = None
+    if h264:
+        import shutil as _sh
+        have = (lambda n: subprocess.run(["gst-inspect-1.0", "--exists", n], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0) if _sh.which("gst-inspect-1.0") else (lambda n: False)
+        encoder = pick_encoder(have, os.environ.get("FAZE_H264_ENCODER", ""))
+        if encoder is None:
+            fail(2, "No H.264 encoder for GStreamer. Install one: sudo apt install gstreamer1.0-plugins-ugly (fast video needs it)")
 
     bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
     sender = bus.get_unique_name()[1:].replace(".", "_")
@@ -111,7 +148,8 @@ def main(argv):
     reply, fds = bus.call_with_unix_fd_list_sync(PORTAL, PATH, "org.freedesktop.portal.ScreenCast", "OpenPipeWireRemote", GLib.Variant("(oa{sv})", (session, {})), GLib.VariantType("(h)"), Gio.DBusCallFlags.NONE, -1, None, None)
     fd = fds.get(reply.unpack()[0])
     os.set_inheritable(fd, True)
-    proc = subprocess.Popen(gst_args(fd, node, width, fps, quality), pass_fds=(fd,), stdin=subprocess.DEVNULL)
+    from .stream import kbps as _kbps
+    proc = subprocess.Popen(gst_args(fd, node, width, fps, quality, encoder, _kbps(width, fps, quality)), pass_fds=(fd,), stdin=subprocess.DEVNULL)
     try:
         sys.stdin.buffer.read()  # blocks until the daemon closes our input, which is how it says stop
     finally:

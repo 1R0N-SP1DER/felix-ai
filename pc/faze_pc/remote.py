@@ -30,8 +30,9 @@ class RemoteControl:
         self.uinput = uinput if uinput is not None else UInput()
         self.uinput_failed = False
         self.notify = notify or (lambda m: 0)
-        self.stream = (stream_factory or ScreenStream)(lambda jpeg, n: self.notify({"t": "pc_frame", "jpeg": jpeg, "n": n}), lambda m: self.notify({"t": "pc_stream_error", "message": m}))
+        self.stream = (stream_factory or ScreenStream)(self._frame, lambda m: self.notify({"t": "pc_stream_error", "message": m}))
         self.run = runner or self._run
+
         self.log = log or (lambda kind, text: None)
         self.announced = False
 
@@ -41,6 +42,13 @@ class RemoteControl:
             return r.returncode, r.stdout, r.stderr.decode("utf-8", "replace")
         except (OSError, subprocess.SubprocessError) as e:
             return 1, b"", str(e)
+
+    def _frame(self, data, n, key=None):
+        """A picture from the stream: a JPEG, or (key is not None) one H.264 access unit."""
+        if key is None:
+            self.notify({"t": "pc_frame", "jpeg": data, "n": n})
+        else:
+            self.notify({"t": "pc_frame", "codec": "h264", "data": data, "key": bool(key), "n": n})
 
     def enabled(self):
         return self.config.data.get("allow_remote") is True
@@ -56,10 +64,12 @@ class RemoteControl:
             self.log("link", "The phone is viewing and controlling this PC")
         if t == "pc_stream_start":
             try:
-                engine = self.stream.start(int(msg.get("w", 960) or 960), int(msg.get("fps", 30) or 30), int(msg.get("q", 60) or 60))
+                args = (int(msg.get("w", 960) or 960), int(msg.get("fps", 30) or 30), int(msg.get("q", 60) or 60))
+                want_h264 = msg.get("codec") == "h264"
+                engine = self.stream.start(*args, "h264") if want_h264 else self.stream.start(*args)
             except RuntimeError as e:
                 return {"t": "error", "message": str(e)}
-            return {"t": "pc_stream_ok", "engine": engine}
+            return {"t": "pc_stream_ok", "engine": engine, "codec": "h264"} if want_h264 else {"t": "pc_stream_ok", "engine": engine}
         if t == "pc_stream_ping":
             self.stream.ping()
             return {"t": "ok"}

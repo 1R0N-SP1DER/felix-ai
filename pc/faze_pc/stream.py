@@ -42,12 +42,107 @@ class JpegSplitter:
         return out
 
 
-def x11_args(width, fps, quality, display=":0"):
+def kbps(width, fps, quality):
+    """A sensible H.264 bitrate in kilobits a second for a 16:9 picture: more pixels, more frames and higher quality all want more."""
+    height = width * 9 // 16
+    bpp = 0.03 + max(20, min(95, quality)) / 100.0 * 0.07
+    return max(300, int(width * height * fps * bpp / 1000))
+
+
+class H264Splitter:
+    """Cuts a byte stream of H.264 (Annex B: 00 00 01 start codes) into access units, one per picture, each with whether it is a keyframe.
+    A unit ends when the next one begins (an access-unit delimiter, SPS/PPS/SEI after picture data, or a slice that starts at macroblock 0), or on flush()
+    when the encoder has gone quiet, which is what keeps the delay down: the newest picture is not held back waiting for the one after it."""
+
+    def __init__(self):
+        self.buf = bytearray()
+        self.cur = bytearray()
+        self.has_vcl = False
+        self.key = False
+
+    @staticmethod
+    def nals(buf):
+        """[(start_of_start_code, payload_start)] for every start code in buf."""
+        out, i, n = [], 0, len(buf)
+        while True:
+            i = buf.find(b"\x00\x00\x01", i)
+            if i < 0:
+                return out
+            s = i - 1 if i > 0 and buf[i - 1] == 0 else i
+            out.append((s, i + 3))
+            i += 3
+
+    def _begins_new(self, typ, first):
+        if not self.has_vcl:
+            return False
+        if typ in (6, 7, 8, 9):
+            return True
+        return typ in (1, 5) and first is not None and first & 0x80 != 0  # first_mb_in_slice == 0
+
+    def _take(self, out):
+        if self.has_vcl and self.cur:
+            out.append((bytes(self.cur), self.key))
+        self.cur.clear()
+        self.has_vcl = self.key = False
+
+    def _consume(self, nal_bytes, out):
+        if len(nal_bytes) < 4:
+            return
+        head = nal_bytes.find(b"\x01") + 1
+        if head <= 0 or head >= len(nal_bytes):
+            return
+        typ = nal_bytes[head] & 0x1F
+        first = nal_bytes[head + 1] if head + 1 < len(nal_bytes) else None
+        if self._begins_new(typ, first):
+            self._take(out)
+        self.cur += nal_bytes
+        if typ in (1, 5):
+            self.has_vcl = True
+            if typ == 5:
+                self.key = True
+
+    def feed(self, data):
+        self.buf += data
+        out = []
+        marks = self.nals(self.buf)
+        if len(marks) >= 2:
+            for k in range(len(marks) - 1):
+                self._consume(bytes(self.buf[marks[k][0]:marks[k + 1][0]]), out)
+            del self.buf[:marks[-1][0]]
+        if len(self.buf) > MAX_BUF:
+            self.buf.clear()
+            self.cur.clear()
+            self.has_vcl = self.key = False
+        return out
+
+    def flush(self):
+        """The encoder has been quiet: what is waiting is a whole picture."""
+        out = []
+        if self.buf:
+            self._consume(bytes(self.buf), out)
+            self.buf.clear()
+        self._take(out)
+        return out
+
+
+def x264_args(src, width, fps, quality):
+    """ffmpeg output side for low-latency H.264 on stdout; src is the input part."""
+    return src + ["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-pix_fmt", "yuv420p", "-bf", "0", "-g", str(max(10, fps)),
+                  "-b:v", "%dk" % kbps(width, fps, quality), "-maxrate", "%dk" % int(kbps(width, fps, quality) * 1.5), "-bufsize", "%dk" % max(200, kbps(width, fps, quality) // 4),
+                  "-x264-params", "aud=1:repeat-headers=1", "-f", "h264", "-"]
+
+
+def x11_args(width, fps, quality, display=":0", codec="jpeg"):
+    if codec == "h264":
+        return x264_args(["ffmpeg", "-loglevel", "error", "-f", "x11grab", "-framerate", str(fps), "-i", display, "-vf", "scale=%d:-2" % (width // 2 * 2)], width, fps, quality)
     return ["ffmpeg", "-loglevel", "error", "-f", "x11grab", "-framerate", str(fps), "-i", display, "-vf", "scale=%d:-2" % width,
             "-q:v", str(max(2, min(31, (100 - quality) // 4 + 2))), "-f", "mjpeg", "-"]
 
 
-def kms_args(width, fps, quality):
+def kms_args(width, fps, quality, codec="jpeg"):
+    if codec == "h264":
+        return x264_args(["ffmpeg", "-loglevel", "error", "-f", "kmsgrab", "-framerate", str(fps), "-i", "-", "-vf",
+                          "hwmap=derive_device=vaapi,scale_vaapi=w=%d:h=-2:format=nv12,hwdownload,format=nv12" % (width // 2 * 2)], width, fps, quality)
     return ["ffmpeg", "-loglevel", "error", "-f", "kmsgrab", "-framerate", str(fps), "-i", "-", "-vf",
             "hwmap=derive_device=vaapi,scale_vaapi=w=%d:h=-2:format=nv12,hwdownload,format=nv12" % width,
             "-q:v", str(max(2, min(31, (100 - quality) // 4 + 2))), "-f", "mjpeg", "-"]
@@ -69,29 +164,34 @@ class ScreenStream:
         self.tail = ""
         self.frames_made = 0
         self.first_wait = 8.0
+        self.codec = "jpeg"
+        self.queue = []          # h264 only: pictures waiting to be sent, oldest first
+        self.need_key = False
 
     def wayland(self):
         return self.env.get("XDG_SESSION_TYPE", "").lower() == "wayland" or bool(self.env.get("WAYLAND_DISPLAY"))
 
-    def engines(self, width, fps, quality):
+    def engines(self, width, fps, quality, codec="jpeg"):
         """Ways to capture, best first: [(name, argv, missing-hint)]."""
         out = []
         if self.wayland():
-            out.append(("portal", [self.python, "-m", "faze_pc.portal", str(width), str(fps), str(quality)],
+            out.append(("portal", [self.python, "-m", "faze_pc.portal", str(width), str(fps), str(quality)] + (["h264"] if codec == "h264" else []),
                         None if os.path.exists(self.python) else "system Python is missing"))
-            out.append(("kmsgrab", kms_args(width, fps, quality), None if self.which("ffmpeg") else "ffmpeg is missing"))
+            out.append(("kmsgrab", kms_args(width, fps, quality, codec), None if self.which("ffmpeg") else "ffmpeg is missing"))
         else:
-            out.append(("x11grab", x11_args(width, fps, quality, self.env.get("DISPLAY") or ":0"), None if self.which("ffmpeg") else "ffmpeg is missing"))
+            out.append(("x11grab", x11_args(width, fps, quality, self.env.get("DISPLAY") or ":0", codec), None if self.which("ffmpeg") else "ffmpeg is missing"))
         return out
 
-    def start(self, width=960, fps=30, quality=60):
-        """Starts the capture. Returns the engine's name, or raises RuntimeError with what to do."""
+    def start(self, width=960, fps=30, quality=60, codec="jpeg"):
+        """Starts the capture. Returns the engine's name, or raises RuntimeError with what to do. codec is "jpeg" (a picture each, tolerant) or "h264"
+        (much smaller, needs the phone's hardware decoder). With h264, self.codec says what is really being sent."""
         self.stop()
+        self.codec = "h264" if codec == "h264" else "jpeg"
         width = max(320, min(int(width), 1920))
         fps = max(5, min(int(fps), 60))
         quality = max(20, min(int(quality), 95))
         problems = []
-        for name, argv, missing in self.engines(width, fps, quality):
+        for name, argv, missing in self.engines(width, fps, quality, self.codec):
             if missing:
                 problems.append("%s: %s" % (name, missing))
                 continue
@@ -103,6 +203,8 @@ class ScreenStream:
             self.proc, self.engine, self.running, self.last_ping = proc, name, True, self.clock()
             threading.Thread(target=self._read, args=(proc, name), daemon=True, name="stream-read").start()
             threading.Thread(target=self._drain, args=(proc,), daemon=True, name="stream-err").start()
+            self.queue.clear()
+            self.need_key = False
             threading.Thread(target=self._send, daemon=True, name="stream-send").start()
             threading.Thread(target=self._watch, daemon=True, name="stream-watch").start()
             return name
@@ -126,7 +228,54 @@ class ScreenStream:
         except (OSError, ValueError):
             pass
 
+    def _read_h264(self, proc, name):
+        import select
+        split = H264Splitter()
+        try:
+            fd = proc.stdout.fileno()
+        except (OSError, ValueError, AttributeError):
+            fd = None
+        try:
+            while self.running and self.proc is proc:
+                if fd is not None:
+                    ready, _, _ = select.select([fd], [], [], 0.004)
+                    if not ready:
+                        units = split.flush()
+                        chunk = None
+                    else:
+                        chunk = os.read(fd, 65536)
+                        if not chunk:
+                            break
+                        units = split.feed(chunk)
+                else:
+                    chunk = proc.stdout.read(65536)
+                    if not chunk:
+                        break
+                    units = split.feed(chunk)
+                for au, key in units:
+                    with self.cond:
+                        self.frames_made += 1
+                        if self.need_key and not key:
+                            continue
+                        if key:
+                            self.need_key = False
+                        self.queue.append((au, key))
+                        if len(self.queue) > 8:  # the phone or the link is behind: throw the backlog away and wait for the next keyframe
+                            self.queue.clear()
+                            self.need_key = True
+                        self.seq += 1
+                        self.cond.notify()
+        finally:
+            if self.proc is proc and self.running:
+                time.sleep(0.1)
+                self.running = False
+                with self.cond:
+                    self.cond.notify_all()
+                self.on_error(self.tail or "%s stopped" % name)
+
     def _read(self, proc, name):
+        if self.codec == "h264":
+            return self._read_h264(proc, name)
         split = JpegSplitter()
         try:
             while self.running and self.proc is proc:
@@ -146,7 +295,25 @@ class ScreenStream:
                     self.cond.notify_all()
                 self.on_error(self.tail or "%s stopped" % name)
 
+    def _send_h264(self):
+        while self.running:
+            with self.cond:
+                while self.running and not self.queue:
+                    self.cond.wait(0.5)
+                if not self.running:
+                    return
+                au, key = self.queue.pop(0)
+                n = self.seq
+            try:
+                self.on_frame(base64.b64encode(au).decode(), n, key)
+                self.sent += 1
+            except Exception:
+                self.stop()
+                return
+
     def _send(self):
+        if self.codec == "h264":
+            return self._send_h264()
         sent_seq = 0
         while self.running:
             with self.cond:

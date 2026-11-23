@@ -63,3 +63,7 @@ Task manager and devices (behind "Let my phone see and control this PC"):
 ### Phone doodles on the PC (kind=draw)
 
 `pc_input` with `kind: "draw"` and `op` one of `start` (with `color` as RRGGBB and `x`, `y` as 0..1 of the screen), `move` (x, y), `end` or `clear`. The PC relays these to a click-through, always-on-top overlay (`faze --draw`) that is started on the first stroke and closes with the daemon. Strokes stay until `clear`.
+
+### Fast video (H.264)
+
+`pc_stream_start` may carry `"codec":"h264"`. The reply then has `"codec":"h264"`, and frames arrive as `{"t":"pc_frame","codec":"h264","data":<base64 Annex-B access unit>,"key":bool,"n":n}` instead of `jpeg`. Every unit must be fed to the decoder in order; keyframes repeat SPS/PPS and come about once a second. If the PC cannot encode (no ffmpeg libx264 / no GStreamer encoder), it sends `pc_stream_error` and the phone goes back to JPEG. Without `codec`, nothing changes: one JPEG per frame, newest only.
