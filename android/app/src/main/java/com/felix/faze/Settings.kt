@@ -334,6 +334,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getBoolean("link_models", true)
         set(value) = prefs.edit().putBoolean("link_models", value).apply()
 
+    /** Let a connected computer use this phone's camera and microphone. Off by default: it is a privacy switch. */
+    var linkMedia: Boolean
+        get() = prefs.getBoolean("link_media", false)
+        set(value) = prefs.edit().putBoolean("link_media", value).apply()
+
     /** With root: send every copy to the computer, even from the background, by reading the system log and briefly opening an invisible window. */
     var linkClipRoot: Boolean
         get() = prefs.getBoolean("link_clip_root", true)
