@@ -113,6 +113,10 @@ class ScreenshotTest {
         RemoteView("Felix-PC", desktop(), "", "", remote(), {}, {}, startDrawing = true)
     }
 
+    @Test fun remoteStreamPanel() = shot("remote_stream_panel") {
+        RemoteView("Felix-PC", desktop(), "", "portal", remote(), {}, {}, streamCodec = "h264", streamQuality = "720", streamFps = 60, startStreamPanel = true)
+    }
+
     @Test fun remoteControllerOnly() = shot("remote_overlay_only") {
         RemoteView("Felix-PC", null, "", "", remote(), {}, {}, overlayOnly = true)
     }

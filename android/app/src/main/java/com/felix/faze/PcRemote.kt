@@ -22,11 +22,18 @@ class PcRemote(private val ask: (JSONObject, Long) -> JSONObject, private val wo
     }
 
     /** Starts the computer's live screen stream (pc_frame pictures arrive on their own). Returns the capture method's name. Throws IOException with what to install when it cannot. */
-    fun startStream(width: Int = 960, fps: Int = 30, quality: Int = 60): String {
-        val r = ask(JSONObject().put("t", "pc_stream_start").put("w", width).put("fps", fps).put("q", quality), 150_000) // the first time the desktop asks for approval
+    fun startStream(width: Int = 960, fps: Int = 30, quality: Int = 60, codec: String = "jpeg"): String {
+        val q = JSONObject().put("t", "pc_stream_start").put("w", width).put("fps", fps).put("q", quality)
+        if (codec == "h264") q.put("codec", "h264")
+        val r = ask(q, 150_000) // the first time the desktop asks for approval
         if (r.optString("t") != "pc_stream_ok") throw IOException(r.optString("message", "the computer could not start its screen stream"))
+        streamCodec = if (r.optString("codec") == "h264") "h264" else "jpeg"
         return r.optString("engine")
     }
+
+    /** What the computer is really sending after the last [startStream]: "h264" or "jpeg" (an older PC ignores the request). */
+    @Volatile var streamCodec = "jpeg"
+        private set
 
     /** Tells the computer we are still watching; it stops capturing a few seconds after the last ping. */
     fun pingStream() { try { ask(JSONObject().put("t", "pc_stream_ping"), 5_000) } catch (_: Exception) { } }

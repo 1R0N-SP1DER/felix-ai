@@ -339,6 +339,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getString("remote_quality", "720") ?: "720"
         set(value) = prefs.edit().putString("remote_quality", value).apply()
 
+    /** The control screen's video: "jpeg" (a picture each, works everywhere) or "h264" (the faster codec, hardware decoded). Needs the PC to be able to encode it. */
+    var remoteCodec: String
+        get() = prefs.getString("remote_codec", "jpeg") ?: "jpeg"
+        set(value) = prefs.edit().putString("remote_codec", value).apply()
+
     /** Frames per second the control screen asks the PC for: 15, 30 or 60. */
     var remoteFps: Int
         get() = prefs.getInt("remote_fps", 30)
