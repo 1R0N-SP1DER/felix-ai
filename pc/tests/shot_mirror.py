@@ -25,6 +25,9 @@ e.rootContext().setContextProperty("mirror", m)
 e.load(QUrl.fromLocalFile(sys.argv[1]))
 def snap():
     w = e.rootObjects()[0]
-    w.grabWindow().save(sys.argv[2]); app.quit()
-QTimer.singleShot(800, snap)
+    from PySide6.QtQuick import QQuickWindow
+    img = QQuickWindow.grabWindow(w)
+    sys.stderr.write("screenshot %s: %s\n" % (sys.argv[2], "saved" if (not img.isNull()) and img.save(sys.argv[2]) else "could not be saved"))
+    app.quit()
+QTimer.singleShot(1500, snap)
 app.exec()
