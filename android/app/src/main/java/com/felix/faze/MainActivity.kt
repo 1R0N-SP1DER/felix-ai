@@ -85,6 +85,7 @@ fun FazeRoot(vm: ChatViewModel = viewModel()) {
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var settings by remember { mutableStateOf(false) }
+    var deviceId by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
     var page by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") } // "devices", "activity" or "pcremote", each its own full screen
     val shown = settings || page.isNotEmpty()
 
@@ -113,15 +114,17 @@ fun FazeRoot(vm: ChatViewModel = viewModel()) {
                 onSettings = { settings = true; scope.launch { drawer.close() } },
                 onDevices = { page = "devices"; scope.launch { drawer.close() } },
                 onActivity = { page = "activity"; scope.launch { drawer.close() } },
-                onPcRemote = { page = "pcremote"; scope.launch { drawer.close() } },
+                onPcRemote = { deviceId = core.deviceRows().firstOrNull { it.connected }?.id ?: ""; page = "pcremote"; scope.launch { drawer.close() } },
                 onClose = { scope.launch { drawer.close() } },
             )
         },
     ) {
-        if (page == "devices") DevicesScreen(core, { page = "" }, onControl = { page = "pcremote" }, onMedia = { page = "pcmedia:$it" })
+        if (page == "devices") DevicesScreen(core, { page = "" }, onOpen = { deviceId = it; page = "device" })
+        else if (page == "device") DevicePage(core, deviceId, { page = "devices" }, onControl = { page = "pcremote" }, onOverlay = { page = "pcoverlay" }, onMedia = { page = "pcmedia:$it" })
         else if (page == "activity") ActivityScreen(core) { page = "" }
-        else if (page.startsWith("pcmedia:")) PcMediaScreen(core, page.removePrefix("pcmedia:")) { page = "devices" }
-        else if (page == "pcremote") PcRemoteScreen(core) { page = "devices" }
+        else if (page.startsWith("pcmedia:")) PcMediaScreen(core, page.removePrefix("pcmedia:")) { page = "device" }
+        else if (page == "pcremote") PcRemoteScreen(core) { page = "device" }
+        else if (page == "pcoverlay") PcRemoteScreen(core, overlayOnly = true) { page = "device" }
         else if (settings) SettingsScreen(core) { settings = false }
         else ChatScreen(core, onMenu = { scope.launch { drawer.open() } }, onSettings = { settings = true }, onActivity = { page = "activity" })
     }
