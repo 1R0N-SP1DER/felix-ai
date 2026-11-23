@@ -94,6 +94,18 @@ class ScreenshotTest {
         RemoteView("Felix-PC", desktop(), "", "", remote(), {}, {}, startPad = true, layouts = l)
     }
 
+    @Test fun remoteTaskManager() = shot("remote_tasks") {
+        RemoteView("Felix-PC", desktop(), "", "", remote(), {}, {}, panel = "tasks", procs = listOf(ProcRow(2210, "firefox", 18.4, 1240.0), ProcRow(1432, "plasmashell", 3.1, 410.0), ProcRow(8812, "code", 1.2, 880.0)))
+    }
+
+    @Test fun remoteDeviceManager() = shot("remote_devices") {
+        RemoteView("Felix-PC", desktop(), "", "", remote(), {}, {}, panel = "devices", devices = listOf(PcDeviceRow("usb", "Logitech Wireless Receiver"), PcDeviceRow("input", "AT Translated Set 2 keyboard"), PcDeviceRow("battery", "BAT0 82%")))
+    }
+
+    @Test fun remoteDrawing() = shot("remote_draw") {
+        RemoteView("Felix-PC", desktop(), "", "", remote(), {}, {}, startDrawing = true)
+    }
+
     @Test fun remoteWithNoComputer() = shot("remote_no_pc") {
         RemoteView(null, null, "", "", remote(), {}, {})
     }
