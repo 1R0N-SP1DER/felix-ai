@@ -261,7 +261,7 @@ fun RemoteView(
     var drawing by remember { mutableStateOf(startDrawing) }
     var padOn by remember { mutableStateOf(startPad || startEdit || overlayOnly) }
     var padEdit by remember { mutableStateOf(startEdit) }
-    val padState = remember(remote) { PadState({ remote.pad(it) }, { k, down -> if (down) remote.keyDown(k) else remote.keyUp(k) }) }
+    val padState = remember(remote) { PadState({ k, down -> if (down) remote.keyDown(k) else remote.keyUp(k) }, { remote.pad(it) }) }
     var camX by remember { mutableStateOf(24f) }
     var camY by remember { mutableStateOf(90f) }
 

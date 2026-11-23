@@ -58,7 +58,7 @@ class PadKeysTest {
 
     @Test fun keyButtonsGoToTheKeyboardNotTheControllerState() {
         val sent = mutableListOf<org.json.JSONObject>(); val keys = mutableListOf<String>()
-        val pad = PadState({ sent += it }, { k, d -> keys += (if (d) "+" else "-") + k })
+        val pad = PadState({ k, d -> keys += (if (d) "+" else "-") + k }, { sent += it })
         pad.button("key:space", true); pad.button("key:space", true); pad.button("key:space", false)
         assertEquals(listOf("+space", "-space"), keys)
         assertEquals(0, sent.size)
