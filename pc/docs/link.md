@@ -54,3 +54,8 @@ Screen view and control (phone asks nothing; PC asks, only when "Allow screen vi
   {"t":"screen_get"} -> {"t":"screen_ok","jpeg":base64}   a root screenshot, a few a second
   {"t":"screen_tap","x","y"} / screen_long / {"t":"screen_swipe","x1","y1","x2","y2"}   points are fractions 0..1 of the screen
   {"t":"screen_key","key"} / {"t":"screen_text","text"}   -> {"t":"screen_done","note"} or {"t":"error","message"}
+
+Task manager and devices (behind "Let my phone see and control this PC"):
+  Phone asks PC: {"t":"pc_procs","rid":n} -> {"t":"pc_procs_ok","procs":[{"pid","name","cpu","mem"}],"re":n} (busiest first; cpu is since the last ask)
+  Phone asks PC: {"t":"pc_kill","pid":n,"force":bool,"rid":n} -> {"t":"ok"} or {"t":"error","message"} (SIGTERM, or SIGKILL when force; never pid 1 or Faze itself)
+  Phone asks PC: {"t":"pc_devices","rid":n} -> {"t":"pc_devices_ok","devices":[{"kind":"usb|input|battery","name"}],"re":n}

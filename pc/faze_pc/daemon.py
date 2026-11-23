@@ -19,8 +19,9 @@ from .peer import PeerRequests
 from .sync import Syncer
 from .clip import ClipSync
 from .notes import PhoneNotes
+from .system import SystemInfo
 from . import modelsheet
-from .modelcopy import ModelCopy
+from .modelcopy import ModelCopy, DropFolder
 from .edge import EdgeWatcher, KWinEdge
 from .h264 import H264Decoder
 from .media import Media
@@ -52,7 +53,7 @@ class Daemon:
         self.ping_gap = 3.0
         self.video_grace = 6.0  # seconds the live video gets to produce its first picture before we use screenshots instead
         self.spawn = spawn or subprocess.Popen
-        self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log, mirror_opener=self.open_mirror_window, clip_in=lambda m: self.clip.receive(m), remote=RemoteControl(self.config, log=self.store.log, notify=lambda m: self.links.notify(m)), media=Media(self.config), screen_in=lambda m: self.screen_in(m), notes_in=lambda m: self.notes.handle(m))
+        self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log, mirror_opener=self.open_mirror_window, clip_in=lambda m: self.clip.receive(m), remote=RemoteControl(self.config, log=self.store.log, notify=lambda m: self.links.notify(m)), media=Media(self.config), system=SystemInfo(self.config), screen_in=lambda m: self.screen_in(m), notes_in=lambda m: self.notes.handle(m))
         self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_request=lambda pid, msg: self.peer.handle(pid, msg), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
 
         self.notes = PhoneNotes(self.config, log=self.store.log)
@@ -353,6 +354,28 @@ class Daemon:
         job = ModelCopy(self.config, self.links.request, pid, say, lambda: {m["name"] for m in modelsheet.ollama_models(self.config)[1]}, running=lambda: modelsheet.ollama_models(self.config)[0])
         threading.Thread(target=job.go, daemon=True, name="model-copy").start()
 
+    def watch_drop_folder(self):
+        """Models dragged into ~/Downloads/faze are set up in Ollama and removed from there."""
+        def say(text, progress, done, ok):
+            self.broadcast({"t": "model_copy", "text": text, "progress": progress, "done": done, "ok": ok})
+            if done:
+                threading.Thread(target=self.send_models, args=(self.broadcast,), daemon=True).start()
+                self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()})
+        drop = DropFolder(self.config, say, lambda: {m["name"] for m in modelsheet.ollama_models(self.config)[1]}, running=lambda: modelsheet.ollama_models(self.config)[0])
+        try:
+            os.makedirs(drop.folder, exist_ok=True)
+        except OSError:
+            return
+
+        def loop():
+            while True:
+                try:
+                    drop.scan()
+                except Exception as e:
+                    self.store.log("note", "drop folder: %s" % e)
+                time.sleep(5)
+        threading.Thread(target=loop, daemon=True, name="drop-folder").start()
+
     def send_models(self, emit):
         running, local = modelsheet.ollama_models(self.config)
         emit({"t": "models", "rows": modelsheet.rows(self.config, running, local), "local": local, "running": running,
@@ -499,6 +522,7 @@ class Daemon:
         self.clip.start()
         self.edge.start()
         self.kwin_edge.start()
+        self.watch_drop_folder()
 
         class Handler(socketserver.StreamRequestHandler):
             def handle(self):
