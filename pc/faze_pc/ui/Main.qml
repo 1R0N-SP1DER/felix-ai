@@ -209,7 +209,7 @@ ApplicationWindow {
                             }
                             Item {
                                 width: parent.width
-                                height: Math.max(body.implicitHeight, role === "approve" ? 20 : 0) + (role === "approve" ? 44 : 0)
+                                height: body.implicitHeight + ((role === "approve" || role === "error" || role === "note") ? 20 : 0) + (role === "approve" ? 40 : 0)
                                 Rectangle {
                                     width: 2; height: parent.height; radius: 1
                                     visible: role === "user" || role === "assistant"
