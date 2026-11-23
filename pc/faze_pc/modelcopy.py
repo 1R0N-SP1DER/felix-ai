@@ -2,7 +2,12 @@
 Steps for each .gguf the phone has: ask the phone to stage a copy (models_stage), read it in pieces through the file messages, remove the staged copy,
 then `ollama create` from the file. Needs Ollama installed. Models Ollama already has under the same name are skipped."""
 import base64
+import hashlib
+import http.client
+import json
 import os
+import tempfile
+import urllib.parse
 import re
 import shutil
 import subprocess
@@ -44,6 +49,72 @@ def real_model(m):
 def shared_dir():
     """A folder Ollama's own service user can read. Ollama opens the file itself, and a home folder (private on Ubuntu) would refuse it."""
     return os.path.join("/var/tmp", "faze-models-%d" % os.getuid())
+
+
+TEMPLATE = "{{- range .Messages }}<|im_start|>{{ .Role }}\n{{ .Content }}<|im_end|>\n{{ end }}<|im_start|>assistant\n"
+
+
+def sha256_of(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(8 * 1024 * 1024), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def api_create(config, name, path):
+    """Sets the model up through Ollama's HTTP interface: Faze reads the file itself and sends it, so no file permission of Ollama's own matters.
+    Returns (True, "") or (False, reason); (None, reason) when Ollama's API is not reachable at all."""
+    u = urllib.parse.urlparse(config.data.get("ollama_url", "http://127.0.0.1:11434"))
+    try:
+        digest = sha256_of(path)
+        conn = http.client.HTTPConnection(u.hostname, u.port or 11434, timeout=900)
+        conn.request("HEAD", "/api/blobs/sha256:" + digest)
+        have = conn.getresponse().status == 200
+        conn.close()
+        if not have:
+            conn = http.client.HTTPConnection(u.hostname, u.port or 11434, timeout=3600)
+            with open(path, "rb") as f:
+                conn.request("POST", "/api/blobs/sha256:" + digest, body=f, headers={"Content-Length": str(os.path.getsize(path))})
+                r = conn.getresponse()
+                body = r.read().decode("utf-8", "replace")
+            conn.close()
+            if r.status not in (200, 201):
+                return False, "the upload was refused (%d) %s" % (r.status, body[:200])
+        last = ""
+        for payload in (
+            {"model": name, "files": {os.path.basename(path): "sha256:" + digest}, "template": TEMPLATE, "parameters": {"stop": ["<|im_end|>"]}, "stream": False},
+            {"model": name, "name": name, "modelfile": "FROM @sha256:%s\n%s" % (digest, CHATML), "stream": False},
+        ):
+            conn = http.client.HTTPConnection(u.hostname, u.port or 11434, timeout=900)
+            conn.request("POST", "/api/create", body=json.dumps(payload), headers={"Content-Type": "application/json"})
+            r = conn.getresponse()
+            body = r.read().decode("utf-8", "replace")
+            conn.close()
+            if r.status == 200 and '"error"' not in body:
+                return True, ""
+            last = body.strip().splitlines()[-1][:300] if body.strip() else "status %d" % r.status
+        return False, last
+    except (ConnectionError, OSError) as e:
+        return None, str(e)
+
+
+def create_in_ollama(config, name, path, runner):
+    """(rc, message). First through the HTTP interface; if that cannot be used, the command line, with its small setup file kept in a private temporary folder."""
+    ok, why = api_create(config, name, path)
+    if ok:
+        return 0, ""
+    tmp = tempfile.mkdtemp(prefix="faze-")
+    try:
+        mf = os.path.join(tmp, "Modelfile")
+        with open(mf, "w") as f:
+            f.write(modelfile(path))
+        rc, out = runner(["ollama", "create", name, "-f", mf])
+        if rc != 0 and ok is False and why:
+            out = why + " | " + out
+        return rc, out
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def run(argv, timeout=900):
@@ -116,14 +187,7 @@ class ModelCopy:
             return False
         os.replace(target + ".part", target)
         self.say("Setting up %s in Ollama..." % name, part(0.95), False, True)
-        mf = os.path.join(self.dest, name.replace(":", "_") + ".Modelfile")
-        with open(mf, "w") as f:
-            f.write(modelfile(target))
-        rc, out = self.run(["ollama", "create", name, "-f", mf])
-        try:
-            os.unlink(mf)
-        except OSError:
-            pass
+        rc, out = create_in_ollama(self.config, name, target, self.run)
         if rc != 0:
             return self.fail("Ollama could not set up %s: %s" % (name, out.splitlines()[-1] if out else "no message"))
         os.unlink(target)  # Ollama keeps its own copy
@@ -238,23 +302,9 @@ class DropFolder:
                 self.remove(src)
                 continue
             self.say("Setting up %s in Ollama (this can take a minute)..." % name, i / len(files), False, True)
-            target = os.path.join(self.dest, f)
-            try:
-                shutil.move(src, target)  # a rename when both are on the same disk
-                os.chmod(target, 0o644)
-            except OSError as e:
-                self.say("Could not move %s out of the drop folder: %s" % (f, e), 0.0, True, False)
-                return made
-            mf = os.path.join(self.dest, name.replace(":", "_") + ".Modelfile")
-            with open(mf, "w") as fh:
-                fh.write(modelfile(target))
-            rc, out = self.run(["ollama", "create", name, "-f", mf])
-            self.remove(mf)
+            target = src  # Faze reads the file itself and sends it to Ollama, so it can stay where it is until it is done
+            rc, out = create_in_ollama(self.config, name, target, self.run)
             if rc != 0:
-                try:
-                    shutil.move(target, src)  # give the file back, nothing lost
-                except OSError:
-                    pass
                 self.say("Ollama could not set up %s: %s" % (name, out.splitlines()[-1] if out else "no message"), 0.0, True, False)
                 return made
             self.remove(target)

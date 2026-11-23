@@ -50,6 +50,7 @@ jobs:
           FAZE_DEMO_POPUP=mirror FAZE_SCREENSHOT=shots/mirror.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(False))"
           FAZE_DEMO_POPUP=settings FAZE_SCREENSHOT=shots/settings.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(False))"
           FAZE_DEMO_POPUP=models FAZE_SCREENSHOT=shots/models.png timeout 90 python -c "from faze_pc.ui.app import run_ui; import sys; sys.exit(run_ui(False))"
+          timeout 60 python tests/shot_mirror.py faze_pc/ui/Mirror.qml shots/phone_window.png
           ls -l shots
 
       - name: The phone window starts as its own program (it must still be running after 6 seconds)
