@@ -80,6 +80,16 @@ Window {
                 model: ["Mouse + keyboard", "Mouse only", "Keyboard only"]
                 currentIndex: win.pass === "both" ? 0 : (win.pass === "mouse" ? 1 : 2)
                 onActivated: win.pass = ["both", "mouse", "keyboard"][currentIndex]
+                contentItem: Text { leftPadding: 12; text: modeBox.displayText; color: "#E9EEFB"; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
+                background: Rectangle { radius: 15; color: "#0DFFFFFF"; border.width: 1; border.color: "#4282AFFF" }
+                indicator: Text { x: modeBox.width - width - 10; anchors.verticalCenter: parent.verticalCenter; text: "▾"; color: "#A5B1CA"; font.pixelSize: 12 }
+                popup.background: Rectangle { radius: 12; color: "#F00E1422"; border.width: 1; border.color: "#4282AFFF" }
+                delegate: ItemDelegate {
+                    width: modeBox.width
+                    contentItem: Text { text: modelData; color: "#E9EEFB"; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: highlighted || hovered ? "#2482AFFF" : "transparent" }
+                    highlighted: modeBox.highlightedIndex === index
+                }
             }
         }
     }

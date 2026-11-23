@@ -367,7 +367,7 @@ ApplicationWindow {
         height: Math.min(420, win.height - 30)
         padding: 20
         closePolicy: Popup.NoAutoClose
-        background: Rectangle { radius: 24; color: win.surface; border.width: 1; border.color: win.line }
+        background: Rectangle { radius: 28; color: "#F00E1422"; border.width: 1; border.color: "#4282AFFF" }
         contentItem: ColumnLayout {
             spacing: 16
             Text { text: bridge === null ? "" : ((bridge.live ? "Live · " : "") + (bridge.voiceState === "listening" ? "Listening…" : bridge.voiceState === "thinking" ? "Thinking…" : "Speaking…")); color: win.text; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
@@ -408,7 +408,7 @@ ApplicationWindow {
         property string problem: ""
         onOpened: { problem = ""; bridge.startMirror() }
         onClosed: bridge.stopMirror()
-        background: Rectangle { radius: 20; color: win.surface; border.width: 1; border.color: win.line }
+        background: Rectangle { radius: 28; color: "#F00E1422"; border.width: 1; border.color: "#4282AFFF" }
         Connections { target: bridge; function onMirrorFailed(m) { mirrorPopup.problem = m } }
         contentItem: ColumnLayout {
             spacing: 8
@@ -462,7 +462,7 @@ ApplicationWindow {
         width: Math.min(480, win.width - 40)
         height: Math.min(560, win.height - 40)
         padding: 18
-        background: Rectangle { radius: 20; color: win.surface; border.width: 1; border.color: win.line }
+        background: Rectangle { radius: 28; color: "#F00E1422"; border.width: 1; border.color: "#4282AFFF" }
         contentItem: ColumnLayout {
             spacing: 10
             Text { text: "Devices"; color: win.text; font.pixelSize: 18; font.bold: true }
@@ -522,7 +522,7 @@ ApplicationWindow {
         width: Math.min(560, win.width - 40)
         height: Math.min(520, win.height - 40)
         padding: 16
-        background: Rectangle { radius: 20; color: win.surface; border.width: 1; border.color: win.line }
+        background: Rectangle { radius: 28; color: "#F00E1422"; border.width: 1; border.color: "#4282AFFF" }
         contentItem: ColumnLayout {
             Text { text: "Activity log"; color: win.text; font.pixelSize: 18; font.bold: true }
             ListView {
@@ -693,7 +693,7 @@ ApplicationWindow {
         property var sheet: ({ rows: [], local: [], running: false, efforts: [] })
         onOpened: bridge.loadModels()
         Connections { target: bridge; function onModelsLoaded(m) { modelSheet.sheet = m } }
-        background: Rectangle { radius: 20; color: win.surface; border.width: 1; border.color: win.line }
+        background: Rectangle { radius: 28; color: "#F00E1422"; border.width: 1; border.color: "#4282AFFF" }
         contentItem: ColumnLayout {
             spacing: 8
             Text { text: "Choose a model"; color: win.text; font.pixelSize: 18; font.bold: true; Layout.bottomMargin: 6 }
