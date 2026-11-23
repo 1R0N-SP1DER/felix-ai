@@ -6,10 +6,15 @@ ApplicationWindow {
     id: win
     readonly property bool floating: bridge !== null && bridge.floating
     visible: true
-    width: floating ? 560 : 1240
-    height: floating ? 660 : 700
-    minimumWidth: floating ? 420 : 720
-    minimumHeight: 460
+    // The floating window is a bubble (just the core) until it is opened; it morphs between the two.
+    property bool bubble: false
+    readonly property bool small: floating && bubble
+    width: floating ? (bubble ? 88 : 560) : 1240
+    height: floating ? (bubble ? 88 : 660) : 700
+    minimumWidth: floating ? (bubble ? 88 : 420) : 720
+    minimumHeight: small ? 88 : 460
+    Behavior on width { enabled: win.floating; NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+    Behavior on height { enabled: win.floating; NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
     title: "Faze"
     color: floating ? "transparent" : "#04060B"
     flags: floating ? (Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool) : Qt.Window
@@ -39,6 +44,7 @@ ApplicationWindow {
         if (id === "ollama" && model) { c.ollama_chat_model = model; c.ollama_deep_model = model }
         cfg = c
     }
+    readonly property string userName: (cfg && cfg.user_name) ? cfg.user_name : "You"
     property string currentChat: ""
     property var devices: []
     property bool phoneMic: false
@@ -48,11 +54,12 @@ ApplicationWindow {
     property var found: []
     property string pairMsg: ""
 
-    Component.onCompleted: { if (bridge !== null && bridge.demoPopup === "devices") devicesPopup.open(); if (bridge !== null && bridge.demoPopup === "mirror") mirrorPopup.open(); if (bridge !== null && bridge.demoPopup === "settings") settings.open(); if (bridge !== null && bridge.demoPopup === "models") modelSheet.open() }
+    Component.onCompleted: { if (bridge !== null && bridge.demoPopup === "devices") devicesPopup.open(); if (bridge !== null && bridge.demoPopup === "mirror") mirrorPopup.open(); if (bridge !== null && bridge.demoPopup === "settings") settings.open(); if (bridge !== null && bridge.demoPopup === "models") modelSheet.open(); if (bridge !== null && bridge.demoPopup === "bubble") bubble = true; if (bridge !== null && bridge.demoPopup === "menu") headerMenu.popup(nameBtn, nameBtn.width - headerMenu.width, nameBtn.height + 6) }
     Timer { interval: 3000; repeat: true; running: devicesPopup.opened; onTriggered: bridge.refreshDevices() }
 
     function toggle() {
-        if (visible) hide(); else { show(); raise(); requestActivate(); input.forceActiveFocus() }
+        if (visible && !small) hide()
+        else { bubble = false; show(); raise(); requestActivate(); input.forceActiveFocus() }
     }
 
     ListModel { id: msgs }
@@ -97,19 +104,32 @@ ApplicationWindow {
         function onHistoryLoaded(h) { msgs.clear(); for (var i = 0; i < h.length; i++) msgs.append({ "role": h[i].role, "text": h[i].content, "reqId": "", "stage": "", "msgId": h[i].role === "assistant" ? (h[i].id || "") : "", "feedback": h[i].feedback || 0 }); list.positionViewAtEnd() }
     }
 
-    Shortcut { sequence: "Escape"; enabled: win.floating; onActivated: win.hide() }
+    Shortcut { sequence: "Escape"; enabled: win.floating && !win.bubble; onActivated: win.bubble = true }
     Shortcut { sequence: "Ctrl+N"; onActivated: bridge.newChat() }
 
     Rectangle {
         anchors.fill: parent
-        radius: win.floating ? 22 : 0
+        radius: win.floating ? (win.small ? 44 : 22) : 0
+        Behavior on radius { NumberAnimation { duration: 220 } }
         color: win.floating ? "#F004060B" : win.bg
         border.width: win.floating ? 1 : 0
         border.color: win.line
         clip: true
         Ambient { anchors.fill: parent; visible: !win.floating }
 
+        // The bubble: only the core. Tap opens the window, drag moves it.
+        Core {
+            visible: win.small
+            anchors.centerIn: parent
+            width: 72; height: 72
+            mode: (bridge !== null && bridge.busy) ? "thinking" : ((bridge !== null && bridge.listening) ? "listening" : "idle")
+            model: (win.cfg && win.cfg.provider) ? win.cfg.provider : "auto"
+            DragHandler { onActiveChanged: if (active) win.startSystemMove() }
+            TapHandler { onTapped: win.bubble = false }
+        }
+
         RowLayout {
+            visible: !win.small
             anchors.fill: parent
             spacing: 0
 
@@ -151,6 +171,38 @@ ApplicationWindow {
                         MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: modelSheet.open() }
                     }
                     Item { Layout.fillWidth: true; Layout.preferredHeight: 32; DragHandler { enabled: win.floating; onActiveChanged: if (active) win.startSystemMove() } }
+                    Rectangle {
+                        id: nameBtn
+                        visible: !win.floating
+                        implicitHeight: 36
+                        implicitWidth: nameRow.implicitWidth + 16
+                        radius: 18
+                        color: nameHover.hovered || headerMenu.visible ? "#14FFFFFF" : "#0DFFFFFF"
+                        border.width: 1
+                        border.color: headerMenu.visible ? win.accent : win.line
+                        HoverHandler { id: nameHover; cursorShape: Qt.PointingHandCursor }
+                        TapHandler { onTapped: headerMenu.popup(nameBtn, nameBtn.width - headerMenu.width, nameBtn.height + 6) }
+                        Row {
+                            id: nameRow
+                            anchors.centerIn: parent
+                            spacing: 8
+                            Rectangle {
+                                width: 24; height: 24; radius: 12; anchors.verticalCenter: parent.verticalCenter
+                                gradient: Gradient { orientation: Gradient.Horizontal; GradientStop { position: 0; color: win.accent } GradientStop { position: 1; color: win.accent2 } }
+                                Text { anchors.centerIn: parent; text: win.userName.charAt(0).toUpperCase(); color: win.ink; font.pixelSize: 12; font.bold: true }
+                            }
+                            Text { anchors.verticalCenter: parent.verticalCenter; text: win.userName; color: win.text; font.pixelSize: 13 }
+                            Text { anchors.verticalCenter: parent.verticalCenter; text: "▾"; color: win.dim; font.pixelSize: 12 }
+                        }
+                    }
+                    Button {
+                        visible: win.floating
+                        text: "–"
+                        onClicked: win.bubble = true
+                        implicitWidth: 34; implicitHeight: 34
+                        contentItem: Text { text: parent.text; color: win.dim; font.pixelSize: 18; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                        background: Rectangle { radius: 17; color: "#08FFFFFF"; border.width: 1; border.color: win.line }
+                    }
                     Button {
                         visible: win.floating
                         text: "+"
@@ -356,6 +408,28 @@ ApplicationWindow {
                 }
             }
         }
+    }
+
+    Menu {
+        id: headerMenu
+        width: 220
+        padding: 6
+        background: Rectangle { radius: 16; color: "#F00E1422"; border.width: 1; border.color: "#4282AFFF" }
+        component Item2: MenuItem {
+            id: mi
+            property string hint: ""
+            implicitHeight: 38
+            contentItem: Row {
+                spacing: 8
+                Text { anchors.verticalCenter: parent.verticalCenter; text: mi.text; color: win.text; font.pixelSize: 14 }
+            }
+            background: Rectangle { radius: 10; color: mi.highlighted ? "#2482AFFF" : "transparent" }
+        }
+        Item2 { text: "Settings"; onTriggered: settings.open() }
+        Item2 { text: "Devices"; onTriggered: { bridge.refreshDevices(); devicesPopup.open() } }
+        Item2 { text: "Phone screen"; onTriggered: bridge.openMirrorWindow() }
+        Item2 { text: "Activity"; onTriggered: bridge.loadActivity() }
+        Item2 { text: "New chat"; onTriggered: bridge.newChat() }
     }
 
     Popup {
