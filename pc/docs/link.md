@@ -59,3 +59,7 @@ Task manager and devices (behind "Let my phone see and control this PC"):
   Phone asks PC: {"t":"pc_procs","rid":n} -> {"t":"pc_procs_ok","procs":[{"pid","name","cpu","mem"}],"re":n} (busiest first; cpu is since the last ask)
   Phone asks PC: {"t":"pc_kill","pid":n,"force":bool,"rid":n} -> {"t":"ok"} or {"t":"error","message"} (SIGTERM, or SIGKILL when force; never pid 1 or Faze itself)
   Phone asks PC: {"t":"pc_devices","rid":n} -> {"t":"pc_devices_ok","devices":[{"kind":"usb|input|battery","name"}],"re":n}
+
+### Phone doodles on the PC (kind=draw)
+
+`pc_input` with `kind: "draw"` and `op` one of `start` (with `color` as RRGGBB and `x`, `y` as 0..1 of the screen), `move` (x, y), `end` or `clear`. The PC relays these to a click-through, always-on-top overlay (`faze --draw`) that is started on the first stroke and closes with the daemon. Strokes stay until `clear`.

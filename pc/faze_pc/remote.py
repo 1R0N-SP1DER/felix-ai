@@ -24,7 +24,8 @@ KEYS = {  # name -> (ydotool evdev codes, xdotool name)
 
 
 class RemoteControl:
-    def __init__(self, config, which=shutil.which, runner=None, log=None, notify=None, stream_factory=None, uinput=None):
+    def __init__(self, config, which=shutil.which, runner=None, log=None, notify=None, stream_factory=None, uinput=None, draw=None):
+        self.draw = draw
         self.config, self.which = config, which
         self.uinput = uinput if uinput is not None else UInput()
         self.uinput_failed = False
@@ -165,6 +166,8 @@ class RemoteControl:
         return [str(k).lower() for k in keys[:5]] if isinstance(keys, list) else []
 
     def input(self, msg):
+        if msg.get("kind") == "draw":
+            return self.draw.handle(msg) if self.draw is not None else {"t": "ok"}
         fast = self.direct(msg)
         if fast is not None:
             return fast
