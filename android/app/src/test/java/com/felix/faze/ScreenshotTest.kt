@@ -99,7 +99,7 @@ class ScreenshotTest {
     }
 
     @Test fun remoteDeviceManager() = shot("remote_devices") {
-        RemoteView("Felix-PC", desktop(), "", "", remote(), {}, {}, panel = "devices", devices = listOf(DeviceRow("usb", "Logitech Wireless Receiver"), DeviceRow("input", "AT Translated Set 2 keyboard"), DeviceRow("battery", "BAT0 82%")))
+        RemoteView("Felix-PC", desktop(), "", "", remote(), {}, {}, panel = "devices", devices = listOf(PcDeviceRow("usb", "Logitech Wireless Receiver"), PcDeviceRow("input", "AT Translated Set 2 keyboard"), PcDeviceRow("battery", "BAT0 82%")))
     }
 
     @Test fun remoteDrawing() = shot("remote_draw") {

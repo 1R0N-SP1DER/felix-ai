@@ -42,7 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 data class ProcRow(val pid: Int, val name: String, val cpu: Double, val mem: Double)
-data class DeviceRow(val kind: String, val name: String)
+data class PcDeviceRow(val kind: String, val name: String)
 
 /** Saves a picture into Pictures/Faze (no permission needed on Android 10 and later). Returns whether it worked. */
 fun saveToGallery(context: Context, bitmap: Bitmap, name: String): Boolean = try {
@@ -130,7 +130,7 @@ fun TaskPanel(rows: List<ProcRow>, error: String, onEnd: (Int, Boolean) -> Unit,
 
 /** What is plugged into the PC, and its batteries. */
 @Composable
-fun DevicePanel(rows: List<DeviceRow>, error: String, onClose: () -> Unit) {
+fun DevicePanel(rows: List<PcDeviceRow>, error: String, onClose: () -> Unit) {
     PanelFrame("Device manager", error, onClose) {
         LazyColumn(Modifier.fillMaxSize()) {
             items(rows) { r ->

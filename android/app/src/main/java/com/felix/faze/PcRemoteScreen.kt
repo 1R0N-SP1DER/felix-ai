@@ -190,7 +190,7 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
     }
     var panel by remember { mutableStateOf("") }
     var procs by remember { mutableStateOf<List<ProcRow>>(emptyList()) }
-    var devices by remember { mutableStateOf<List<DeviceRow>>(emptyList()) }
+    var devices by remember { mutableStateOf<List<PcDeviceRow>>(emptyList()) }
     var panelError by remember { mutableStateOf("") }
     LaunchedEffect(panel) {
         while (panel.isNotEmpty()) {
@@ -198,7 +198,7 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
                 val r = withContext(Dispatchers.IO) { core.pcAsk(JSONObject().put("t", if (panel == "tasks") "pc_procs" else "pc_devices"), 15_000) }
                 if (r.optString("t") == "error") throw java.io.IOException(r.optString("message"))
                 if (panel == "tasks") procs = r.getJSONArray("procs").let { a -> (0 until a.length()).map { a.getJSONObject(it).let { o -> ProcRow(o.getInt("pid"), o.getString("name"), o.optDouble("cpu"), o.optDouble("mem")) } } }
-                else devices = r.getJSONArray("devices").let { a -> (0 until a.length()).map { a.getJSONObject(it).let { o -> DeviceRow(o.getString("kind"), o.getString("name")) } } }
+                else devices = r.getJSONArray("devices").let { a -> (0 until a.length()).map { a.getJSONObject(it).let { o -> PcDeviceRow(o.getString("kind"), o.getString("name")) } } }
                 panelError = ""
             } catch (e: Exception) { panelError = e.message ?: "the PC did not answer" }
             delay(if (panel == "tasks") 2500 else 8000)
@@ -244,7 +244,7 @@ fun RemoteView(
     pcName: String?, frame: androidx.compose.ui.graphics.ImageBitmap?, problem: String, note: String, remote: PcRemote, onBack: () -> Unit, onRotate: () -> Unit,
     startKeysOpen: Boolean = false, startArmed: Set<String> = emptySet(),
     camFrame: androidx.compose.ui.graphics.ImageBitmap? = null, cam: Boolean = false, mic: Boolean = false, sound: Boolean = true, onToggle: (String) -> Unit = {}, startPad: Boolean = false, startEdit: Boolean = false, layouts: PadLayouts = remember { PadLayouts.memory() },
-    panel: String = "", procs: List<ProcRow> = emptyList(), devices: List<DeviceRow> = emptyList(), panelError: String = "", onAction: (String) -> Unit = {}, startDrawing: Boolean = false,
+    panel: String = "", procs: List<ProcRow> = emptyList(), devices: List<PcDeviceRow> = emptyList(), panelError: String = "", onAction: (String) -> Unit = {}, startDrawing: Boolean = false,
 ) {
     val pc = pcName
     var typed by remember { mutableStateOf("") }
