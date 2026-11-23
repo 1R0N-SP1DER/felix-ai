@@ -85,7 +85,7 @@ fun FazeRoot(vm: ChatViewModel = viewModel()) {
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var settings by remember { mutableStateOf(false) }
-    var page by remember { mutableStateOf("") } // "devices", "activity" or "pcremote", each its own full screen
+    var page by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") } // "devices", "activity" or "pcremote", each its own full screen
     val shown = settings || page.isNotEmpty()
 
     BackHandler(enabled = shown) { if (page.isNotEmpty()) page = "" else settings = false }

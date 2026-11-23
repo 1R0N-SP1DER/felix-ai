@@ -162,8 +162,8 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
     var camFrame by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     val soundPlayer = remember { PcAudio({ core.pcAsk(it, 10_000) }, AndroidSink(), { m -> problem = m; sound = false }) }
     val micPlayer = remember { PcAudio({ core.pcAsk(it, 10_000) }, AndroidSink(), { m -> problem = m; mic = false }) }
-    LaunchedEffect(sound, pc != null) { if (sound && pc != null) soundPlayer.start("monitor") else soundPlayer.stop() }
-    LaunchedEffect(mic) { if (mic) micPlayer.start("mic") else micPlayer.stop() }
+    LaunchedEffect(sound, pc != null) { try { if (sound && pc != null) soundPlayer.start("monitor") else soundPlayer.stop() } catch (e: Exception) { problem = "PC sound: " + (e.message ?: "failed"); sound = false } }
+    LaunchedEffect(mic) { try { if (mic) micPlayer.start("mic") else micPlayer.stop() } catch (e: Exception) { problem = "PC mic: " + (e.message ?: "failed"); mic = false } }
     DisposableEffect(Unit) { onDispose { soundPlayer.stop(); micPlayer.stop() } }
     LaunchedEffect(cam) {
         while (cam) {
