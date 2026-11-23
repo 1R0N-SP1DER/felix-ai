@@ -27,6 +27,29 @@ class PhoneMediaTest {
         assertEquals("error", m.handle(msg("phone_cam_get"))!!.getString("t"))
     }
 
+    private class Snd(var fail: String? = null) : SoundSource {
+        var started = false
+        override fun start() { fail?.let { throw IllegalStateException(it) }; started = true }
+        override fun take() = byteArrayOf(5, 6)
+        override fun stop() { started = false }
+    }
+
+    @Test fun phoneSoundComesBackEncodedOrWithTheReason() {
+        val s = Snd()
+        val m = PhoneMedia({ true }, Mic(), Cam(), {}, s)
+        val r = m.handle(msg("phone_sound_get"))!!
+        assertEquals("phone_sound_ok", r.getString("t"))
+        assertEquals(44100, r.getInt("rate"))
+        assertEquals(2, r.getInt("channels"))
+        assertEquals("BQY=", r.getString("data"))
+        m.handle(msg("phone_sound_stop"))
+        assertEquals(false, s.started)
+        val no = PhoneMedia({ true }, Mic(), Cam(), {}, Snd("not allowed yet")).handle(msg("phone_sound_get"))!!
+        assertEquals("error", no.getString("t"))
+        assertEquals("not allowed yet", no.getString("message"))
+        assertEquals("error", PhoneMedia({ false }, Mic(), Cam(), {}, Snd()).handle(msg("phone_sound_get"))!!.getString("t"))
+    }
+
     @Test fun otherMessagesAreNotItsBusiness() {
         assertEquals(null, PhoneMedia({ true }, Mic(), Cam()).handle(msg("fs_roots")))
     }

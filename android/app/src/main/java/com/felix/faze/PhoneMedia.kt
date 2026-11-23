@@ -43,9 +43,9 @@ interface CamSource {
  * Lets a connected computer use this phone's microphone and camera, the same way the phone uses the computer's: the computer asks for a chunk or a picture
  * as it needs one. Off unless Settings > Devices > "Let computers use my camera and microphone" is on, and Android only lets Faze use them while it is on screen.
  */
-class PhoneMedia(private val enabled: () -> Boolean, private val mic: MicSource, private val cam: CamSource, private val log: (String) -> Unit = {}) {
+class PhoneMedia(private val enabled: () -> Boolean, private val mic: MicSource, private val cam: CamSource, private val log: (String) -> Unit = {}, private val sound: SoundSource = NoSound) {
     companion object {
-        val TYPES = setOf("phone_audio_get", "phone_audio_stop", "phone_cam_get", "phone_cam_stop")
+        val TYPES = setOf("phone_audio_get", "phone_audio_stop", "phone_cam_get", "phone_cam_stop", "phone_sound_get", "phone_sound_stop")
         const val RATE = 16000
     }
 
@@ -60,6 +60,11 @@ class PhoneMedia(private val enabled: () -> Boolean, private val mic: MicSource,
                     JSONObject().put("t", "phone_audio_ok").put("rate", RATE).put("data", Base64.getEncoder().encodeToString(mic.take()))
                 }
                 "phone_audio_stop" -> { mic.stop(); JSONObject().put("t", "ok") }
+                "phone_sound_get" -> {
+                    sound.start()
+                    JSONObject().put("t", "phone_sound_ok").put("rate", 44100).put("channels", 2).put("data", Base64.getEncoder().encodeToString(sound.take()))
+                }
+                "phone_sound_stop" -> { sound.stop(); JSONObject().put("t", "ok") }
                 "phone_cam_get" -> JSONObject().put("t", "phone_cam_ok").put("jpeg", Base64.getEncoder().encodeToString(cam.frame(msg.optString("facing", "front"))))
                 else -> { cam.stop(); JSONObject().put("t", "ok") }
             }
