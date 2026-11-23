@@ -334,6 +334,16 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getBoolean("link_models", true)
         set(value) = prefs.edit().putBoolean("link_models", value).apply()
 
+    /** The control screen's picture quality: 360, 720, 1080 or match (this phone's own resolution). Lower is quicker over a weak link. */
+    var remoteQuality: String
+        get() = prefs.getString("remote_quality", "720") ?: "720"
+        set(value) = prefs.edit().putString("remote_quality", value).apply()
+
+    /** How the PC's picture fills the control screen: stretch (all of it, may distort), fill (crop the edges), fit (whole picture, bars). */
+    var remoteShape: String
+        get() = prefs.getString("remote_shape", "stretch") ?: "stretch"
+        set(value) = prefs.edit().putString("remote_shape", value).apply()
+
     /** Let a connected computer use this phone's camera and microphone. Off by default: it is a privacy switch. */
     var linkMedia: Boolean
         get() = prefs.getBoolean("link_media", false)
