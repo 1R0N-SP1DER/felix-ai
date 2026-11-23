@@ -311,6 +311,10 @@ private fun AgentTab(core: FazeCore) {
         SettingRow("Control screen quality", "Lower is quicker: fewer pixels to send, so less delay on a weak link. Match phone uses this phone's own resolution.") {
             Row { for ((id, label) in RemoteQuality.CHOICES) ChoiceChip(label, quality == id) { quality = id; core.settings.remoteQuality = id } }
         }
+        var fps by remember { mutableStateOf(core.settings.remoteFps) }
+        SettingRow("Control screen frame rate", "How many pictures a second. 15 is lightest on a weak link, 60 is smoothest but needs a fast network and PC.") {
+            Row { for (f in RemoteQuality.FPS_CHOICES) ChoiceChip("$f fps", fps == f) { fps = f; core.settings.remoteFps = f } }
+        }
         var shape by remember { mutableStateOf(core.settings.remoteShape) }
         SettingRow("Control screen shape", "Stretch uses every pixel of this phone's screen. Fill crops the edges instead of stretching. Fit shows the whole picture with bars.") {
             Row { for ((id, label) in listOf("stretch" to "Stretch", "fill" to "Fill", "fit" to "Fit")) ChoiceChip(label, shape == id) { shape = id; core.settings.remoteShape = id } }

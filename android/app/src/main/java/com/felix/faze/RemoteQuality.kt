@@ -6,10 +6,16 @@ object RemoteQuality {
 
     data class Params(val width: Int, val fps: Int, val quality: Int)
 
-    fun params(choice: String, phoneLongEdge: Int): Params = when (choice) {
-        "360" -> Params(640, 30, 55)
-        "1080" -> Params(1920, 30, 65)
-        "match" -> Params(phoneLongEdge.coerceIn(640, 2560), 30, 65)
-        else -> Params(1280, 30, 60)
+    val FPS_CHOICES = listOf(15, 30, 60)
+
+    /** fps is the frame rate the person chose (15, 30 or 60); anything else becomes 30. */
+    fun params(choice: String, phoneLongEdge: Int, fps: Int = 30): Params {
+        val f = if (fps in FPS_CHOICES) fps else 30
+        return when (choice) {
+            "360" -> Params(640, f, 55)
+            "1080" -> Params(1920, f, 65)
+            "match" -> Params(phoneLongEdge.coerceIn(640, 2560), f, 65)
+            else -> Params(1280, f, 60)
+        }
     }
 }

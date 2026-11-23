@@ -339,6 +339,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getString("remote_quality", "720") ?: "720"
         set(value) = prefs.edit().putString("remote_quality", value).apply()
 
+    /** Frames per second the control screen asks the PC for: 15, 30 or 60. */
+    var remoteFps: Int
+        get() = prefs.getInt("remote_fps", 30)
+        set(value) = prefs.edit().putInt("remote_fps", value).apply()
+
     /** How the PC's picture fills the control screen: stretch (all of it, may distort), fill (crop the edges), fit (whole picture, bars). */
     var remoteShape: String
         get() = prefs.getString("remote_shape", "stretch") ?: "stretch"
