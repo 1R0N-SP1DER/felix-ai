@@ -20,6 +20,7 @@ from .sync import Syncer
 from .clip import ClipSync
 from .notes import PhoneNotes
 from .system import SystemInfo
+from .phonemedia import PhoneMedia
 from . import modelsheet
 from .modelcopy import ModelCopy, DropFolder
 from .edge import EdgeWatcher, KWinEdge
@@ -354,6 +355,24 @@ class Daemon:
         job = ModelCopy(self.config, self.links.request, pid, say, lambda: {m["name"] for m in modelsheet.ollama_models(self.config)[1]}, running=lambda: modelsheet.ollama_models(self.config)[0])
         threading.Thread(target=job.go, daemon=True, name="model-copy").start()
 
+    def phone_media(self, what, on, emit):
+        """Switches the phone's microphone or camera on or off for this PC (see phonemedia.py)."""
+        pid = self._phone()
+        if on and not pid:
+            emit({"t": "phone_media", "mic": False, "cam": False, "text": "Your phone is not connected."})
+            return
+        if getattr(self, "pm", None) is None or (pid and self.pm.phone != pid):
+            if getattr(self, "pm", None) is not None:
+                self.pm.stop_all()
+
+            def say(text, ok):
+                st = self.pm.status()
+                self.broadcast({"t": "phone_media", "mic": st["mic"], "cam": st["cam"], "text": text})
+            self.pm = PhoneMedia(self.links.request, pid, say)
+        {("mic", True): self.pm.mic_on, ("mic", False): self.pm.mic_off, ("cam", True): self.pm.cam_on, ("cam", False): self.pm.cam_off}.get((what, bool(on)), lambda: None)()
+        st = self.pm.status()
+        emit({"t": "phone_media", "mic": st["mic"], "cam": st["cam"], "text": ""})
+
     def watch_drop_folder(self):
         """Models dragged into ~/Downloads/faze are set up in Ollama and removed from there."""
         def say(text, progress, done, ok):
@@ -407,6 +426,8 @@ class Daemon:
                 return
             emit({"t": "state", "config": self.config.public(), "chats": self.store.chats()})
             threading.Thread(target=self.send_models, args=(emit,), daemon=True).start()
+        elif op == "phone_media":
+            threading.Thread(target=self.phone_media, args=(str(req.get("what", "")), bool(req.get("on")), emit), daemon=True).start()
         elif op == "copy_models":
             self.start_model_copy(emit)
         elif op == "set_effort":

@@ -65,6 +65,7 @@ class Bridge(QObject):
     activityLoaded = Signal("QVariantList")
     modelsLoaded = Signal("QVariantMap")
     modelCopy = Signal(str, float, bool, bool)
+    phoneMediaChanged = Signal(bool, bool, str)
 
     def __init__(self, floating, demo=False):
         super().__init__()
@@ -176,6 +177,8 @@ class Bridge(QObject):
                 self.activityLoaded.emit([{"when": r["t"], "kind": r["kind"], "text": r["text"]} for r in ev["rows"]])
             elif t == "model_copy":
                 self.modelCopy.emit(ev["text"], float(ev["progress"]), bool(ev["done"]), bool(ev["ok"]))
+            elif t == "phone_media":
+                self.phoneMediaChanged.emit(bool(ev.get("mic")), bool(ev.get("cam")), str(ev.get("text", "")))
             elif t == "models":
                 self.modelsLoaded.emit({"rows": ev["rows"], "local": ev["local"], "running": ev["running"], "efforts": ev["efforts"]})
             elif t == "note":
@@ -346,6 +349,10 @@ class Bridge(QObject):
     @Slot()
     def copyModelsFromPhone(self):
         self._send({"op": "copy_models"})
+
+    @Slot(str, bool)
+    def phoneMedia(self, what, on):
+        self._send({"op": "phone_media", "what": what, "on": on})
 
     @Slot()
     def loadModels(self):

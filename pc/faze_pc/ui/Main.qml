@@ -40,6 +40,9 @@ ApplicationWindow {
     }
     property string currentChat: ""
     property var devices: []
+    property bool phoneMic: false
+    property bool phoneCam: false
+    property string phoneMediaNote: ""
     property var levels: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
     property var found: []
     property string pairMsg: ""
@@ -84,6 +87,7 @@ ApplicationWindow {
         function onChatsChanged(c) { win.chats = c }
         function onHeard(t) { if (t.trim() !== "") { input.text = (input.text ? input.text + " " : "") + t; input.forceActiveFocus() } else bridge.sayNothing() }
         function onLevelChanged(v) { win.levels = win.levels.slice(1).concat([v]) }
+        function onPhoneMediaChanged(mic, cam, text) { win.phoneMic = mic; win.phoneCam = cam; if (text !== "") win.phoneMediaNote = text }
         function onDevicesChanged(d) { win.devices = d; win.pairMsg = "" }
         function onPhonesFound(p) { win.found = p; if (p.length > 0) { addr.text = p[0].address; win.pairMsg = "Found " + p[0].name } else win.pairMsg = "No phone answered. Is Faze open on it with computers allowed?" }
         function onPairFailed(m) { win.pairMsg = m }
@@ -495,6 +499,14 @@ ApplicationWindow {
                 }
             }
             Text { visible: win.devices.length === 0; text: "No phone paired yet."; color: win.dim; font.pixelSize: 13 }
+            Text { visible: win.devices.filter(function (d) { return d.state === "connected" }).length > 0; text: "Use the phone on this PC"; color: win.text; font.pixelSize: 14; font.bold: true }
+            RowLayout {
+                visible: win.devices.filter(function (d) { return d.state === "connected" }).length > 0
+                Layout.fillWidth: true; spacing: 10
+                FazeButton { text: win.phoneMic ? "Phone microphone: on" : "Phone microphone"; checkable: true; checked: win.phoneMic; onClicked: bridge.phoneMedia("mic", !win.phoneMic) }
+                FazeButton { text: win.phoneCam ? "Phone camera: on" : "Phone camera"; checkable: true; checked: win.phoneCam; onClicked: bridge.phoneMedia("cam", !win.phoneCam) }
+            }
+            Text { visible: win.phoneMediaNote !== ""; text: win.phoneMediaNote; color: win.dim; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
             Rectangle { Layout.fillWidth: true; height: 1; color: win.line }
             Text { text: "Pair a phone"; color: win.text; font.pixelSize: 14; font.bold: true }
             Text { text: "On the phone: Settings > Devices > Pair a computer. It shows a code. Then find the phone here and type the code."; color: win.muted; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
