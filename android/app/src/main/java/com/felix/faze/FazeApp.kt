@@ -8,6 +8,7 @@ class FazeApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        CrashLog.install(this)
         core = FazeCore(this)
     }
 }

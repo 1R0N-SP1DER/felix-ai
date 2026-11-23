@@ -308,6 +308,17 @@ private fun AgentTab(core: FazeCore) {
         SettingRow("Let computers open my folders", "Pictures, Download, Documents, DCIM, Music and Movies, read only. Needs Access to all files (above).") { FazeSwitch(files, { files = it; core.settings.linkFiles = it }) }
         SettingRow("Let computers open all my files", "Everything on the phone's storage, not just those folders. Read only. Needs Access to all files (above).", last = true) { FazeSwitch(filesAll, { filesAll = it; core.settings.linkFilesAll = it }) }
     }
+    run {
+        val context = androidx.compose.ui.platform.LocalContext.current
+        var crash by remember { mutableStateOf(CrashLog.read(context)) }
+        if (crash.isNotEmpty()) SettingsCard("Last crash") {
+            Text(crash.take(900), color = Palette.Dim, fontSize = 11.sp, modifier = Modifier.padding(8.dp))
+            SettingRow("Copy it and send it to me", "This is what stopped Faze last time. It stays here until you clear it.", last = true) {
+                Text("Copy", color = Palette.Accent, modifier = Modifier.clickable { (context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("crash", crash)) }.padding(8.dp))
+                Text("Clear", color = Palette.Accent, modifier = Modifier.clickable { CrashLog.clear(context); crash = "" }.padding(8.dp))
+            }
+        }
+    }
     SettingsCard("Fast routes") {
         var fast by remember { mutableStateOf(core.settings.fastRoutes) }
         var needle by remember { mutableStateOf(core.settings.needleOn) }

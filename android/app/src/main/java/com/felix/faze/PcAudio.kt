@@ -56,7 +56,11 @@ class PcAudio(private val ask: (JSONObject) -> JSONObject, private val sink: Aud
         this.source = source
         running = true
         Thread {
-            while (running && step()) { /* the sink blocks when the speaker is full */ }
+            try {
+                while (running && step()) { /* the sink blocks when the speaker is full */ }
+            } catch (e: Throwable) {
+                onError("the PC's sound failed: " + (e.message ?: e.javaClass.simpleName))
+            }
             finish()
         }.start()
     }
