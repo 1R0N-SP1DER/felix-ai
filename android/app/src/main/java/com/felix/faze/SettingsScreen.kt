@@ -56,6 +56,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import android.media.projection.MediaProjectionManager
 
 private val TABS = listOf("general" to "General", "voice" to "Voice", "agent" to "Agent", "advanced" to "Advanced")
 
@@ -307,6 +308,22 @@ private fun AgentTab(core: FazeCore) {
         SettingRow("Let computers copy my offline models", "A connected computer can take copies of the .gguf models on this phone (Qwen, LFM) to run them itself. The copies are removed from the shared folder after. Needs root.") { FazeSwitch(modelsOn, { modelsOn = it; core.settings.linkModels = it }) }
         var mediaOn by remember { mutableStateOf(core.settings.linkMedia) }
         SettingRow("Let computers use my camera and microphone", "A connected computer can ask for this phone's camera pictures and microphone sound (to use as a webcam and mic). Off unless you turn it on. Android only allows it while Faze is open on screen.") { FazeSwitch(mediaOn, { mediaOn = it; core.settings.linkMedia = it }) }
+        val soundCtx = LocalContext.current
+        var soundOn by remember { mutableStateOf(SoundCapture.ready()) }
+        val soundAsk = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+            val d = r.data
+            if (r.resultCode == android.app.Activity.RESULT_OK && d != null) {
+                ContextCompat.startForegroundService(soundCtx, Intent(soundCtx, SoundService::class.java).putExtra("code", r.resultCode).putExtra("data", d))
+                soundOn = true
+            }
+        }
+        SettingRow("Share this phone's sound with computers", "Lets a computer play what this phone is playing (music, videos, games) through its speakers. Android asks you to allow it once and shows a notification while it can; some apps block capture and stay silent. Also needs the camera and microphone switch above.") {
+            ChoiceChip(if (soundOn) "Stop sharing" else "Allow", soundOn) {
+                if (soundOn) {
+                    soundCtx.startService(Intent(soundCtx, SoundService::class.java).setAction(SoundService.ACTION_STOP)); soundOn = false
+                } else soundAsk.launch(soundCtx.getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent())
+            }
+        }
         var quality by remember { mutableStateOf(core.settings.remoteQuality) }
         SettingRow("Control screen quality", "Lower is quicker: fewer pixels to send, so less delay on a weak link. Match phone uses this phone's own resolution.") {
             Row { for ((id, label) in RemoteQuality.CHOICES) ChoiceChip(label, quality == id) { quality = id; core.settings.remoteQuality = id } }

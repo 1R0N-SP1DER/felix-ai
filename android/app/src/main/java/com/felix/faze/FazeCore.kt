@@ -228,7 +228,7 @@ class FazeCore(private val app: Application) : EngineListener {
     )
     /** Copies of offline models staged for a computer to read (see PhoneModels). */
     private val phoneModels = PhoneModels({ settings.linkModels }, { cmd, ms -> try { Su.run(cmd, ms) } catch (_: Exception) { "" } }, { activity.add("link", it) })
-    private val phoneMedia = PhoneMedia({ settings.linkMedia }, AndroidMic(app), AndroidCam(app), { activity.add("link", it) })
+    private val phoneMedia = PhoneMedia({ settings.linkMedia }, AndroidMic(app), AndroidCam(app), { activity.add("link", it) }, AndroidSound(app))
     private val phoneFiles = PhoneFiles({
         val top = android.os.Environment.getExternalStorageDirectory()
         val allOk = android.os.Build.VERSION.SDK_INT < 30 || android.os.Environment.isExternalStorageManager()
