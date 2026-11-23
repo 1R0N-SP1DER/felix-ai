@@ -42,7 +42,7 @@ import org.json.JSONObject
 import kotlin.math.hypot
 
 /** The whole controller as one small state: four stick directions, two triggers' worth of buttons, and which buttons are held. Every change sends the full state, so a lost message heals on the next one. */
-class PadState(private val send: (JSONObject) -> Unit, private val key: (String, Boolean) -> Unit = { _, _ -> }) {
+class PadState(private val key: (String, Boolean) -> Unit = { _, _ -> }, private val send: (JSONObject) -> Unit) {
     private val axes = linkedMapOf("lx" to 0f, "ly" to 0f, "rx" to 0f, "ry" to 0f)
     private val held = linkedSetOf<String>()
 
