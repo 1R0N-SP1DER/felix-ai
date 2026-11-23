@@ -65,7 +65,7 @@ fun PageHeader(title: String, onBack: () -> Unit, right: @Composable () -> Unit 
 
 /** Every device linked to this phone: the platform as the big picture, then the name and how it is connected. */
 @Composable
-fun DevicesScreen(core: FazeCore, onBack: () -> Unit, onControl: () -> Unit = {}, onMedia: (String) -> Unit = {}) {
+fun DevicesScreen(core: FazeCore, onBack: () -> Unit, onOpen: (String) -> Unit = {}) {
     val rows = core.deviceRows()
     val on = core.settings.linkOn
     Column(modifier = Modifier.fillMaxSize().background(Palette.Bg)) {
@@ -73,7 +73,7 @@ fun DevicesScreen(core: FazeCore, onBack: () -> Unit, onControl: () -> Unit = {}
         Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Hint("Screen control and file access are in Settings > Advanced > Devices. This phone is the hub. Any number of computers can pair with it and work with it as one Faze.")
             if (rows.isEmpty()) Text("No devices yet.", color = Palette.Muted, fontSize = 14.sp, modifier = Modifier.padding(vertical = 8.dp))
-            for (d in rows) DeviceCard(core, d, onControl, onMedia) { core.removeDevice(d.id) }
+            for (d in rows) DeviceCard(core, d, onOpen) { core.removeDevice(d.id) }
             SettingsCard("Pair a computer") {
                 SettingRow("Allow computers", "Opens a port on this phone so a paired computer can connect. Everything after pairing is encrypted.", last = !on) {
                     FazeSwitch(on, { core.setLink(it) })
@@ -97,7 +97,7 @@ fun DevicesScreen(core: FazeCore, onBack: () -> Unit, onControl: () -> Unit = {}
 }
 
 @Composable
-private fun DeviceCard(core: FazeCore, d: DeviceRow, onControl: () -> Unit, onMedia: (String) -> Unit, onRemove: () -> Unit) {
+private fun DeviceCard(core: FazeCore, d: DeviceRow, onOpen: (String) -> Unit, onRemove: () -> Unit) {
     var confirm by remember { mutableStateOf(false) }
     var open by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf("") }
@@ -128,7 +128,7 @@ private fun DeviceCard(core: FazeCore, d: DeviceRow, onControl: () -> Unit, onMe
                     onDragCancel = { drag = 0f },
                 ) { _, amount -> total += amount; drag = ThrowGesture.pull(total, size.width.toFloat()) }
             }
-            .clip(RoundedCornerShape(20.dp)).background(Palette.Glass).border(1.dp, Palette.Line, RoundedCornerShape(20.dp)).clickable(enabled = d.connected) { open = !open }.padding(16.dp),
+            .clip(RoundedCornerShape(20.dp)).background(Palette.Glass).border(1.dp, Palette.Line, RoundedCornerShape(20.dp)).clickable(enabled = d.connected) { onOpen(d.id) }.padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -143,23 +143,8 @@ private fun DeviceCard(core: FazeCore, d: DeviceRow, onControl: () -> Unit, onMe
                 color = Palette.Dim, fontSize = 13.sp,
             )
         }
-        if (d.connected) Text(if (open) "Tap to close" else "Tap for more · drag sideways to show this phone here", color = Palette.Muted, fontSize = 12.sp)
-        if (open && d.connected) {
-            Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DeviceChip("Browse files") {
-                    val root = android.provider.DocumentsContract.buildRootUri(context.packageName + ".pcfiles", d.id)
-                    try { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(root, android.provider.DocumentsContract.Root.MIME_TYPE_ITEM).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                    catch (e: Exception) { note = "Could not open the Files app: ${e.message ?: ""}" }
-                }
-                DeviceChip("Send file") { picker.launch(arrayOf("*/*")) }
-                DeviceChip("Show my phone") { core.showPhoneOnPc(); note = "Showing this phone on ${d.name}…" }
-                DeviceChip("Control screen") { onControl() }
-                DeviceChip("PC sound") { onMedia("sound") }
-                DeviceChip("PC mic") { onMedia("mic") }
-                DeviceChip("Webcam") { onMedia("cam") }
-            }
-            if (note.isNotEmpty()) Text(note, color = Palette.Dim, fontSize = 12.5.sp, modifier = Modifier.padding(top = 6.dp))
-        }
+        if (d.connected) Text("Tap to open · drag sideways to show this phone here", color = Palette.Muted, fontSize = 12.sp)
+        if (note.isNotEmpty()) Text(note, color = Palette.Dim, fontSize = 12.5.sp, modifier = Modifier.padding(top = 6.dp))
         Text(
             if (confirm) "Tap again to remove" else "Remove", color = if (confirm) Palette.Bad else Palette.Muted, fontSize = 13.sp,
             modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { if (confirm) onRemove() else confirm = true }.padding(horizontal = 12.dp, vertical = 6.dp),

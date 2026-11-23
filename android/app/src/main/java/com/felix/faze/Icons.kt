@@ -16,7 +16,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-enum class Ico { MIC, MIC_OFF, CHEVRON, WAVE, ARROW_UP, PLUS, CAMERA, SCREEN, CLOSE, STOP, COPY, SPEAKER, THUMB_UP, THUMB_DOWN, REFRESH, POINTER, KEYBOARD, ROTATE, DOTS, GRID }
+enum class Ico { MIC, MIC_OFF, CHEVRON, WAVE, ARROW_UP, PLUS, CAMERA, SCREEN, CLOSE, STOP, COPY, SPEAKER, THUMB_UP, THUMB_DOWN, REFRESH, POINTER, KEYBOARD, ROTATE, DOTS, GRID, GAMEPAD, FOLDER }
 
 /** Simple line icons drawn on a 24 x 24 grid (no icon library: the app has none). */
 @Composable
@@ -117,6 +117,12 @@ private fun DrawScope.drawIco(kind: Ico, color: Color) {
             drawRoundRect(color, p(4f, 13.5f), Size(6.5f * s, 6.5f * s), CornerRadius(1.5f * s), style = line)
             drawRoundRect(color, p(13.5f, 13.5f), Size(6.5f * s, 6.5f * s), CornerRadius(1.5f * s), style = line)
         }
+        Ico.GAMEPAD -> {
+            drawRoundRect(color, p(2.5f, 7.5f), Size(19f * s, 10f * s), CornerRadius(5f * s), style = line)
+            seg(7f, 10.5f, 7f, 14.5f); seg(5f, 12.5f, 9f, 12.5f)
+            seg(15.5f, 11.5f, 15.5f, 11.6f); seg(18f, 13.5f, 18f, 13.6f)
+        }
+        Ico.FOLDER -> poly(3f, 7f, 9f, 7f, 11f, 9.5f, 21f, 9.5f, 21f, 19f, 3f, 19f, close = true)
         Ico.STOP -> drawRoundRect(color, p(6.5f, 6.5f), Size(11f * s, 11f * s), CornerRadius(2.5f * s))
     }
 }

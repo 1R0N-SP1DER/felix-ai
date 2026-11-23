@@ -80,7 +80,7 @@ private fun Context.findActivity(): Activity? {
  * bar types on the PC and arms Ctrl, Shift, Alt and Win for shortcuts. The rotate button switches between landscape and portrait.
  */
 @Composable
-fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
+fun PcRemoteScreen(core: FazeCore, overlayOnly: Boolean = false, onBack: () -> Unit) {
     val pc = core.deviceRows().firstOrNull { it.connected }
     var frame by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     var problem by remember { mutableStateOf("") }
@@ -110,7 +110,7 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
     // The live stream: the computer pushes pictures, the newest is drawn. If it cannot stream, fall back to asking for one picture at a time.
     var streaming by remember { mutableStateOf(false) }
     LaunchedEffect(pc?.id) {
-        if (pc == null) return@LaunchedEffect
+        if (pc == null || overlayOnly) return@LaunchedEffect
         core.pcFrames.reset()
         try {
             val q = RemoteQuality.params(core.settings.remoteQuality, ctx.resources.displayMetrics.let { maxOf(it.widthPixels, it.heightPixels) })
@@ -161,7 +161,7 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
     // The PC's webcam as a small picture over the screen, its microphone, and its sound (on by default: the picture and the sound belong together).
     var cam by remember { mutableStateOf(false) }
     var mic by remember { mutableStateOf(false) }
-    var sound by remember { mutableStateOf(true) }
+    var sound by remember { mutableStateOf(!overlayOnly) }
     var camFrame by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     val soundPlayer = remember { PcAudio({ core.pcAsk(it, 10_000) }, AndroidSink(), { m -> problem = m; sound = false }) }
     val micPlayer = remember { PcAudio({ core.pcAsk(it, 10_000) }, AndroidSink(), { m -> problem = m; mic = false }) }
@@ -232,7 +232,7 @@ fun PcRemoteScreen(core: FazeCore, onBack: () -> Unit) {
         panel = panel, procs = procs, devices = devices, panelError = panelError, onAction = { act(it) },
         camFrame = camFrame, cam = cam, mic = mic, sound = sound,
         layouts = layouts,
-        shape = core.settings.remoteShape,
+        shape = core.settings.remoteShape, overlayOnly = overlayOnly,
         onToggle = { which -> when (which) { "cam" -> cam = !cam; "mic" -> mic = !mic; "sound" -> sound = !sound } },
     )
 }
@@ -246,7 +246,7 @@ fun RemoteView(
     pcName: String?, frame: androidx.compose.ui.graphics.ImageBitmap?, problem: String, note: String, remote: PcRemote, onBack: () -> Unit, onRotate: () -> Unit,
     startKeysOpen: Boolean = false, startArmed: Set<String> = emptySet(),
     camFrame: androidx.compose.ui.graphics.ImageBitmap? = null, cam: Boolean = false, mic: Boolean = false, sound: Boolean = true, onToggle: (String) -> Unit = {}, startPad: Boolean = false, startEdit: Boolean = false, layouts: PadLayouts = remember { PadLayouts.memory() },
-    panel: String = "", procs: List<ProcRow> = emptyList(), devices: List<PcDeviceRow> = emptyList(), panelError: String = "", onAction: (String) -> Unit = {}, startDrawing: Boolean = false, shape: String = "stretch",
+    panel: String = "", procs: List<ProcRow> = emptyList(), devices: List<PcDeviceRow> = emptyList(), panelError: String = "", onAction: (String) -> Unit = {}, startDrawing: Boolean = false, shape: String = "stretch", overlayOnly: Boolean = false,
 ) {
     val pc = pcName
     var typed by remember { mutableStateOf("") }
@@ -255,11 +255,11 @@ fun RemoteView(
     var speed by remember { mutableStateOf(PointerSpeed.NORMAL) }
     var armed by remember { mutableStateOf(startArmed) }
     var pointerMenu by remember { mutableStateOf(false) }
-    var touchOn by remember { mutableStateOf(true) }
+    var touchOn by remember { mutableStateOf(!overlayOnly) }
     val touch = androidx.compose.runtime.rememberUpdatedState(touchOn)
     var moreMenu by remember { mutableStateOf(false) }
     var drawing by remember { mutableStateOf(startDrawing) }
-    var padOn by remember { mutableStateOf(startPad || startEdit) }
+    var padOn by remember { mutableStateOf(startPad || startEdit || overlayOnly) }
     var padEdit by remember { mutableStateOf(startEdit) }
     val padState = remember(remote) { PadState({ remote.pad(it) }, { k, down -> if (down) remote.keyDown(k) else remote.keyUp(k) }) }
     var camX by remember { mutableStateOf(24f) }
@@ -294,7 +294,8 @@ fun RemoteView(
             contentAlignment = Alignment.Center,
         ) {
             val f = frame
-            if (f != null) Image(f, contentDescription = "PC screen", contentScale = when (shape) { "fit" -> ContentScale.Fit; "fill" -> ContentScale.Crop; else -> ContentScale.FillBounds }, modifier = Modifier.fillMaxSize())
+            if (overlayOnly) Text("Controller only. The picture is off.", color = Palette.Muted, fontSize = 13.sp)
+            else if (f != null) Image(f, contentDescription = "PC screen", contentScale = when (shape) { "fit" -> ContentScale.Fit; "fill" -> ContentScale.Crop; else -> ContentScale.FillBounds }, modifier = Modifier.fillMaxSize())
             else Text("Waiting for the PC…", color = Palette.Dim)
         }
 

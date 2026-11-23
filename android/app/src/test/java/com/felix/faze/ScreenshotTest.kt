@@ -1,5 +1,10 @@
 package com.felix.faze
 
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.background
 import androidx.compose.runtime.remember
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -104,6 +109,14 @@ class ScreenshotTest {
 
     @Test fun remoteDrawing() = shot("remote_draw") {
         RemoteView("Felix-PC", desktop(), "", "", remote(), {}, {}, startDrawing = true)
+    }
+
+    @Test fun remoteControllerOnly() = shot("remote_overlay_only") {
+        RemoteView("Felix-PC", null, "", "", remote(), {}, {}, overlayOnly = true)
+    }
+
+    @Test fun deviceTiles() = shot("device_tiles") {
+        Column(Modifier.background(Palette.Bg).verticalScroll(rememberScrollState()).padding(16.dp)) { PageHeader("Felix-PC", {}); TileGrid {} }
     }
 
     @Test fun remoteWithNoComputer() = shot("remote_no_pc") {
