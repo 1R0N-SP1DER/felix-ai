@@ -34,12 +34,25 @@ def pick_encoder(have, preferred=""):
     return None
 
 
-def gst_args(fd, node, width, fps, quality, encoder=None, kbps=0):
+def even_size(width, source):
+    """(w, h) for a picture scaled to the given width with the source's proportions, both even (the encoder refuses odd sizes), or None when the source size is unknown."""
+    try:
+        sw, sh = int(source[0]), int(source[1])
+    except (TypeError, ValueError, IndexError, KeyError):
+        return None
+    if sw <= 0 or sh <= 0:
+        return None
+    w = max(2, int(width) // 2 * 2)
+    h = max(2, int(round(sh * w / sw / 2.0)) * 2)
+    return w, h
+
+
+def gst_args(fd, node, width, fps, quality, encoder=None, kbps=0, source=None):
     """The gst-launch command that turns the PipeWire stream into JPEG pictures (or, with an encoder, H.264 access units) on stdout."""
     if encoder:
         return ["gst-launch-1.0", "-q", "pipewiresrc", "fd=%d" % fd, "path=%d" % node, "do-timestamp=true", "!",
                 "videorate", "!", "video/x-raw,framerate=%d/1" % fps, "!",
-                "videoscale", "!", "video/x-raw,width=%d" % (width // 2 * 2), "!",
+                "videoscale", "!", "video/x-raw,%s" % ("width=%d,height=%d" % even_size(width, source) if even_size(width, source) else "width=%d" % (width // 2 * 2)), "!",
                 "videoconvert", "!", "video/x-raw,format=I420", "!"] + encoder_args(encoder, kbps, fps) + [
                 "!", "h264parse", "config-interval=-1", "!", "video/x-h264,stream-format=byte-stream,alignment=au", "!", "fdsink", "fd=1"]
     return ["gst-launch-1.0", "-q", "pipewiresrc", "fd=%d" % fd, "path=%d" % node, "do-timestamp=true", "!",
@@ -136,6 +149,7 @@ def main(argv):
     if not streams:
         fail(2, "The desktop gave no screen.")
     node = streams[0][0]
+    source = (streams[0][1] or {}).get("size") if len(streams[0]) > 1 and isinstance(streams[0][1], dict) else None
     new_token = res.get("restore_token")
     if new_token:
         try:
@@ -149,7 +163,7 @@ def main(argv):
     fd = fds.get(reply.unpack()[0])
     os.set_inheritable(fd, True)
     from .stream import kbps as _kbps
-    proc = subprocess.Popen(gst_args(fd, node, width, fps, quality, encoder, _kbps(width, fps, quality)), pass_fds=(fd,), stdin=subprocess.DEVNULL)
+    proc = subprocess.Popen(gst_args(fd, node, width, fps, quality, encoder, _kbps(width, fps, quality), source), pass_fds=(fd,), stdin=subprocess.DEVNULL)
     try:
         sys.stdin.buffer.read()  # blocks until the daemon closes our input, which is how it says stop
     finally:
