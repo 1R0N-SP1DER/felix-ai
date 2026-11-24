@@ -91,6 +91,7 @@ fun PcRemoteScreen(core: FazeCore, overlayOnly: Boolean = false, onBack: () -> U
     var fps by remember { mutableStateOf(core.settings.remoteFps) }
     var codec by remember { mutableStateOf(core.settings.remoteCodec) }
     var video by remember { mutableStateOf(false) }   // the hardware decoder is drawing the picture
+    val videoGrab = remember { VideoGrab() }
     val longEdge = LocalContext.current.resources.displayMetrics.let { maxOf(it.widthPixels, it.heightPixels) }
 
     val ctx = LocalContext.current
@@ -247,6 +248,9 @@ fun PcRemoteScreen(core: FazeCore, overlayOnly: Boolean = false, onBack: () -> U
             what == "tasks" || what == "devices" -> { panel = what; procs = emptyList(); devices = emptyList(); panelError = "" }
             what == "close" -> panel = ""
             what.startsWith("use:") -> useOnPc(what.removePrefix("use:"))
+            what == "shot" && video -> videoGrab.grab { bmp ->
+                android.widget.Toast.makeText(padCtx, if (bmp != null && saveToGallery(padCtx, bmp, "faze-pc-" + System.currentTimeMillis())) "Saved to Pictures/Faze" else "No picture to save yet", android.widget.Toast.LENGTH_SHORT).show()
+            }
             what == "shot" -> {
                 val f = frame
                 android.widget.Toast.makeText(padCtx, if (f != null && saveToGallery(padCtx, f.asAndroidBitmap(), "faze-pc-" + System.currentTimeMillis())) "Saved to Pictures/Faze" else "No picture to save yet", android.widget.Toast.LENGTH_SHORT).show()
@@ -270,7 +274,7 @@ fun PcRemoteScreen(core: FazeCore, overlayOnly: Boolean = false, onBack: () -> U
         camFrame = camFrame, cam = cam, mic = mic, sound = sound,
         layouts = layouts,
         shape = core.settings.remoteShape, overlayOnly = overlayOnly,
-        video = if (video) ({ val g = RemoteQuality.params(quality, longEdge, fps); VideoSurface(core.pcFrames, g.width, g.width * 9 / 16, core.settings.remoteShape) { m -> problem = "Fast video stopped: $m Using normal video."; codec = "jpeg" } }) else null,
+        video = if (video) ({ val g = RemoteQuality.params(quality, longEdge, fps); VideoSurface(core.pcFrames, g.width, g.width * 9 / 16, core.settings.remoteShape, videoGrab) { m -> problem = "Fast video stopped: $m Using normal video."; codec = "jpeg" } }) else null,
         streamCodec = codec, streamQuality = quality, streamFps = fps,
         pcUses = pcUses,
         onStream = { c, qual, f ->

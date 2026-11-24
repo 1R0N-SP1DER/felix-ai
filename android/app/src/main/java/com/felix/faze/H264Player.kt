@@ -2,6 +2,8 @@ package com.felix.faze
 
 import android.media.MediaCodec
 import android.media.MediaFormat
+import android.os.Handler
+import android.os.Looper
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -91,11 +93,26 @@ class H264Player(private val frames: PcFrames, private val surface: Surface, pri
  * The PC picture drawn by the hardware decoder. shape is the same stretch / fill / fit the JPEG picture has; the video's own proportions arrive from the decoder.
  * guessW and guessH only seed the decoder: it adapts to the real size by itself.
  */
+/** Lets the screen reach the picture the decoder is drawing (for Screen shot): the SurfaceView holds pixels the normal screenshot tools cannot see. */
+class VideoGrab {
+    @Volatile var view: SurfaceView? = null
+
+    /** Copies the current picture into a bitmap and calls done with it, or with null when there is none yet. */
+    fun grab(done: (android.graphics.Bitmap?) -> Unit) {
+        val v = view
+        if (v == null || v.width <= 0 || v.height <= 0 || !v.holder.surface.isValid) { done(null); return }
+        val bmp = android.graphics.Bitmap.createBitmap(v.width, v.height, android.graphics.Bitmap.Config.ARGB_8888)
+        try {
+            android.view.PixelCopy.request(v, bmp, { code -> done(if (code == android.view.PixelCopy.SUCCESS) bmp else null) }, Handler(Looper.getMainLooper()))
+        } catch (e: Exception) { done(null) }
+    }
+}
+
 @Composable
-fun VideoSurface(frames: PcFrames, guessW: Int, guessH: Int, shape: String, onError: (String) -> Unit) {
+fun VideoSurface(frames: PcFrames, guessW: Int, guessH: Int, shape: String, grab: VideoGrab? = null, onError: (String) -> Unit) {
     var aspect by remember { mutableStateOf(guessW.toFloat() / guessH) }
     val player = remember { arrayOfNulls<H264Player>(1) }
-    DisposableEffect(Unit) { onDispose { player[0]?.stop(); player[0] = null } }
+    DisposableEffect(Unit) { onDispose { player[0]?.stop(); player[0] = null; grab?.view = null } }
     BoxWithConstraints(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         val d = LocalDensity.current
         val cw = with(d) { maxWidth.toPx() }
@@ -109,6 +126,7 @@ fun VideoSurface(frames: PcFrames, guessW: Int, guessH: Int, shape: String, onEr
             modifier = Modifier.requiredSize(with(d) { w.toDp() }, with(d) { h.toDp() }),
             factory = { c ->
                 SurfaceView(c).also { sv ->
+                    grab?.view = sv
                     sv.holder.addCallback(object : SurfaceHolder.Callback {
                         override fun surfaceCreated(holder: SurfaceHolder) {
                             player[0]?.stop()
