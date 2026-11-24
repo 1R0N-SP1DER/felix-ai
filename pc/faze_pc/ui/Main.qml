@@ -50,12 +50,19 @@ ApplicationWindow {
     property bool phoneMic: false
     property bool phoneCam: false
     property bool phoneSound: false
+    property bool phoneOpen: false
+    function openPhone() {
+        if (floating) { bridge.openMirrorWindow(); return }
+        phoneOpen = true
+        if (bridge.demoPopup !== "phone") mirror.start()
+    }
+    function closePhone() { phoneOpen = false; mirror.stop() }
     property string phoneMediaNote: ""
     property var levels: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
     property var found: []
     property string pairMsg: ""
 
-    Component.onCompleted: { if (bridge !== null && bridge.demoPopup === "devices") devicesPopup.open(); if (bridge !== null && bridge.demoPopup === "mirror") mirrorPopup.open(); if (bridge !== null && bridge.demoPopup === "settings") settings.open(); if (bridge !== null && bridge.demoPopup === "models") modelSheet.open(); if (bridge !== null && bridge.demoPopup === "bubble") bubble = true; if (bridge !== null && bridge.demoPopup === "menu") headerMenu.popup(nameBtn, nameBtn.width - headerMenu.width, nameBtn.height + 6) }
+    Component.onCompleted: { if (bridge !== null && bridge.demoPopup === "devices") devicesPopup.open(); if (bridge !== null && bridge.demoPopup === "mirror") mirrorPopup.open(); if (bridge !== null && bridge.demoPopup === "settings") settings.open(); if (bridge !== null && bridge.demoPopup === "models") modelSheet.open(); if (bridge !== null && bridge.demoPopup === "bubble") bubble = true; if (bridge !== null && bridge.demoPopup === "phone") phoneOpen = true; if (bridge !== null && bridge.demoPopup === "menu") headerMenu.popup(nameBtn, nameBtn.width - headerMenu.width, nameBtn.height + 6) }
     Timer { interval: 3000; repeat: true; running: devicesPopup.opened; onTriggered: bridge.refreshDevices() }
 
     function toggle() {
@@ -152,6 +159,8 @@ ApplicationWindow {
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                Layout.minimumWidth: 0
+                Layout.preferredWidth: 1
                 spacing: 0
 
                 // Top bar, as on the phone: the model chip on the left, a few actions on the right.
@@ -393,14 +402,42 @@ ApplicationWindow {
                 }
             }
 
+            // Desktop: the phone's screen as a pane beside the chat (the pop-out window button opens it on its own).
+            Rectangle {
+                id: phonePane
+                visible: win.phoneOpen && !win.floating
+                Layout.preferredWidth: 340
+                Layout.fillHeight: true
+                color: "#A80E1422"
+                Rectangle { anchors.left: parent.left; width: 1; height: parent.height; color: win.line }
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 1
+                    spacing: 0
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.margins: 12
+                        Text { text: "PHONE"; color: win.muted; font.pixelSize: 11; font.bold: true; font.letterSpacing: 2; Layout.fillWidth: true }
+                        FazeButton { text: "Pop out"; implicitHeight: 28; onClicked: { win.closePhone(); bridge.openMirrorWindow() } }
+                        FazeButton { text: "✕"; implicitHeight: 28; leftPadding: 10; rightPadding: 10; onClicked: win.closePhone() }
+                    }
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        Loader { anchors.fill: parent; active: phonePane.visible; source: "PhoneView.qml"; onLoaded: item.imageProvider = "phoneview" }
+                    }
+                }
+            }
+
             // Desktop, wide window: the phone's panel on the right.
             Dock {
-                visible: !win.floating && win.width >= 1060
+                visible: !win.floating && win.width >= 1060 && !win.phoneOpen
                 Layout.preferredWidth: 280
                 Layout.fillHeight: true
                 devices: win.devices
                 onAction: function (name) {
-                    if (name === "screen") bridge.openMirrorWindow()
+                    if (name === "screen") win.openPhone()
                     else if (name === "voice") bridge.startVoiceChat()
                     else if (name === "live") bridge.startLive()
                     else if (name === "devices") { bridge.refreshDevices(); devicesPopup.open() }
@@ -428,7 +465,7 @@ ApplicationWindow {
         }
         Item2 { text: "Settings"; onTriggered: settings.open() }
         Item2 { text: "Devices"; onTriggered: { bridge.refreshDevices(); devicesPopup.open() } }
-        Item2 { text: "Phone screen"; onTriggered: bridge.openMirrorWindow() }
+        Item2 { text: "Phone screen"; onTriggered: win.openPhone() }
         Item2 { text: "Activity"; onTriggered: bridge.loadActivity() }
         Item2 { text: "New chat"; onTriggered: bridge.newChat() }
     }
@@ -557,7 +594,7 @@ ApplicationWindow {
                             Text { text: modelData.name; color: win.text; font.pixelSize: 14 }
                             Text { text: modelData.state === "connected" ? "Connected · " + modelData.address + (modelData.synced ? " · " + modelData.synced : "") : (modelData.error !== "" ? modelData.error : "Offline"); color: win.muted; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true }
                         }
-                        FazeButton { text: "Screen"; visible: modelData.state === "connected"; onClicked: { devicesPopup.close(); bridge.openMirrorWindow() } }
+                        FazeButton { text: "Screen"; visible: modelData.state === "connected"; onClicked: { devicesPopup.close(); win.openPhone() } }
                         FazeButton { text: "Forget"; onClicked: bridge.forgetDevice(modelData.id) }
                     }
                 }

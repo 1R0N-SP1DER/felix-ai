@@ -428,6 +428,10 @@ def run_ui(floating=False):
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty("bridge", bridge)
     engine.addImageProvider("phone", bridge.frames)
+    from .mirror_app import MirrorBridge
+    pane = MirrorBridge()
+    engine.rootContext().setContextProperty("mirror", pane)
+    engine.addImageProvider("phoneview", pane.frames)
     engine.load(QUrl.fromLocalFile(os.path.join(HERE, "Main.qml")))
     if not engine.rootObjects():
         sys.stderr.write("the window could not be loaded\n")
