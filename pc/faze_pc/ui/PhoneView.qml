@@ -68,7 +68,7 @@ Item {
             anchors.centerIn: parent
             spacing: 8
             Text { text: "Control phone"; color: "#C8D2EA"; font.pixelSize: 12 }
-            Switch { checked: win.control; onToggled: win.control = checked }
+            FazeSwitch { checked: win.control; onToggled: win.control = checked }
             ComboBox {
                 id: modeBox
                 enabled: win.control

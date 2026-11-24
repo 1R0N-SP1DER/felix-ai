@@ -159,6 +159,8 @@ ApplicationWindow {
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                Layout.minimumWidth: 0
+                Layout.preferredWidth: 1
                 spacing: 0
 
                 // Top bar, as on the phone: the model chip on the left, a few actions on the right.
@@ -404,7 +406,7 @@ ApplicationWindow {
             Rectangle {
                 id: phonePane
                 visible: win.phoneOpen && !win.floating
-                Layout.preferredWidth: 360
+                Layout.preferredWidth: 340
                 Layout.fillHeight: true
                 color: "#A80E1422"
                 Rectangle { anchors.left: parent.left; width: 1; height: parent.height; color: win.line }
