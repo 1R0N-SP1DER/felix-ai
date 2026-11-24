@@ -227,10 +227,26 @@ fun PcRemoteScreen(core: FazeCore, overlayOnly: Boolean = false, onBack: () -> U
         }
     }
     val scope = rememberCoroutineScope()
+    // What the PC is using of this phone right now (its mic, camera or sound as the PC's own).
+    var pcUses by remember { mutableStateOf(setOf<String>()) }
+    fun useOnPc(what: String) {
+        scope.launch {
+            try {
+                val want = what !in pcUses
+                pcUses = withContext(Dispatchers.IO) { remote.usePhone(what, want) }
+                if (want && what !in pcUses) {
+                    delay(1200)
+                    pcUses = withContext(Dispatchers.IO) { remote.usePhone("status", false) }
+                    if (what !in pcUses) problem = "The PC could not switch on this phone's " + (if (what == "cam") "camera" else what) + ". Look at the notice on the PC (it may need pactl, pacat or a virtual webcam), and turn on Let computers use my camera and microphone in Faze settings here."
+                }
+            } catch (e: Exception) { problem = e.message ?: "the PC did not answer" }
+        }
+    }
     fun act(what: String) {
         when {
             what == "tasks" || what == "devices" -> { panel = what; procs = emptyList(); devices = emptyList(); panelError = "" }
             what == "close" -> panel = ""
+            what.startsWith("use:") -> useOnPc(what.removePrefix("use:"))
             what == "shot" -> {
                 val f = frame
                 android.widget.Toast.makeText(padCtx, if (f != null && saveToGallery(padCtx, f.asAndroidBitmap(), "faze-pc-" + System.currentTimeMillis())) "Saved to Pictures/Faze" else "No picture to save yet", android.widget.Toast.LENGTH_SHORT).show()
@@ -396,6 +412,9 @@ fun RemoteView(
                             DropdownMenuItem(text = { Text((if (cam) "✓  " else "     ") + "Remote camera (PC webcam)") }, onClick = { moreMenu = false; onToggle("cam") })
                             DropdownMenuItem(text = { Text("     Take photo (from the webcam)") }, onClick = { moreMenu = false; onAction("photo") })
                             DropdownMenuItem(text = { Text((if (mic) "✓  " else "     ") + "Remote microphone (listen)") }, onClick = { moreMenu = false; onToggle("mic") })
+                            DropdownMenuItem(text = { Text((if ("mic" in pcUses) "✓  " else "     ") + "Local microphone (this phone is the PC's mic)") }, onClick = { moreMenu = false; onAction("use:mic") })
+                            DropdownMenuItem(text = { Text((if ("cam" in pcUses) "✓  " else "     ") + "Local camera (this phone is the PC's webcam)") }, onClick = { moreMenu = false; onAction("use:cam") })
+                            DropdownMenuItem(text = { Text((if ("sound" in pcUses) "✓  " else "     ") + "Local sound (this phone plays through the PC)") }, onClick = { moreMenu = false; onAction("use:sound") })
                             DropdownMenuItem(text = { Text("     Task manager") }, onClick = { moreMenu = false; onAction("tasks") })
                             DropdownMenuItem(text = { Text("     Device manager") }, onClick = { moreMenu = false; onAction("devices") })
                             DropdownMenuItem(text = { Text((if (sound) "✓  " else "     ") + "PC sound on this phone") }, onClick = { moreMenu = false; onToggle("sound") })

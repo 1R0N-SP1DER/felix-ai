@@ -38,6 +38,13 @@ class PcRemote(private val ask: (JSONObject, Long) -> JSONObject, private val wo
     /** Tells the computer we are still watching; it stops capturing a few seconds after the last ping. */
     fun pingStream() { try { ask(JSONObject().put("t", "pc_stream_ping"), 5_000) } catch (_: Exception) { } }
 
+    /** Asks the computer to use this phone's "mic", "cam" or "sound" as its own (what = "status" just reports). Returns what the computer is using now. */
+    fun usePhone(what: String, on: Boolean): Set<String> {
+        val r = ask(JSONObject().put("t", "pc_use_phone").put("what", what).put("on", on), 15_000)
+        if (r.optString("t") != "pc_use_phone_ok") throw IOException(r.optString("message", "the computer would not do that"))
+        return listOf("mic", "cam", "sound").filter { r.optBoolean(it) }.toSet()
+    }
+
     fun stopStream() { try { ask(JSONObject().put("t", "pc_stream_stop"), 5_000) } catch (_: Exception) { } }
 
     fun move(dx: Float, dy: Float) {
