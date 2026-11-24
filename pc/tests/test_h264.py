@@ -70,6 +70,19 @@ class ArgsTest(unittest.TestCase):
         self.assertEqual(portal.pick_encoder(lambda n: True, "nvh264enc"), "nvh264enc")
         self.assertIsNone(portal.pick_encoder(lambda n: False))
 
+    def test_sizes_are_even_and_keep_the_proportions(self):
+        self.assertEqual(portal.even_size(1280, (1920, 1080)), (1280, 720))
+        self.assertEqual(portal.even_size(1281, (1366, 768)), (1280, 720))
+        w, h = portal.even_size(1000, (1366, 767))
+        self.assertEqual((w % 2, h % 2), (0, 0))
+        self.assertIsNone(portal.even_size(1280, None))
+        self.assertIsNone(portal.even_size(1280, (0, 0)))
+
+    def test_pipeline_uses_the_even_size_when_it_is_known(self):
+        a = " ".join(portal.gst_args(7, 42, 1280, 30, 60, "x264enc", 2000, (1366, 768)))
+        self.assertIn("width=1280,height=720", a)
+        self.assertIn("video/x-raw,width=1280", " ".join(portal.gst_args(7, 42, 1280, 30, 60, "x264enc", 2000)))
+
     def test_gstreamer_h264_pipeline(self):
         a = portal.gst_args(7, 42, 1281, 30, 60, "x264enc", 2000)
         self.assertIn("x264enc", a)
