@@ -272,6 +272,7 @@ fun PcRemoteScreen(core: FazeCore, overlayOnly: Boolean = false, onBack: () -> U
         shape = core.settings.remoteShape, overlayOnly = overlayOnly,
         video = if (video) ({ val g = RemoteQuality.params(quality, longEdge, fps); VideoSurface(core.pcFrames, g.width, g.width * 9 / 16, core.settings.remoteShape) { m -> problem = "Fast video stopped: $m Using normal video."; codec = "jpeg" } }) else null,
         streamCodec = codec, streamQuality = quality, streamFps = fps,
+        pcUses = pcUses,
         onStream = { c, qual, f ->
             codec = c; quality = qual; fps = f
             core.settings.remoteCodec = c; core.settings.remoteQuality = qual; core.settings.remoteFps = f
@@ -290,7 +291,7 @@ fun RemoteView(
     startKeysOpen: Boolean = false, startArmed: Set<String> = emptySet(),
     camFrame: androidx.compose.ui.graphics.ImageBitmap? = null, cam: Boolean = false, mic: Boolean = false, sound: Boolean = true, onToggle: (String) -> Unit = {}, startPad: Boolean = false, startEdit: Boolean = false, layouts: PadLayouts = remember { PadLayouts.memory() },
     panel: String = "", procs: List<ProcRow> = emptyList(), devices: List<PcDeviceRow> = emptyList(), panelError: String = "", onAction: (String) -> Unit = {}, startDrawing: Boolean = false, shape: String = "stretch", overlayOnly: Boolean = false,
-    video: (@Composable () -> Unit)? = null, streamCodec: String = "jpeg", streamQuality: String = "720", streamFps: Int = 30, onStream: (String, String, Int) -> Unit = { _, _, _ -> }, startStreamPanel: Boolean = false,
+    video: (@Composable () -> Unit)? = null, streamCodec: String = "jpeg", streamQuality: String = "720", streamFps: Int = 30, onStream: (String, String, Int) -> Unit = { _, _, _ -> }, startStreamPanel: Boolean = false, pcUses: Set<String> = emptySet(),
 ) {
     var streamPanel by remember { mutableStateOf(startStreamPanel) }
     val pc = pcName
