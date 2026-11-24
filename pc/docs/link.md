@@ -71,3 +71,7 @@ Task manager and devices (behind "Let my phone see and control this PC"):
 ### Phone sound on the PC
 
 PC asks phone: `{"t":"phone_sound_get"}` -> `{"t":"phone_sound_ok","rate":44100,"channels":2,"data":<base64 s16le>}` (what the phone is playing, since the last call; may be empty), or `{"t":"error","message"}` when sharing is off or the phone has not been allowed to capture its sound. `{"t":"phone_sound_stop"}` -> `{"t":"ok"}`. The PC plays it with pacat on the default output. Needs the phone's "Let computers use my camera and microphone" switch and a one-time Allow phone sound.
+
+### The phone asks the PC to use its devices (pc_use_phone)
+
+Phone to PC: `{"t":"pc_use_phone","what":"mic"|"cam"|"sound"|"status","on":bool}` -> `{"t":"pc_use_phone_ok","mic":bool,"cam":bool,"sound":bool}` (where things stand about 1 s later). Needs "Let my phone see and control this PC" on the PC, and "Let computers use my camera and microphone" on the phone. It is the same as pressing Phone microphone / camera / sound in the PC's Devices window.

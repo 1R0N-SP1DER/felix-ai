@@ -99,3 +99,32 @@ class DuplexTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PhoneUseTest(unittest.TestCase):
+    def peer(self, allowed=True, hook=True):
+        from faze_pc.config import Config
+        cfg = Config(os.path.join(tempfile.mkdtemp(), "c.json"))
+        cfg.data["allow_remote"] = allowed
+        calls = []
+
+        class R:
+            def enabled(self): return allowed
+
+        p = PeerRequests(cfg, remote=R(), phone_use=(lambda pid, what, on: (calls.append((pid, what, on)), {"mic": on, "cam": False, "sound": False})[1]) if hook else None)
+        return p, calls
+
+    def test_the_phone_can_ask_for_its_mic(self):
+        p, calls = self.peer()
+        r = p.handle("ph", {"t": "pc_use_phone", "what": "mic", "on": True})
+        self.assertEqual(r, {"t": "pc_use_phone_ok", "mic": True, "cam": False, "sound": False})
+        self.assertEqual(calls, [("ph", "mic", True)])
+
+    def test_refused_when_remote_control_is_off(self):
+        p, calls = self.peer(allowed=False)
+        self.assertEqual(p.handle("ph", {"t": "pc_use_phone", "what": "mic", "on": True})["t"], "error")
+        self.assertEqual(calls, [])
+
+    def test_unknown_device_is_an_error(self):
+        p, _ = self.peer()
+        self.assertEqual(p.handle("ph", {"t": "pc_use_phone", "what": "kettle"})["t"], "error")
