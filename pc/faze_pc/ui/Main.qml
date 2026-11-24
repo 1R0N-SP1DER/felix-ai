@@ -490,9 +490,9 @@ ApplicationWindow {
             RowLayout {
                 Layout.fillWidth: true
                 Text { text: "Phone screen"; color: win.text; font.pixelSize: 16; font.bold: true; Layout.fillWidth: true }
-                Button { text: "Back"; onClicked: bridge.mirrorKey("back") }
-                Button { text: "Home"; onClicked: bridge.mirrorKey("home") }
-                Button { text: "Close"; onClicked: mirrorPopup.close() }
+                FazeButton { text: "Back"; onClicked: bridge.mirrorKey("back") }
+                FazeButton { text: "Home"; onClicked: bridge.mirrorKey("home") }
+                FazeButton { text: "Close"; onClicked: mirrorPopup.close() }
             }
             Text { visible: mirrorPopup.problem !== ""; text: mirrorPopup.problem; color: win.bad; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
             Rectangle {
@@ -523,8 +523,8 @@ ApplicationWindow {
             }
             RowLayout {
                 Layout.fillWidth: true
-                TextField { id: mirrorText; Layout.fillWidth: true; placeholderText: "Type on the phone"; onAccepted: { bridge.mirrorText(text); text = "" } }
-                Button { text: "Send"; onClicked: { bridge.mirrorText(mirrorText.text); mirrorText.text = "" } }
+                FieldBox { id: mirrorText; Layout.fillWidth: true; placeholderText: "Type on the phone"; onAccepted: { bridge.mirrorText(text); text = "" } }
+                FazeButton { text: "Send"; onClicked: { bridge.mirrorText(mirrorText.text); mirrorText.text = "" } }
             }
             Text { text: "Click to tap, hold to long-press, drag to swipe, scroll to scroll. Turn on Allow screen view and control on the phone first."; color: win.muted; font.pixelSize: 11; wrapMode: Text.Wrap; Layout.fillWidth: true }
         }
@@ -557,8 +557,8 @@ ApplicationWindow {
                             Text { text: modelData.name; color: win.text; font.pixelSize: 14 }
                             Text { text: modelData.state === "connected" ? "Connected · " + modelData.address + (modelData.synced ? " · " + modelData.synced : "") : (modelData.error !== "" ? modelData.error : "Offline"); color: win.muted; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true }
                         }
-                        Button { text: "Screen"; visible: modelData.state === "connected"; onClicked: { devicesPopup.close(); bridge.openMirrorWindow() } }
-                        Button { text: "Forget"; onClicked: bridge.forgetDevice(modelData.id) }
+                        FazeButton { text: "Screen"; visible: modelData.state === "connected"; onClicked: { devicesPopup.close(); bridge.openMirrorWindow() } }
+                        FazeButton { text: "Forget"; onClicked: bridge.forgetDevice(modelData.id) }
                     }
                 }
             }
@@ -577,17 +577,17 @@ ApplicationWindow {
             Text { text: "On the phone: Settings > Devices > Pair a computer. It shows a code. Then find the phone here and type the code."; color: win.muted; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
             RowLayout {
                 Layout.fillWidth: true
-                TextField { id: addr; Layout.fillWidth: true; placeholderText: "Phone address, e.g. 192.168.43.1" }
-                Button { text: "Find"; onClicked: bridge.findPhones() }
+                FieldBox { id: addr; Layout.fillWidth: true; placeholderText: "Phone address, e.g. 192.168.43.1" }
+                FazeButton { text: "Find"; onClicked: bridge.findPhones() }
             }
             RowLayout {
                 Layout.fillWidth: true
-                TextField { id: code; Layout.fillWidth: true; placeholderText: "Code from the phone"; inputMethodHints: Qt.ImhUppercaseOnly }
-                Button { text: "Pair"; onClicked: { win.pairMsg = "Pairing…"; bridge.pairPhone(addr.text, code.text); code.text = "" } }
+                FieldBox { id: code; Layout.fillWidth: true; placeholderText: "Code from the phone"; inputMethodHints: Qt.ImhUppercaseOnly }
+                FazeButton { text: "Pair"; onClicked: { win.pairMsg = "Pairing…"; bridge.pairPhone(addr.text, code.text); code.text = "" } }
             }
             Text { visible: win.pairMsg !== ""; text: win.pairMsg; color: win.dim; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
             Item { Layout.fillHeight: true }
-            Button { text: "Close"; onClicked: devicesPopup.close(); Layout.alignment: Qt.AlignRight }
+            FazeButton { text: "Close"; onClicked: devicesPopup.close(); Layout.alignment: Qt.AlignRight }
         }
     }
 
@@ -606,7 +606,7 @@ ApplicationWindow {
                 model: activityModel
                 delegate: Text { width: ListView.view.width; text: kind + "   " + model.text; color: win.dim; font.pixelSize: 12; wrapMode: Text.Wrap }
             }
-            Button { text: "Close"; onClicked: activity.close(); Layout.alignment: Qt.AlignRight }
+            FazeButton { text: "Close"; onClicked: activity.close(); Layout.alignment: Qt.AlignRight }
         }
     }
 
