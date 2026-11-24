@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 
 ApplicationWindow {
     id: win
@@ -58,6 +59,8 @@ ApplicationWindow {
     }
     function closePhone() { phoneOpen = false; mirror.stop() }
     property string phoneMediaNote: ""
+    property string sendNote: ""
+    property real sendProgress: -1
     property var levels: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
     property var found: []
     property string pairMsg: ""
@@ -104,6 +107,7 @@ ApplicationWindow {
         function onHeard(t) { if (t.trim() !== "") { input.text = (input.text ? input.text + " " : "") + t; input.forceActiveFocus() } else bridge.sayNothing() }
         function onLevelChanged(v) { win.levels = win.levels.slice(1).concat([v]) }
         function onPhoneMediaChanged(mic, cam, sound, text) { win.phoneMic = mic; win.phoneCam = cam; win.phoneSound = sound; if (text !== "") win.phoneMediaNote = text }
+        function onSendStatus(text, progress, done, ok) { win.sendNote = text; win.sendProgress = done ? -1 : progress }
         function onDevicesChanged(d) { win.devices = d; win.pairMsg = "" }
         function onPhonesFound(p) { win.found = p; if (p.length > 0) { addr.text = p[0].address; win.pairMsg = "Found " + p[0].name } else win.pairMsg = "No phone answered. Is Faze open on it with computers allowed?" }
         function onPairFailed(m) { win.pairMsg = m }
@@ -448,6 +452,12 @@ ApplicationWindow {
         }
     }
 
+    FileDialog {
+        id: sendFile
+        title: "Send to phone"
+        onAccepted: bridge.sendToPhone("file", selectedFile.toString())
+    }
+
     Menu {
         id: headerMenu
         width: 220
@@ -609,6 +619,18 @@ ApplicationWindow {
                 FazeButton { text: win.phoneSound ? "Phone sound: on" : "Phone sound"; checkable: true; checked: win.phoneSound; onClicked: bridge.phoneMedia("sound", !win.phoneSound) }
             }
             Text { visible: win.phoneMediaNote !== ""; text: win.phoneMediaNote; color: win.dim; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
+
+            Text { text: "SEND TO PHONE"; color: win.muted; font.pixelSize: 11; font.bold: true; font.letterSpacing: 2; Layout.topMargin: 8 }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                FieldBox { id: sendText; Layout.fillWidth: true; placeholderText: "Text or a link" }
+                FazeButton { text: "Send"; onClicked: { bridge.sendToPhone("text", sendText.text); sendText.text = "" } }
+                FazeButton { text: "File…"; onClicked: sendFile.open() }
+            }
+            Rectangle { visible: win.sendProgress >= 0; Layout.fillWidth: true; height: 4; radius: 2; color: "#14FFFFFF"
+                Rectangle { width: parent.width * Math.max(0, win.sendProgress); height: parent.height; radius: 2; color: win.accent } }
+            Text { visible: win.sendNote !== ""; text: win.sendNote; color: win.dim; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
             Rectangle { Layout.fillWidth: true; height: 1; color: win.line }
             Text { text: "Pair a phone"; color: win.text; font.pixelSize: 14; font.bold: true }
             Text { text: "On the phone: Settings > Devices > Pair a computer. It shows a code. Then find the phone here and type the code."; color: win.muted; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }

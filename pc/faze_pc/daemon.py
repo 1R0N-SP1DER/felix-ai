@@ -28,6 +28,7 @@ from .h264 import H264Decoder
 from .media import Media
 from .remote import RemoteControl
 from .draw import DrawRelay
+from .sendphone import PhoneSender
 from .live import LiveSession, declarations as live_declarations
 from .voice import Voice, VoiceError
 
@@ -384,6 +385,16 @@ class Daemon:
         st = self.pm.status()
         emit({"t": "phone_media", "mic": st["mic"], "cam": st["cam"], "sound": st["sound"], "text": ""})
 
+    def send_to_phone(self, what, value):
+        """what is "file" (value: a path) or "text" (value: the text or link). Progress and the result are broadcast as send_status."""
+        def say(text, progress, done, ok):
+            self.broadcast({"t": "send_status", "text": text, "progress": -1 if progress is None else progress, "done": done, "ok": ok})
+        pid = self._phone()
+        if not pid:
+            return say("Your phone is not connected.", None, True, False)
+        s = PhoneSender(self.links.request, pid, say)
+        s.send_file(value) if what == "file" else s.send_text(value)
+
     def watch_drop_folder(self):
         """Models dragged into ~/Downloads/faze are set up in Ollama and removed from there."""
         def say(text, progress, done, ok):
@@ -437,6 +448,8 @@ class Daemon:
                 return
             emit({"t": "state", "config": self.config.public(), "chats": self.store.chats()})
             threading.Thread(target=self.send_models, args=(emit,), daemon=True).start()
+        elif op == "send_to_phone":
+            threading.Thread(target=self.send_to_phone, args=(str(req.get("what", "")), str(req.get("value", ""))), daemon=True).start()
         elif op == "phone_media":
             threading.Thread(target=self.phone_media, args=(str(req.get("what", "")), bool(req.get("on")), emit), daemon=True).start()
         elif op == "copy_models":

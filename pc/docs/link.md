@@ -75,3 +75,7 @@ PC asks phone: `{"t":"phone_sound_get"}` -> `{"t":"phone_sound_ok","rate":44100,
 ### The phone asks the PC to use its devices (pc_use_phone)
 
 Phone to PC: `{"t":"pc_use_phone","what":"mic"|"cam"|"sound"|"status","on":bool}` -> `{"t":"pc_use_phone_ok","mic":bool,"cam":bool,"sound":bool}` (where things stand about 1 s later). Needs "Let my phone see and control this PC" on the PC, and "Let computers use my camera and microphone" on the phone. It is the same as pressing Phone microphone / camera / sound in the PC's Devices window.
+
+### The PC sends things to the phone (phone_put)
+
+PC to phone: `{"t":"phone_put","kind":"text"|"link","text":...}` or, for a file, `{"t":"phone_put","kind":"file","name","size","offset","eof","data":<base64 piece>}` sent in order, 256 KB at a time. Reply `{"t":"phone_put_ok"}` or `{"t":"error","message"}` (receiving off, too big, a bad name). The phone saves files in Downloads/Faze (never overwriting: a number is added), puts text on the clipboard and shows a notification; a link opens when the notification is tapped.
