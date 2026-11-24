@@ -21,7 +21,7 @@ def clean(messages):
 
 
 class PeerRequests:
-    def __init__(self, config, streamer=providers.stream_chat, runner=None, lister=None, log=None, mirror_opener=None, clip_in=None, remote=None, media=None, screen_in=None, notes_in=None, system=None):
+    def __init__(self, config, streamer=providers.stream_chat, runner=None, lister=None, log=None, mirror_opener=None, clip_in=None, remote=None, media=None, screen_in=None, notes_in=None, system=None, phone_use=None):
         self.shares = Shares(config)
         self.log = log or (lambda kind, text: None)
         self.lister = lister or self._ollama_models
@@ -33,6 +33,7 @@ class PeerRequests:
         self.screen_in = screen_in  # (msg) for the phone's live video pieces and its stream errors
         self.media = media
         self.system = system
+        self.phone_use = phone_use  # (pid, what, on) -> {"mic","cam","sound"}: start or stop using the phone as this PC's mic, camera or speakers
         self.mirror_opener = mirror_opener  # opens the phone-screen window
         self.runner = runner  # runner(task) -> (ok, text): runs a task the phone handed over, as a chat on this PC
 
@@ -48,6 +49,8 @@ class PeerRequests:
             return self.media.handle(msg) if self.media else {"t": "error", "message": "media is not available"}
         if t in ("pc_procs", "pc_kill", "pc_devices"):
             return self.system.handle(msg) if self.system else {"t": "error", "message": "the task manager is not available"}
+        if t == "pc_use_phone":
+            return self.use_phone(pid, msg)
         if t in ("screen_h264", "screen_stream_error"):
             return self.screen_in(msg) if self.screen_in else None
         if t in ("note", "note_gone"):
@@ -74,6 +77,18 @@ class PeerRequests:
             ok, text = self.runner(task)
             return {"t": "pc_task_ok" if ok else "error", "text": text, "message": text}
         return {"t": "error", "message": "this PC does not know %r" % t}
+
+    def use_phone(self, pid, msg):
+        """The phone asks this PC to use the phone's microphone, camera or sound (what: mic, cam, sound; on: true or false; or what: status)."""
+        if not (self.remote and self.remote.enabled()):
+            return {"t": "error", "message": "Remote control is off on the PC (turn on Let my phone see and control this PC)."}
+        if self.phone_use is None:
+            return {"t": "error", "message": "this PC cannot use the phone's devices"}
+        what = str(msg.get("what", ""))
+        if what not in ("mic", "cam", "sound", "status"):
+            return {"t": "error", "message": "unknown device"}
+        st = self.phone_use(pid, what, bool(msg.get("on")))
+        return dict({"t": "pc_use_phone_ok"}, **st)
 
     def files(self, msg):
         t = msg["t"]

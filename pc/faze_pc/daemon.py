@@ -55,7 +55,7 @@ class Daemon:
         self.ping_gap = 3.0
         self.video_grace = 6.0  # seconds the live video gets to produce its first picture before we use screenshots instead
         self.spawn = spawn or subprocess.Popen
-        self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log, mirror_opener=self.open_mirror_window, clip_in=lambda m: self.clip.receive(m), remote=RemoteControl(self.config, log=self.store.log, notify=lambda m: self.links.notify(m), draw=DrawRelay(self.spawn)), media=Media(self.config), system=SystemInfo(self.config), screen_in=lambda m: self.screen_in(m), notes_in=lambda m: self.notes.handle(m))
+        self.peer = PeerRequests(self.config, runner=self.run_task, log=self.store.log, mirror_opener=self.open_mirror_window, clip_in=lambda m: self.clip.receive(m), remote=RemoteControl(self.config, log=self.store.log, notify=lambda m: self.links.notify(m), draw=DrawRelay(self.spawn)), media=Media(self.config), system=SystemInfo(self.config), screen_in=lambda m: self.screen_in(m), notes_in=lambda m: self.notes.handle(m), phone_use=self.phone_use)
         self.links = links or LinkManager(link.Devices(), syncer=Syncer(self.store), on_request=lambda pid, msg: self.peer.handle(pid, msg), on_synced=lambda pid, got: self.broadcast({"t": "state", "config": self.config.public(), "chats": self.store.chats()}))
 
         self.notes = PhoneNotes(self.config, log=self.store.log)
@@ -355,6 +355,16 @@ class Daemon:
             return
         job = ModelCopy(self.config, self.links.request, pid, say, lambda: {m["name"] for m in modelsheet.ollama_models(self.config)[1]}, running=lambda: modelsheet.ollama_models(self.config)[0])
         threading.Thread(target=job.go, daemon=True, name="model-copy").start()
+
+    def phone_use(self, pid, what, on):
+        """The phone asked for its own mic, camera or sound to be used here. The work runs in the background (it talks back to the phone); the answer is where things stand."""
+        pm = getattr(self, "pm", None)
+        if what != "status":
+            threading.Thread(target=self.phone_media, args=(what, on, lambda ev: None), daemon=True).start()
+            time.sleep(0.8)
+            pm = getattr(self, "pm", None)
+        st = pm.status() if pm is not None else {"mic": False, "cam": False, "sound": False}
+        return {"mic": st["mic"], "cam": st["cam"], "sound": st["sound"]}
 
     def phone_media(self, what, on, emit):
         """Switches the phone's microphone, camera or sound on or off for this PC (see phonemedia.py)."""
