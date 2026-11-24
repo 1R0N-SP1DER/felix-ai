@@ -35,9 +35,17 @@ class MirrorBridge(QObject):
     def problem(self):
         return self._problem
 
+    @Slot()
     def start(self):
-        self._client = dclient.Client()
-        threading.Thread(target=self._read, daemon=True).start()
+        """Starts (or restarts) mirroring. Safe to call again after stop()."""
+        if self._client is None:
+            try:
+                self._client = dclient.Client()
+            except OSError:
+                self._problem = "The Faze daemon is not running."
+                self.problemChanged.emit()
+                return
+            threading.Thread(target=self._read, daemon=True).start()
         self._send({"op": "mirror_start"})
 
     def _send(self, obj):
