@@ -45,8 +45,9 @@ class PhoneInbox(private val enabled: () -> Boolean, private val store: InboxSto
 
         /** A safe file name: no folders, no control characters, not empty, not hidden, not too long. */
         fun safeName(raw: String): String {
-            val base = raw.substringAfterLast('/').substringAfterLast('\\\\')
-            val clean = base.filter { it >= ' ' && it != '\\u007f' && it !in "<>:\\"|?*" }.trim().trimStart('.')
+            val base = raw.substringAfterLast('/').substringAfterLast('\\')
+            val bad = "<>:\"|?*"
+            val clean = base.filter { it >= ' ' && it.code != 127 && it !in bad }.trim().trimStart('.')
             return (if (clean.isEmpty()) "file" else clean).take(120)
         }
     }
