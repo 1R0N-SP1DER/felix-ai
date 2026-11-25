@@ -306,6 +306,8 @@ private fun AgentTab(core: FazeCore) {
         SettingRow("Copy from anywhere (root)", "With root, every copy in any app goes to the computer, even with Faze closed: Faze reads the system log and briefly opens an invisible window to read the text.") { FazeSwitch(clipRoot, { clipRoot = it; core.settings.linkClipRoot = it; core.syncBackground() }) }
         var modelsOn by remember { mutableStateOf(core.settings.linkModels) }
         SettingRow("Let computers copy my offline models", "A connected computer can take copies of the .gguf models on this phone (Qwen, LFM) to run them itself. The copies are removed from the shared folder after. Needs root.") { FazeSwitch(modelsOn, { modelsOn = it; core.settings.linkModels = it }) }
+        var receiveOn by remember { mutableStateOf(core.settings.linkReceive) }
+        SettingRow("Let computers send me things", "A paired computer can send files (saved in Downloads/Faze), text and links to this phone. You get a notification for each.") { FazeSwitch(receiveOn, { receiveOn = it; core.settings.linkReceive = it }) }
         var mediaOn by remember { mutableStateOf(core.settings.linkMedia) }
         SettingRow("Let computers use my camera and microphone", "A connected computer can ask for this phone's camera pictures and microphone sound (to use as a webcam and mic). Off unless you turn it on. Android only allows it while Faze is open on screen.") { FazeSwitch(mediaOn, { mediaOn = it; core.settings.linkMedia = it }) }
         val soundCtx = LocalContext.current

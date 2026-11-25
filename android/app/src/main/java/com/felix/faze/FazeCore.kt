@@ -35,7 +35,7 @@ class FazeCore(private val app: Application) : EngineListener {
         private set
     var linkCode by mutableStateOf("")
         private set
-    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) ?: phoneModels.handle(msg) ?: phoneMedia.handle(msg) ?: phoneClip.handle(msg) ?: pcFrames.handle(msg) ?: screenStream.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = ""; syncClipWatch() } })
+    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) ?: phoneModels.handle(msg) ?: phoneMedia.handle(msg) ?: phoneInbox.handle(msg) ?: phoneClip.handle(msg) ?: pcFrames.handle(msg) ?: screenStream.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = ""; syncClipWatch() } })
 
     fun setLink(on: Boolean) {
         settings.linkOn = on
@@ -228,6 +228,7 @@ class FazeCore(private val app: Application) : EngineListener {
     )
     /** Copies of offline models staged for a computer to read (see PhoneModels). */
     private val phoneModels = PhoneModels({ settings.linkModels }, { cmd, ms -> try { Su.run(cmd, ms) } catch (_: Exception) { "" } }, { activity.add("link", it) })
+    private val phoneInbox = PhoneInbox({ settings.linkReceive }, AndroidInboxStore(app), AndroidInboxNotify(app), { activity.add("link", it) })
     private val phoneMedia = PhoneMedia({ settings.linkMedia }, AndroidMic(app), AndroidCam(app), { activity.add("link", it) }, AndroidSound(app))
     private val phoneFiles = PhoneFiles({
         val top = android.os.Environment.getExternalStorageDirectory()
