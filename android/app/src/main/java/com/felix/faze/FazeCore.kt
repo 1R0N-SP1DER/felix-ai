@@ -269,7 +269,7 @@ class FazeCore(private val app: Application) : EngineListener {
         unavailable = { if (rootNow) "" else "Live video needs root on this phone for now. Pictures work without it." },
     )
     /** Copies of offline models staged for a computer to read (see PhoneModels). */
-    private val phoneModels = PhoneModels({ settings.linkModels }, { cmd, ms -> try { Su.run(cmd, ms) } catch (_: Exception) { "" } }, { activity.add("link", it) })
+    private val phoneModels = PhoneModels({ settings.linkModels }, { cmd, ms -> try { Su.run(cmd, ms) } catch (_: Exception) { "" } }, { activity.add("link", it) }, rootOn = { rootNow })
     private val phoneInbox = PhoneInbox({ settings.linkReceive }, AndroidInboxStore(app), AndroidInboxNotify(app), { activity.add("link", it) })
     private val phoneMedia = PhoneMedia({ settings.linkMedia }, AndroidMic(app), AndroidCam(app), { activity.add("link", it) }, AndroidSound(app))
     private val phoneFiles = PhoneFiles({

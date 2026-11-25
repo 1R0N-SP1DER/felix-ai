@@ -68,4 +68,32 @@ class PhoneModelsTest {
         assertEquals("error", h.handle(JSONObject().put("t", "models_unstage").put("name", "../x.gguf"))!!.getString("t"))
         assertEquals(1, cmds.size)
     }
+
+    @Test fun withoutRootItListsAndCopiesFromSharedFolders() {
+        val base = java.nio.file.Files.createTempDirectory("faze").toFile()
+        val dl = java.io.File(base, "Download").also { it.mkdirs() }
+        java.io.File(dl, "Qwen-Q4.gguf").writeBytes(ByteArray(2000) { 1 })
+        java.io.File(dl, "mmproj-x.gguf").writeBytes(ByteArray(10))
+        java.io.File(dl, "notes.txt").writeText("x")
+        val stage = java.io.File(base, "stage")
+        val ran = ArrayList<String>()
+        val h = PhoneModels({ true }, { c, _ -> ran.add(c); "" }, {}, { false }, listOf(dl.path), stage.path)
+        val list = h.handle(JSONObject().put("t", "models_list"))!!.getJSONArray("models")
+        assertEquals(1, list.length())
+        assertEquals("Qwen-Q4.gguf", list.getJSONObject(0).getString("name"))
+        val st = h.handle(JSONObject().put("t", "models_stage").put("path", java.io.File(dl, "Qwen-Q4.gguf").path))!!
+        assertEquals("models_stage_ok", st.getString("t"))
+        assertEquals(2000L, st.getLong("size"))
+        assertTrue(java.io.File(stage, "Qwen-Q4.gguf").exists())
+        h.handle(JSONObject().put("t", "models_unstage").put("name", "Qwen-Q4.gguf"))
+        assertFalse(java.io.File(stage, "Qwen-Q4.gguf").exists())
+        assertTrue("no root command should run", ran.isEmpty())
+    }
+
+    @Test fun withoutRootTermuxModelsPointToTheCopyCommand() {
+        val h = PhoneModels({ true }, { _, _ -> "" }, {}, { false }, listOf("/sdcard/Download"), "/tmp/x")
+        val r = h.handle(JSONObject().put("t", "models_stage").put("path", "/data/data/com.termux/files/home/m.gguf"))!!
+        assertEquals("error", r.getString("t"))
+        assertTrue(r.getString("message").contains("cp "))
+    }
 }
