@@ -106,12 +106,14 @@ class CopyTest(unittest.TestCase):
                 os.environ["XDG_CACHE_HOME"] = old
 
     def test_a_folder_that_cannot_be_made_says_how_to_fix_it(self):
-        blocker = os.path.join(self.dir, "afile")
+        import tempfile
+        d = tempfile.mkdtemp()
+        blocker = os.path.join(d, "afile")
         open(blocker, "w").close()
         msg = modelcopy.ensure_dir(os.path.join(blocker, "sub"))
         self.assertIn("chown", msg)
-        self.assertEqual("", modelcopy.ensure_dir(os.path.join(self.dir, "fine")))
-        self.assertEqual(0o700, os.stat(os.path.join(self.dir, "fine")).st_mode & 0o777)
+        self.assertEqual("", modelcopy.ensure_dir(os.path.join(d, "fine")))
+        self.assertEqual(0o700, os.stat(os.path.join(d, "fine")).st_mode & 0o777)
 
     def test_the_downloaded_bytes_are_exact(self):
         big = os.urandom(1_300_000)
