@@ -120,3 +120,30 @@ class RemoteH264Test(unittest.TestCase):
         r._frame("QQ==", 4)
         self.assertEqual(self.sent[0], {"t": "pc_frame", "codec": "h264", "data": "QQ==", "key": True, "n": 3})
         self.assertEqual(self.sent[1], {"t": "pc_frame", "jpeg": "QQ==", "n": 4})
+
+
+class HardwareFirstTest(unittest.TestCase):
+    def test_a_working_hardware_encoder_beats_the_cpu(self):
+        from faze_pc import portal
+        have = lambda n: True
+        self.assertEqual("nvh264enc", portal.pick_encoder(have, "", lambda n: True))
+        self.assertEqual("vah264enc", portal.pick_encoder(have, "", lambda n: n == "vah264enc"))
+
+    def test_a_broken_hardware_encoder_falls_back_to_the_cpu(self):
+        from faze_pc import portal
+        self.assertEqual("x264enc", portal.pick_encoder(lambda n: True, "", lambda n: False))
+        self.assertEqual("x264enc", portal.pick_encoder(lambda n: True, "x264enc", lambda n: True))
+        self.assertIsNone(portal.pick_encoder(lambda n: False, "", lambda n: True))
+
+    def test_without_a_probe_the_cpu_stays_first(self):
+        from faze_pc import portal
+        self.assertEqual("x264enc", portal.pick_encoder(lambda n: True))
+
+    def test_probe_reports_failure(self):
+        from faze_pc import portal
+        class R:
+            returncode = 1
+        self.assertFalse(portal.probe("vah264enc", lambda *a, **k: R()))
+        def boom(*a, **k):
+            raise OSError("no gst")
+        self.assertFalse(portal.probe("vah264enc", boom))
