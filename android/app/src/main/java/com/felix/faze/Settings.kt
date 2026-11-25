@@ -161,6 +161,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getInt("offline_gpu_layers", 16)
         set(value) = prefs.edit().putInt("offline_gpu_layers", value).apply()
 
+    /** What the last offline model start said about the GPU ("GPU: ..." or the CPU fallback), shown in Settings. */
+    var offlineGpuStatus: String
+        get() = text("offline_gpu_status")
+        set(value) = put("offline_gpu_status", value.take(200))
+
     var offlineCtx: Int
         get() = OfflineLimits.ctx(text("offline_ctx").toIntOrNull())
         set(value) = put("offline_ctx", OfflineLimits.ctx(value).toString())
