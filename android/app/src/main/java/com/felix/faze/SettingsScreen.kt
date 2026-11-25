@@ -655,7 +655,7 @@ private fun AdvancedTab(core: FazeCore) {
 
 /** The text box of the settings page: a small field with a faint fill and a hairline border. */
 @Composable
-private fun FieldBox(value: String, secret: Boolean, modifier: Modifier = Modifier, onChange: (String) -> Unit) {
+fun FieldBox(value: String, secret: Boolean, modifier: Modifier = Modifier, onChange: (String) -> Unit) {
     Box(modifier = modifier.clip(RoundedCornerShape(8.dp)).background(Palette.Faint).border(1.dp, Palette.Line, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 8.dp)) {
         BasicTextField(
             value = value, onValueChange = onChange, singleLine = true,

@@ -388,6 +388,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = text("link_peers")
         set(value) = prefs.edit().putString("link_peers", value).apply()
 
+    /** Other phones this phone has paired with and can control. */
+    var linkRemotes: String
+        get() = text("link_remotes")
+        set(value) = prefs.edit().putString("link_remotes", value).apply()
+
     /** This phone's identity on the link, made once. */
     val linkId: String
         get() = text("link_id").ifBlank { LinkCrypto.hex(LinkCrypto.randomBytes(8)).also { put("link_id", it) } }

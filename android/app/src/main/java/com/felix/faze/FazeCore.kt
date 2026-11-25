@@ -35,6 +35,9 @@ class FazeCore(private val app: Application) : EngineListener {
         private set
     var linkCode by mutableStateOf("")
         private set
+    val linkRemotes = LinkRemotes({ settings.linkRemotes }, { settings.linkRemotes = it })
+    var foundPhones by mutableStateOf<List<LinkClient.Companion.Found>>(emptyList())
+    val linkClient: LinkClient = LinkClient(settings.linkId, { android.os.Build.MODEL ?: "Phone" }, linkRemotes, onChange = { main.post { linkTick++ } })
     val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) ?: phoneModels.handle(msg) ?: phoneMedia.handle(msg) ?: phoneInbox.handle(msg) ?: phoneClip.handle(msg) ?: pcFrames.handle(msg) ?: screenStream.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = ""; syncClipWatch() } })
 
     fun setLink(on: Boolean) {
@@ -100,13 +103,45 @@ class FazeCore(private val app: Application) : EngineListener {
         }
     }
 
-    fun removeDevice(id: String) { linkPeers.remove(id); link.drop(id); linkTick++ }
+    fun removeDevice(id: String) {
+        if (linkRemotes.get(id) != null) linkClient.forget(id) else { linkPeers.remove(id); link.drop(id) }
+        linkTick++
+    }
+
+    /** Pairs with another phone that is showing a code, then connects to it. Runs off the main thread. */
+    fun pairPhone(host: String, code: String) {
+        Thread {
+            val msg = try {
+                val r = linkClient.pair(host.trim().substringBefore(':'), host.trim().substringAfter(':', LinkServer.PORT.toString()).toIntOrNull() ?: LinkServer.PORT, code)
+                linkClient.connect(r.id)
+                "Paired with " + r.name + "."
+            } catch (e: Exception) { e.message ?: "Could not pair." }
+            main.post { status = msg; linkTick++ }
+        }.start()
+    }
+
+    /** Looks for other Faze phones on the network and fills the list the Devices screen shows. */
+    fun findPhones() {
+        Thread {
+            val f = LinkClient.discover(settings.linkId)
+            main.post { foundPhones = f; linkTick++; if (f.isEmpty()) status = "No other Faze phones answered. Check Allow devices is on there, or type its address." }
+        }.start()
+    }
+
+    fun connectPhone(id: String) {
+        Thread {
+            val msg = try { linkClient.connect(id); null } catch (e: Exception) { e.message ?: "Could not connect." }
+            if (msg != null) main.post { status = msg; linkTick++ }
+        }.start()
+    }
 
     /** What the Devices screen lists: each paired device, whether it is connected, and how. */
     fun deviceRows(): List<DeviceRow> {
         linkTick
         val on = link.connected()
-        return linkPeers.all().map { DeviceRow(it.id, it.name, it.os, it.id in on, link.connectionOf(it.id)) }.sortedByDescending { it.connected }
+        val phones = linkClient.connected()
+        return (linkPeers.all().map { DeviceRow(it.id, it.name, it.os, it.id in on, link.connectionOf(it.id)) } +
+            linkRemotes.all().map { DeviceRow(it.id, it.name, "android", it.id in phones, linkClient.connectionOf(it.id)) }).sortedByDescending { it.connected }
     }
 
     val activity = ActivityLog(java.io.File(app.filesDir, "activity.log"))

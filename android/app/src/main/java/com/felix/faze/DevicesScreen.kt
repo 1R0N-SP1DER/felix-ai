@@ -75,6 +75,19 @@ fun DevicesScreen(core: FazeCore, onBack: () -> Unit, onOpen: (String) -> Unit =
             Hint("Screen control and file access are in Settings > Advanced > Devices. This phone is the hub. Any number of computers can pair with it and work with it as one Faze.")
             if (rows.isEmpty()) Text("No devices yet.", color = Palette.Muted, fontSize = 14.sp, modifier = Modifier.padding(vertical = 8.dp))
             for (d in rows) DeviceCard(core, d, onOpen) { core.removeDevice(d.id) }
+            SettingsCard("Pair another phone") {
+                var host by remember { mutableStateOf("") }
+                var pcode by remember { mutableStateOf("") }
+                Hint("On the other phone open Devices, turn on Allow devices and show a pairing code. Then find it here or type its address, and enter the code. Works without root.")
+                for (f in core.foundPhones) if (core.linkRemotes.get(f.id) == null) {
+                    Text(f.name + "  " + f.host, color = Palette.Accent, fontSize = 14.sp, modifier = Modifier.clickable { host = f.host + ":" + f.port }.padding(vertical = 8.dp))
+                }
+                WideButton("Look for phones") { core.findPhones() }
+                FieldBox(host, false, Modifier.fillMaxWidth().padding(vertical = 4.dp)) { host = it }
+                FieldBox(pcode, false, Modifier.fillMaxWidth().padding(vertical = 4.dp)) { pcode = it }
+                Hint("The first box is the address (for example 192.168.1.20), the second the code.")
+                WideButton("Pair") { if (host.isNotBlank() && pcode.isNotBlank()) core.pairPhone(host, pcode) }
+            }
             SettingsCard("Pair a computer") {
                 SettingRow("Allow computers", "Opens a port on this phone so a paired computer can connect. Everything after pairing is encrypted.", last = !on) {
                     FazeSwitch(on, { core.setLink(it) })
@@ -144,7 +157,9 @@ private fun DeviceCard(core: FazeCore, d: DeviceRow, onOpen: (String) -> Unit, o
                 color = Palette.Dim, fontSize = 13.sp,
             )
         }
-        if (d.connected) Text("Tap to open · drag sideways to show this phone here", color = Palette.Muted, fontSize = 12.sp)
+        val isPhone = core.linkRemotes.get(d.id) != null
+        if (d.connected && !isPhone) Text("Tap to open · drag sideways to show this phone here", color = Palette.Muted, fontSize = 12.sp)
+        if (isPhone && !d.connected) DeviceChip("Connect") { core.connectPhone(d.id) }
         if (note.isNotEmpty()) Text(note, color = Palette.Dim, fontSize = 12.5.sp, modifier = Modifier.padding(top = 6.dp))
         Text(
             if (confirm) "Tap again to remove" else "Remove", color = if (confirm) Palette.Bad else Palette.Muted, fontSize = 13.sp,
