@@ -302,6 +302,7 @@ private fun AgentTab(core: FazeCore) {
         var filesAll by remember { mutableStateOf(core.settings.linkFilesAll) }
         SettingRow("Allow computers", "Opens a port on this phone so a paired computer can connect. Everything after pairing is encrypted. Pair from the Felix_ menu > Devices.") { FazeSwitch(link, { link = it; core.setLink(it) }) }
         SettingRow("Allow screen view and control", "Lets a paired device (computer or phone) see this screen and tap, swipe and type on it. Never works while the phone is locked.") { FazeSwitch(screen, { screen = it; core.settings.linkScreen = it }) }
+        val ctx = androidx.compose.ui.platform.LocalContext.current
         var mode by remember { mutableStateOf(core.settings.controlMode) }
         SettingRow("Control method", "How a paired device controls this screen. Root is faster and does more (live video, every key). Without root it uses Faze's accessibility service: touch, back, home, recents, text and slower pictures. Auto uses root when it works and the accessibility way when it does not") {}
         Seg(listOf("auto" to "Auto", "root" to "Root", "noroot" to "Non-root"), mode, small = true) { mode = it; core.settings.controlMode = it }
