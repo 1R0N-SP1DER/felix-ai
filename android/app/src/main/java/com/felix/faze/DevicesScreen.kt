@@ -71,6 +71,7 @@ fun DevicesScreen(core: FazeCore, onBack: () -> Unit, onOpen: (String) -> Unit =
     Column(modifier = Modifier.fillMaxSize().background(Palette.Bg)) {
         PageHeader("Devices", onBack)
         Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Overview(core, rows)
             Hint("Screen control and file access are in Settings > Advanced > Devices. This phone is the hub. Any number of computers can pair with it and work with it as one Faze.")
             if (rows.isEmpty()) Text("No devices yet.", color = Palette.Muted, fontSize = 14.sp, modifier = Modifier.padding(vertical = 8.dp))
             for (d in rows) DeviceCard(core, d, onOpen) { core.removeDevice(d.id) }
@@ -175,6 +176,66 @@ fun ActivityScreen(core: FazeCore, onBack: () -> Unit) {
                     Text(e.text, color = Palette.Text, fontSize = 13.5.sp)
                 }
             }
+        }
+    }
+}
+
+
+/** One line a device-wide switch on the overview: what this phone shares with the computers linked to it. */
+data class Sharing(val label: String, val on: Boolean, val note: String, val set: (Boolean) -> Unit)
+
+/** What to show for "N of M connected". */
+fun connectedSummary(connected: Int, total: Int): String = when {
+    total == 0 -> "No devices linked yet"
+    connected == 0 -> "$total linked, none connected right now"
+    connected == total -> if (total == 1) "1 device connected" else "All $total devices connected"
+    else -> "$connected of $total devices connected"
+}
+
+/** The top of the Devices page: how many are connected, what this phone shares with them (each switch is live), and the last few things that happened. */
+@Composable
+private fun Overview(core: FazeCore, rows: List<DeviceRow>) {
+    var tick by remember { mutableStateOf(0) }
+    val items = listOf(
+        Sharing("Screen view and control", core.settings.linkScreen, "see and tap this screen (needs root)") { core.settings.linkScreen = it },
+        Sharing("Files", core.settings.linkFiles, "browse this phone's public folders") { core.settings.linkFiles = it },
+        Sharing("Camera and microphone", core.settings.linkMedia, "use them as a webcam and mic") { core.settings.linkMedia = it },
+        Sharing("Receive things", core.settings.linkReceive, "files, text and links into Downloads/Faze") { core.settings.linkReceive = it },
+        Sharing("Clipboard", core.settings.linkClip, "copy on one, paste on the other") { core.settings.linkClip = it; core.syncBackground() },
+        Sharing("Models", core.settings.linkModels, "copy models between devices") { core.settings.linkModels = it },
+    )
+    val on = rows.count { it.connected }
+    @Suppress("UNUSED_EXPRESSION") tick
+    Column(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Palette.Glass).border(1.dp, Palette.Line, RoundedCornerShape(22.dp)).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(if (on > 0) Palette.Ok else Palette.Muted))
+            Text(connectedSummary(on, rows.size), color = Palette.Text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Text("This phone is the hub. What it shares with every linked device:", color = Palette.Dim, fontSize = 12.sp)
+        for (s in items) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(s.label, color = Palette.Text, fontSize = 14.sp)
+                    Text(s.note, color = Palette.Muted, fontSize = 11.sp)
+                }
+                FazeSwitch(s.on, { s.set(it); tick++ })
+            }
+        }
+        val soundOn = SoundCapture.ready()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Phone sound", color = Palette.Text, fontSize = 14.sp)
+                Text(if (soundOn) "allowed: a computer can play what this phone plays" else "not allowed (Settings > Devices > Allow phone sound)", color = Palette.Muted, fontSize = 11.sp)
+            }
+            Text(if (soundOn) "On" else "Off", color = if (soundOn) Palette.Ok else Palette.Muted, fontSize = 12.sp)
+        }
+        val recent = core.activity.entries().filter { it.kind == "link" }.take(4)
+        if (recent.isNotEmpty()) {
+            Text("RECENT", color = Palette.Muted, fontSize = 11.sp, letterSpacing = 1.5.sp, modifier = Modifier.padding(top = 4.dp))
+            for (e in recent) Text(e.text, color = Palette.Dim, fontSize = 12.sp, maxLines = 2)
         }
     }
 }
