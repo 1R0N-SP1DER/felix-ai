@@ -6,6 +6,7 @@ import unittest
 from faze_pc import link, providers
 from faze_pc.config import Config
 from faze_pc.linkmanager import LinkManager
+from faze_pc import peer
 from faze_pc.peer import PeerRequests, clean
 from tests.phone_sim import PhoneSim
 from tests.test_linkmanager import wait
@@ -128,3 +129,24 @@ class PhoneUseTest(unittest.TestCase):
     def test_unknown_device_is_an_error(self):
         p, _ = self.peer()
         self.assertEqual(p.handle("ph", {"t": "pc_use_phone", "what": "kettle"})["t"], "error")
+
+
+class PickInstalledTest(unittest.TestCase):
+    def test_keeps_an_installed_model(self):
+        self.assertEqual("qwen2.5:1.5b", peer.pick_installed("qwen2.5:1.5b", ["lfm2.5:latest", "qwen2.5:1.5b"]))
+        self.assertEqual("llama3:latest", peer.pick_installed("llama3", ["llama3:latest"]))
+
+    def test_falls_back_to_a_qwen_then_anything(self):
+        self.assertEqual("qwen3.5:4b-q4_k_m", peer.pick_installed("qwen2.5:1.5b", ["lfm2.5:latest", "qwen3.5:4b-q4_k_m"]))
+        self.assertEqual("lfm2.5:latest", peer.pick_installed("qwen2.5:1.5b", ["lfm2.5:latest"]))
+        self.assertIsNone(peer.pick_installed("x", []))
+
+    def test_chat_uses_what_is_installed(self):
+        from faze_pc.config import Config
+        import tempfile, os
+        seen = []
+        cfg = Config(os.path.join(tempfile.mkdtemp(), "c.json"))
+        pr = peer.PeerRequests(cfg, streamer=lambda base, key, model, msgs, cb, timeout=0: seen.append(model) or "hi", lister=lambda: ["qwen3.5:4b-q4_k_m"])
+        r = pr.chat({"messages": [{"role": "user", "content": "hello"}]})
+        self.assertEqual("hi", r["content"])
+        self.assertEqual(["qwen3.5:4b-q4_k_m"], seen)
