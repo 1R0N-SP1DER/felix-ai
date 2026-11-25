@@ -46,6 +46,27 @@ def real_model(m):
     return "vocab" not in name and int(m.get("size", 0) or 0) >= MIN_BYTES
 
 
+def work_dir():
+    """Where models are downloaded before Ollama gets them: a private folder in the user's own cache. Faze hands the file to Ollama over its HTTP interface, so Ollama never has to read this folder."""
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "faze", "models")
+
+
+def ensure_dir(path, mode=0o700):
+    """Makes the folder and checks this user can write in it. Returns "" or a sentence saying what is wrong and how to fix it."""
+    try:
+        os.makedirs(path, mode=mode, exist_ok=True)
+    except OSError as e:
+        return "Faze cannot create %s (%s). Make that folder yourself, or fix who owns it:  sudo chown -R $USER %s" % (path, e.strerror or e, path)
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass  # owned by someone else; the write check below says what matters
+    if not os.access(path, os.W_OK | os.X_OK):
+        return "Faze cannot write to %s because another user owns it (this happens after running Faze with sudo once). Fix it with:  sudo chown -R $USER %s" % (path, path)
+    return ""
+
+
 def shared_dir():
     """A folder Ollama's own service user can read. Ollama opens the file itself, and a home folder (private on Ubuntu) would refuse it."""
     return os.path.join("/var/tmp", "faze-models-%d" % os.getuid())
@@ -100,21 +121,39 @@ def api_create(config, name, path):
 
 
 def create_in_ollama(config, name, path, runner):
-    """(rc, message). First through the HTTP interface; if that cannot be used, the command line, with its small setup file kept in a private temporary folder."""
+    """(rc, message). First through the HTTP interface (Ollama never reads the file itself). Only if that cannot be used, the command line, which needs a copy Ollama's own user can read: that copy goes in a shared folder and is removed after."""
     ok, why = api_create(config, name, path)
     if ok:
         return 0, ""
     tmp = tempfile.mkdtemp(prefix="faze-")
+    shared = None
     try:
+        use = path
+        bad = ensure_dir(shared_dir(), 0o755)
+        if bad:
+            return 1, "%s (Ollama's command line needs it; the HTTP way said: %s)" % (bad, why or "Ollama's address did not answer")
+        try:
+            shared = os.path.join(shared_dir(), os.path.basename(path))
+            shutil.copyfile(path, shared)
+            os.chmod(shared, 0o644)
+            use = shared
+        except OSError as e:
+            shared = None
+            return 1, "could not put a copy where Ollama can read it: %s. The HTTP way said: %s" % (e.strerror or e, why or "Ollama's address did not answer")
         mf = os.path.join(tmp, "Modelfile")
         with open(mf, "w") as f:
-            f.write(modelfile(path))
+            f.write(modelfile(use))
         rc, out = runner(["ollama", "create", name, "-f", mf])
         if rc != 0 and ok is False and why:
             out = why + " | " + out
         return rc, out
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        if shared:
+            try:
+                os.unlink(shared)
+            except OSError:
+                pass
 
 
 def run(argv, timeout=900):
@@ -129,7 +168,7 @@ class ModelCopy:
     def __init__(self, config, request, phone, say, installed, dest=None, which=shutil.which, runner=run, running=None):
         self.config, self.request, self.phone, self.say = config, request, phone, say
         self.installed = installed  # () -> set of Ollama model names already here
-        self.dest = dest or shared_dir()
+        self.dest = dest or work_dir()
         self.running = running  # () -> whether Ollama answers; None skips the check
         self.which, self.run = which, runner
         self.cancelled = False
@@ -149,8 +188,9 @@ class ModelCopy:
         models = [m for m in listing.get("models", []) if real_model(m)]
         if not models:
             return self.fail("The phone has no offline models it can share (it looks in Termux, Download and models).")
-        os.makedirs(self.dest, exist_ok=True)
-        os.chmod(self.dest, 0o755)  # readable by the Ollama service; the files are removed again once Ollama has its own copy
+        bad = ensure_dir(self.dest)
+        if bad:
+            return self.fail(bad)
         have = self.installed()
         total = len(models)
         for i, m in enumerate(models):
@@ -196,7 +236,12 @@ class ModelCopy:
 
     def download(self, st, path, label, i, total):
         size, off = int(st.get("size", 0)), 0
-        with open(path, "wb") as f:
+        try:
+            f = open(path, "wb")
+        except OSError as e:
+            self.fail("Faze cannot write %s: %s. Check who owns that folder (sudo chown -R $USER %s)." % (path, e.strerror or e, os.path.dirname(path)))
+            return False
+        with f:
             while off < size or size == 0:
                 if self.cancelled:
                     self.fail("Cancelled.")
@@ -249,7 +294,7 @@ class DropFolder:
     def __init__(self, config, say, installed, running=None, folder=None, dest=None, which=shutil.which, runner=run, clock=None):
         import time
         self.config, self.say, self.installed, self.running = config, say, installed, running
-        self.folder, self.dest = folder or drop_dir(), dest or shared_dir()
+        self.folder, self.dest = folder or drop_dir(), dest or work_dir()
         self.which, self.run = which, runner
         self.clock = clock or time.time
         self.sizes = {}
@@ -291,8 +336,6 @@ class DropFolder:
         if self.running is not None and not self.running():
             self.say("Ollama is not running, so the models in the drop folder wait. Start it with:  systemctl start ollama", 0.0, True, False)
             return []
-        os.makedirs(self.dest, exist_ok=True)
-        os.chmod(self.dest, 0o755)
         have, made = self.installed(), []
         for i, f in enumerate(files):
             name = ollama_name(f)
