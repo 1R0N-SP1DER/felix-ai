@@ -391,6 +391,8 @@ class FazeCore(private val app: Application) : EngineListener {
         binary = { settings.offlineBinary.ifEmpty { LocalLlama.pickBinary(Su.run(LocalLlama.findBinaryCommand(), 15_000))?.also { settings.offlineBinary = it } } },
         threads = { settings.offlineThreads },
         ctx = { settings.offlineCtx },
+        gpu = { settings.offlineGpuLayers },
+        notice = { activity.add("model", it) },
     )
 
     init {

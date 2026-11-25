@@ -53,8 +53,16 @@ object LocalLlama {
     }
 
     /** Starts the server in the background. One slot and a small context keep the memory down. */
-    fun serverCommand(bin: String, model: String, threads: Int, ctx: Int): String =
-        "LD_LIBRARY_PATH=$TERMUX/usr/lib nohup $bin -m $model -c ${ctx.coerceIn(512, 8192)} -t ${threads.coerceIn(1, 8)} -np 1 --jinja --host 127.0.0.1 --port $PORT >$LOG 2>&1 &"
+    fun serverCommand(bin: String, model: String, threads: Int, ctx: Int, gpuLayers: Int = 0): String =
+        "LD_LIBRARY_PATH=$TERMUX/usr/lib nohup $bin -m $model -c ${ctx.coerceIn(512, 8192)} -t ${threads.coerceIn(1, 8)} -np 1" +
+            (if (gpuLayers > 0) " -ngl ${gpuLayers.coerceAtMost(99)}" else "") + " --jinja --host 127.0.0.1 --port $PORT >$LOG 2>&1 &"
+
+    /** True while the server process is still running (pgrep prints a pid). */
+    fun runningCommand() = "pgrep -f 'port $PORT'"
+
+    /** What the server's log says about the GPU: a line about offloading layers or the device it found, or empty. */
+    fun gpuNote(log: String): String = log.lines().map { it.trim() }
+        .lastOrNull { it.contains("offloaded", true) || it.contains("Vulkan", true) || it.contains("OpenCL", true) || it.contains("Adreno", true) || it.contains("Mali", true) }.orEmpty().take(160)
 
     fun stopCommand() = "pkill -f 'port $PORT'"
 
@@ -153,8 +161,12 @@ class LocalServerControl(
     private val ctx: () -> Int,
     private val sleep: (Long) -> Unit = { Thread.sleep(it) },
     private val startTimeoutMs: Long = 120_000,
+    /** How many layers to put on the GPU (-ngl); the rest stay on the CPU, 0 for CPU only. A build of llama.cpp without a GPU backend ignores it; one that crashes with it is retried on the CPU. */
+    private val gpu: () -> Int = { 0 },
+    private val notice: (String) -> Unit = {},
 ) : LocalServer {
     @Volatile private var started: String? = null
+    @Volatile private var gpuBroken = false
 
     override fun ensure(model: String, onWait: (String) -> Unit): String? {
         if (!LocalLlama.isSafePath(model) || !model.endsWith(".gguf")) return "that model file is not allowed"
@@ -166,8 +178,28 @@ class LocalServerControl(
         }
         val bin = binary() ?: return "llama-server was not found in Termux (build llama.cpp there first)"
         onWait("Loading ${LocalLlama.label(model)}…")
+        val layers = if (gpuBroken) 0 else gpu()
+        val useGpu = layers > 0
+        var err = launch(bin, model, layers, onWait)
+        if (err != null && useGpu) { // the GPU start failed: remember it and load on the CPU instead
+            gpuBroken = true
+            notice("The GPU did not work with this llama-server, so the model runs on the CPU. $err")
+            stop()
+            onWait("Loading ${LocalLlama.label(model)} on the CPU…")
+            err = launch(bin, model, 0, onWait)
+        }
+        if (err == null && useGpu && !gpuBroken) {
+            val note = try { LocalLlama.gpuNote(run("tail -n 200 ${LocalLlama.LOG}", 4000)) } catch (e: Exception) { "" }
+            if (note.isNotEmpty()) notice("GPU: $note")
+        }
+        return err
+    }
+
+    /** Starts the server and waits for it to answer. Null when it is up, otherwise why not. With the GPU on, a process that has already died is noticed within seconds rather than after the full wait. */
+    private fun launch(bin: String, model: String, layers: Int, onWait: (String) -> Unit): String? {
+        val useGpu = layers > 0
         try {
-            run(LocalLlama.serverCommand(bin, model, threads(), ctx()), 8000)
+            run(LocalLlama.serverCommand(bin, model, threads(), ctx(), layers), 8000)
         } catch (e: Exception) {
             return "could not start the model server: ${e.message ?: e.javaClass.simpleName} (is root granted?)"
         }
@@ -177,10 +209,18 @@ class LocalServerControl(
             sleep(500)
             waited += 500
             if (alive() != null) return null
+            if (useGpu && waited % 5000 == 0L && waited >= 5000) {
+                val pid = try { run(LocalLlama.runningCommand(), 3000).trim() } catch (e: Exception) { "x" }
+                if (pid.isEmpty()) { started = null; return tailOf("the server stopped while loading") }
+            }
         }
         started = null
+        return tailOf("the model did not start in time")
+    }
+
+    private fun tailOf(what: String): String {
         val tail = try { run("tail -n 4 ${LocalLlama.LOG}", 4000).trim().replace('\n', ' ').take(200) } catch (e: Exception) { "" }
-        return "the model did not start in time" + if (tail.isNotEmpty()) " ($tail)" else " (it may have been killed for memory)"
+        return what + if (tail.isNotEmpty()) " ($tail)" else " (it may have been killed for memory)"
     }
 
     override fun stop() {
