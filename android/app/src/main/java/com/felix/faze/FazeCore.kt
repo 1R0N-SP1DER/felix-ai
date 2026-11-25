@@ -250,8 +250,14 @@ class FazeCore(private val app: Application) : EngineListener {
     private val stt = Stt(transport, { settings.groqKey })
     private val store = ChatStore(File(app.filesDir, "chats"))
     val memory = MemoryStore(File(app.filesDir, "memory.json"))
+    private val rootCheck = RootCheck({ Su.run("id", 3000).contains("uid=0") })
+    private val rootNow: Boolean get() = ControlMode.useRoot(settings.controlMode) { rootCheck.available() }
+    private val a11yShot = A11yShot()
+    /** A screenshot the way the control mode says: root screencap or the accessibility screenshot. */
+    private fun screenJpeg(): ByteArray = if (rootNow) AndroidScreenCapture().jpeg() else a11yShot.jpeg()
+    private val hands: Hands = ChoosingHands(AndroidHands(app), NoRootHands(AndroidA11y(app)), { settings.controlMode }) { rootCheck.available() }
     private val screenShare = ScreenShare(
-        { AndroidScreenCapture().jpeg() }, AndroidHands(app),
+        { screenJpeg() }, hands,
         { app.resources.displayMetrics.let { it.widthPixels to it.heightPixels } },
         { settings.linkScreen }, { LockOverlayActivity.isLocked(app) }, { activity.add("link", it) },
     )
@@ -260,6 +266,7 @@ class FazeCore(private val app: Application) : EngineListener {
         { app.resources.displayMetrics.let { it.widthPixels to it.heightPixels } },
         { settings.linkScreen }, { LockOverlayActivity.isLocked(app) },
         { m -> link.notify(m) }, log = { activity.add("link", it) },
+        unavailable = { if (rootNow) "" else "Live video needs root on this phone for now. Pictures work without it." },
     )
     /** Copies of offline models staged for a computer to read (see PhoneModels). */
     private val phoneModels = PhoneModels({ settings.linkModels }, { cmd, ms -> try { Su.run(cmd, ms) } catch (_: Exception) { "" } }, { activity.add("link", it) })
@@ -427,7 +434,7 @@ class FazeCore(private val app: Application) : EngineListener {
             { settings.allowPowered },
             { PermissionPolicy.all().map { it.first }.toSet() },
         )
-        rawTools = Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { AndroidScreenCapture().jpeg() }), AndroidHands(app), scheduler, AndroidSwitches(), liveControl,
+        rawTools = Tools(AndroidDevice(app), transport, settings, memory, userTools, ScreenEyes(RemoteClient(transport, Groq.BASE, { settings.groqKey }, "Groq", 700), { settings.visionModel }, { screenJpeg() }), hands, scheduler, AndroidSwitches(), liveControl,
             GeminiImages(transport, { settings.geminiKey }, { settings.imageModel }, java.io.File(app.filesDir, "images"), imageShelf),
             WebImages(transport, { settings.tavily }, imageShelf), computers)
         gate = GatedTools(rawTools, broker, extraTier = { name -> if (userTools.has(name)) Tier.SAFE else null }, approvalMode = { settings.approvalMode }, phoneControl = { settings.phoneControl }, locked = { settings.limitWhenLocked && LockOverlayActivity.isLocked(app) })

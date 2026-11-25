@@ -34,6 +34,7 @@ class FazeAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        instance = this
         overlay = OverlayWindow(this, core)
         try {
             registerReceiver(object : android.content.BroadcastReceiver() {
@@ -189,8 +190,14 @@ class FazeAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        if (instance === this) instance = null
         overlay?.close(true)
         handler.removeCallbacks(ticker)
         super.onDestroy()
+    }
+
+    companion object {
+        /** The running service, for control without root (see NoRoot.kt). Null while the service is off. */
+        @Volatile var instance: FazeAccessibilityService? = null
     }
 }
