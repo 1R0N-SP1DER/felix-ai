@@ -212,7 +212,7 @@ fun connectedSummary(connected: Int, total: Int): String = when {
 private fun Overview(core: FazeCore, rows: List<DeviceRow>) {
     var tick by remember { mutableStateOf(0) }
     val items = listOf(
-        Sharing("Screen view and control", core.settings.linkScreen, "see and tap this screen (needs root)") { core.settings.linkScreen = it },
+        Sharing("Screen view and control", core.settings.linkScreen, "see and tap this screen (root or accessibility)") { core.settings.linkScreen = it },
         Sharing("Files", core.settings.linkFiles, "browse this phone's public folders") { core.settings.linkFiles = it },
         Sharing("Camera and microphone", core.settings.linkMedia, "use them as a webcam and mic") { core.settings.linkMedia = it },
         Sharing("Receive things", core.settings.linkReceive, "files, text and links into Downloads/Faze") { core.settings.linkReceive = it },

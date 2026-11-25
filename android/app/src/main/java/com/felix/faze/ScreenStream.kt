@@ -17,6 +17,8 @@ class ScreenStream(
     private val send: (JSONObject) -> Unit,
     private val now: () -> Long = { System.currentTimeMillis() },
     private val log: (String) -> Unit = {},
+    /** A reason live video cannot run now (for example root is not used), or empty. The computer then falls back to pictures. */
+    private val unavailable: () -> String = { "" },
 ) {
     interface Source { val input: InputStream; fun close(); fun error(): String = "" }
 
@@ -47,6 +49,7 @@ class ScreenStream(
             else -> {
                 if (!allowed()) return error("Screen sharing is off on the phone. Turn on Allow screen view and control in Settings > Advanced > Devices.")
                 if (locked()) return error("The phone is locked.")
+                unavailable().let { if (it.isNotEmpty()) return error(it) }
                 start()
                 JSONObject().put("t", "screen_stream_ok")
             }

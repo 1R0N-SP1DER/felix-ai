@@ -301,7 +301,17 @@ private fun AgentTab(core: FazeCore) {
         var files by remember { mutableStateOf(core.settings.linkFiles) }
         var filesAll by remember { mutableStateOf(core.settings.linkFilesAll) }
         SettingRow("Allow computers", "Opens a port on this phone so a paired computer can connect. Everything after pairing is encrypted. Pair from the Felix_ menu > Devices.") { FazeSwitch(link, { link = it; core.setLink(it) }) }
-        SettingRow("Allow screen view and control", "Lets a paired computer see this screen and tap, swipe and type on it. Needs root, and never works while the phone is locked.") { FazeSwitch(screen, { screen = it; core.settings.linkScreen = it }) }
+        SettingRow("Allow screen view and control", "Lets a paired device (computer or phone) see this screen and tap, swipe and type on it. Never works while the phone is locked.") { FazeSwitch(screen, { screen = it; core.settings.linkScreen = it }) }
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        var mode by remember { mutableStateOf(core.settings.controlMode) }
+        SettingRow("Control method", "How a paired device controls this screen. Root is faster and does more (live video, every key). Without root it uses Faze's accessibility service: touch, back, home, recents, text and slower pictures. Auto uses root when it works and the accessibility way when it does not") {}
+        Seg(listOf("auto" to "Auto", "root" to "Root", "noroot" to "Non-root"), mode, small = true) { mode = it; core.settings.controlMode = it }
+        var a11y by remember { mutableStateOf(a11yEnabled(ctx)) }
+        SettingRow("Accessibility service", if (a11y) "On. Control without root is ready" else "Off. Needed for control without root (and for the volume-button overlay)") {
+            Text(if (a11y) "Refresh" else "Turn on", color = Palette.Accent, modifier = Modifier.clickable {
+                if (a11y) a11y = a11yEnabled(ctx) else ctx.startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }.padding(8.dp))
+        }
         SettingRow("Share the clipboard", "Text you copy on a computer lands here at once. Text you copy here goes to the computer when Faze is open (Android only lets an app read the clipboard while it is in front).") { FazeSwitch(clipOn, { clipOn = it; core.settings.linkClip = it; core.syncBackground() }) }
         SettingRow("Copy from anywhere (root)", "With root, every copy in any app goes to the computer, even with Faze closed: Faze reads the system log and briefly opens an invisible window to read the text.") { FazeSwitch(clipRoot, { clipRoot = it; core.settings.linkClipRoot = it; core.syncBackground() }) }
         var modelsOn by remember { mutableStateOf(core.settings.linkModels) }

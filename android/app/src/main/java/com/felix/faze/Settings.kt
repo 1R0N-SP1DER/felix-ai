@@ -389,6 +389,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getBoolean("link_screen", false)
         set(value) = prefs.edit().putBoolean("link_screen", value).apply()
 
+    /** How a paired device controls this screen: "auto" (root if it works, otherwise accessibility), "root" or "noroot". */
+    var controlMode: String
+        get() = ControlMode.normalize(text("control_mode"))
+        set(value) = put("control_mode", ControlMode.normalize(value))
+
     var linkPeers: String
         get() = text("link_peers")
         set(value) = prefs.edit().putString("link_peers", value).apply()
