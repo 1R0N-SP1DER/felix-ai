@@ -232,7 +232,7 @@ class LocalLlamaTest {
 
     @Test fun gpuFlagIsOnlyAddedWhenAsked() {
         assertTrue(!LocalLlama.serverCommand("/b/s", lfm, 4, 2048).contains("-ngl"))
-        assertTrue(LocalLlama.serverCommand("/b/s", lfm, 4, 2048, gpu = true).contains("-ngl 99"))
+        assertTrue(LocalLlama.serverCommand("/b/s", lfm, 4, 2048, gpuLayers = 16).contains("-ngl 16"))
     }
 
     @Test fun aGpuStartThatDiesIsRetriedOnTheCpu() {
@@ -241,11 +241,11 @@ class LocalLlamaTest {
         var up: String? = null
         val c = LocalServerControl(
             { cmd, _ -> ran.add(cmd); if (cmd.contains("nohup") && !cmd.contains("-ngl")) up = "LFM2.5-230M-Q4_K_M.gguf"; if (cmd.startsWith("pgrep")) "" else "" },
-            { up }, { "/b/llama-server" }, { 4 }, { 2048 }, {}, 60_000, { true }, { notes.add(it) },
+            { up }, { "/b/llama-server" }, { 4 }, { 2048 }, {}, 60_000, { 16 }, { notes.add(it) },
         )
         assertEquals(null, c.ensure(lfm) {})
         assertEquals(2, ran.count { it.contains("nohup") })
-        assertTrue(ran.first { it.contains("nohup") }.contains("-ngl 99"))
+        assertTrue(ran.first { it.contains("nohup") }.contains("-ngl 16"))
         assertTrue(!ran.last { it.contains("nohup") }.contains("-ngl"))
         assertTrue(notes.any { it.contains("CPU") })
         // and it does not try the GPU again this run

@@ -367,10 +367,9 @@ private fun AgentTab(core: FazeCore) {
         var ctxSize by remember { mutableStateOf(core.settings.offlineCtx.toString()) }
         SettingRow("Threads", "CPU cores the model uses. Fewer is gentler on the phone and its memory; more is faster") {}
         Seg(OfflineLimits.THREADS.map { it.toString() to it.toString() }, threads, small = true) { threads = it; core.settings.offlineThreads = it.toInt() }
-        var gpu by remember { mutableStateOf(core.settings.offlineGpu) }
-        SettingRow("Use the GPU", "Asks llama.cpp to run the model on the phone's graphics chip. It only helps if llama.cpp was built in Termux with a GPU backend (OpenCL for Snapdragon, Vulkan otherwise). A plain CPU build ignores it, and if the GPU makes the server crash Faze goes back to the CPU by itself") {
-            FazeSwitch(gpu, { gpu = it; core.settings.offlineGpu = it })
-        }
+        var gpu by remember { mutableStateOf(core.settings.offlineGpuLayers.toString()) }
+        SettingRow("GPU share", "How much of the model the phone's graphics chip takes; the CPU runs the rest. Balanced puts about 16 layers on the GPU. Only helps if llama.cpp in Termux was built with OpenCL (Snapdragon) or Vulkan. A plain CPU build ignores it, and if the GPU makes the server crash Faze goes back to the CPU by itself") {}
+        Seg(listOf("0" to "CPU only", "8" to "Light", "16" to "Balanced", "99" to "Max"), gpu, small = true) { gpu = it; core.settings.offlineGpuLayers = it.toInt() }
         SettingRow("Context", "How much of the chat it can hold. A smaller number uses less memory (Android closes apps that use too much)") {}
         Seg(OfflineLimits.CTX.map { it.toString() to it.toString() }, ctxSize, small = true) { ctxSize = it; core.settings.offlineCtx = it.toInt() }
         Hint("Applies the next time the offline model starts: switch to another model and back, or restart the app. Pick the model itself from the model button in the chat.")
