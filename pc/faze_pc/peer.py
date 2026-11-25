@@ -20,6 +20,17 @@ def clean(messages):
     return out
 
 
+def pick_installed(model, installed):
+    """The model to really use. The one asked for when Ollama has it (a name without a tag means :latest); otherwise an installed Qwen, then any installed model. None when nothing is installed."""
+    if not installed:
+        return None
+    for name in installed:
+        if name == model or (":" not in model and name == model + ":latest"):
+            return model if name == model else name
+    qwen = [n for n in installed if n.lower().startswith("qwen")]
+    return (qwen or list(installed))[0]
+
+
 class PeerRequests:
     def __init__(self, config, streamer=providers.stream_chat, runner=None, lister=None, log=None, mirror_opener=None, clip_in=None, remote=None, media=None, screen_in=None, notes_in=None, system=None, phone_use=None):
         self.shares = Shares(config)
@@ -115,6 +126,15 @@ class PeerRequests:
         messages = clean(msg.get("messages") or [])
         if not messages:
             return {"t": "error", "message": "nothing to answer"}
+        try:
+            installed = list(self.lister())
+        except Exception:
+            installed = []  # Ollama's list did not answer; the chat below says what is wrong
+        if installed:
+            use = pick_installed(model, installed)
+            if use != model:
+                self.log("link", "Ollama here has no %s, so the phone's chat used %s instead" % (model, use))
+                model = use
         try:
             text = self.streamer(providers.base_for(c, "ollama"), "", model, messages, lambda piece: None, timeout=120)
         except providers.ProviderError as e:

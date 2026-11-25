@@ -94,6 +94,27 @@ class CopyTest(unittest.TestCase):
     def test_default_folder_is_readable_by_the_ollama_service(self):
         self.assertTrue(modelcopy.shared_dir().startswith("/var/tmp/"))
 
+    def test_downloads_go_to_a_private_folder_in_the_home_cache(self):
+        old = os.environ.get("XDG_CACHE_HOME")
+        os.environ["XDG_CACHE_HOME"] = "/home/someone/.cache"
+        try:
+            self.assertEqual("/home/someone/.cache/faze/models", modelcopy.work_dir())
+        finally:
+            if old is None:
+                del os.environ["XDG_CACHE_HOME"]
+            else:
+                os.environ["XDG_CACHE_HOME"] = old
+
+    def test_a_folder_that_cannot_be_made_says_how_to_fix_it(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        blocker = os.path.join(d, "afile")
+        open(blocker, "w").close()
+        msg = modelcopy.ensure_dir(os.path.join(blocker, "sub"))
+        self.assertIn("chown", msg)
+        self.assertEqual("", modelcopy.ensure_dir(os.path.join(d, "fine")))
+        self.assertEqual(0o700, os.stat(os.path.join(d, "fine")).st_mode & 0o777)
+
     def test_the_downloaded_bytes_are_exact(self):
         big = os.urandom(1_300_000)
         seen = {}
