@@ -119,7 +119,8 @@ fun FazeRoot(vm: ChatViewModel = viewModel()) {
             )
         },
     ) {
-        if (page == "devices") DevicesScreen(core, { page = "" }, onOpen = { deviceId = it; page = "device" })
+        if (page == "devices") DevicesScreen(core, { page = "" }, onOpen = { deviceId = it; page = if (core.linkRemotes.get(it) != null) "phoneremote" else "device" })
+        else if (page == "phoneremote") PhoneRemoteScreen(core, deviceId) { page = "devices" }
         else if (page == "device") DevicePage(core, deviceId, { page = "devices" }, onControl = { page = "pcremote" }, onOverlay = { page = "pcoverlay" }, onMedia = { page = "pcmedia:$it" })
         else if (page == "activity") ActivityScreen(core) { page = "" }
         else if (page.startsWith("pcmedia:")) PcMediaScreen(core, page.removePrefix("pcmedia:")) { page = "device" }

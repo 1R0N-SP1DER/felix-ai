@@ -159,6 +159,7 @@ private fun DeviceCard(core: FazeCore, d: DeviceRow, onOpen: (String) -> Unit, o
         }
         val isPhone = core.linkRemotes.get(d.id) != null
         if (d.connected && !isPhone) Text("Tap to open · drag sideways to show this phone here", color = Palette.Muted, fontSize = 12.sp)
+        if (d.connected && isPhone) Text("Tap to see and control this phone", color = Palette.Muted, fontSize = 12.sp)
         if (isPhone && !d.connected) DeviceChip("Connect") { core.connectPhone(d.id) }
         if (note.isNotEmpty()) Text(note, color = Palette.Dim, fontSize = 12.5.sp, modifier = Modifier.padding(top = 6.dp))
         Text(
