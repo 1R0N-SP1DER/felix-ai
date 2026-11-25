@@ -8,6 +8,8 @@ import org.json.JSONObject
 /** Where the computer's sound goes. */
 interface AudioSink {
     fun open(rate: Int)
+    /** Stereo sound needs 2; the default is the mono way every sink already has. */
+    fun open(rate: Int, channels: Int) = open(rate)
     fun write(pcm: ByteArray)
     fun close()
 }
@@ -15,13 +17,16 @@ interface AudioSink {
 class AndroidSink : AudioSink {
     private var track: AudioTrack? = null
 
-    override fun open(rate: Int) {
+    override fun open(rate: Int) = open(rate, 1)
+
+    override fun open(rate: Int, channels: Int) {
         close()
-        val min = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        val mask = if (channels == 2) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
+        val min = AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT)
         val t = AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
-            .setAudioFormat(AudioFormat.Builder().setSampleRate(rate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-            .setBufferSizeInBytes(maxOf(min, rate)).setTransferMode(AudioTrack.MODE_STREAM).build()
+            .setAudioFormat(AudioFormat.Builder().setSampleRate(rate).setChannelMask(mask).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
+            .setBufferSizeInBytes(maxOf(min, rate * channels)).setTransferMode(AudioTrack.MODE_STREAM).build()
         t.play()
         track = t
     }

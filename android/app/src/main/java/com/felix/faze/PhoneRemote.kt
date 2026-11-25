@@ -16,6 +16,15 @@ class PhoneRemote(private val ask: (JSONObject, Long) -> JSONObject) {
         return java.util.Base64.getDecoder().decode(r.getString("jpeg"))
     }
 
+    /** One picture from the other phone's camera ("front" or "back"). Needs "Let computers use my camera and microphone" on that phone. */
+    fun camera(facing: String): ByteArray {
+        val r = ask(JSONObject().put("t", "phone_cam_get").put("facing", facing), 20_000)
+        if (r.optString("t") != "phone_cam_ok") throw IOException(r.optString("message", "the phone did not send a camera picture"))
+        return java.util.Base64.getDecoder().decode(r.getString("jpeg"))
+    }
+
+    fun stopCamera() { try { ask(JSONObject().put("t", "phone_cam_stop"), 5_000) } catch (_: Exception) { } }
+
     private fun act(m: JSONObject): String {
         val r = ask(m, 15_000)
         if (r.optString("t") == "error") throw IOException(r.optString("message", "the phone refused"))
@@ -43,4 +52,40 @@ object FitMap {
         val fy = (y - top) / h
         return if (fx in 0f..1f && fy in 0f..1f) fx to fy else null
     }
+}
+
+/** Plays another phone's microphone (kind "audio") or its sound (kind "sound") on this phone, a chunk at a time, like PcAudio does for a computer. */
+class PhoneAudio(private val kind: String, private val ask: (JSONObject) -> JSONObject, private val sink: AudioSink, private val onError: (String) -> Unit, private val sleep: (Long) -> Unit = { Thread.sleep(it) }) {
+    @Volatile var running = false
+        private set
+    private var rate = 0
+
+    /** One round: asks for a chunk and plays it. False when it should stop. */
+    fun step(): Boolean {
+        val r = try { ask(JSONObject().put("t", "phone_${kind}_get")) } catch (e: Exception) { onError(e.message ?: "the phone could not be reached"); return false }
+        if (r.optString("t") != "phone_${kind}_ok") { onError(r.optString("message", "the phone did not send sound")); return false }
+        val data = java.util.Base64.getDecoder().decode(r.optString("data"))
+        val want = r.optInt("rate", 16000)
+        if (want != rate) { rate = want; sink.open(want, r.optInt("channels", 1)) }
+        if (data.isNotEmpty()) sink.write(data) else sleep(40)
+        return true
+    }
+
+    fun start() {
+        if (running) return
+        running = true
+        Thread {
+            try {
+                while (running && step()) { /* the speaker blocks when it is full */ }
+            } catch (e: Throwable) {
+                onError("the sound failed: " + (e.message ?: e.javaClass.simpleName))
+            }
+            running = false
+            sink.close()
+            rate = 0
+            try { ask(JSONObject().put("t", "phone_${kind}_stop")) } catch (_: Exception) { }
+        }.start()
+    }
+
+    fun stop() { running = false }
 }

@@ -42,3 +42,38 @@ class PhoneRemoteTest {
         assertNull(FitMap.fraction(1f, 1f, 0f, 0f, 100, 200))
     }
 }
+
+class PhoneAudioTest {
+    private class Sink : AudioSink {
+        val opened = ArrayList<Pair<Int, Int>>()
+        val wrote = ArrayList<Int>()
+        override fun open(rate: Int) { opened.add(rate to 1) }
+        override fun open(rate: Int, channels: Int) { opened.add(rate to channels) }
+        override fun write(pcm: ByteArray) { wrote.add(pcm.size) }
+        override fun close() {}
+    }
+
+    @Test fun playsStereoSoundAndMonoMic() {
+        val sink = Sink()
+        val snd = PhoneAudio("sound", { JSONObject().put("t", "phone_sound_ok").put("rate", 44100).put("channels", 2).put("data", java.util.Base64.getEncoder().encodeToString(ByteArray(8))) }, sink, {})
+        assertTrue(snd.step())
+        assertEquals(listOf(44100 to 2), sink.opened)
+        val mic = Sink()
+        val m = PhoneAudio("audio", { JSONObject().put("t", "phone_audio_ok").put("rate", 16000).put("data", java.util.Base64.getEncoder().encodeToString(ByteArray(4))) }, mic, {})
+        assertTrue(m.step())
+        assertEquals(listOf(16000 to 1), mic.opened)
+        assertEquals(listOf(4), mic.wrote)
+    }
+
+    @Test fun stopsAndReportsWhenThePhoneRefuses() {
+        var said = ""
+        val a = PhoneAudio("audio", { JSONObject().put("t", "error").put("message", "Camera and microphone sharing is off on the phone") }, Sink(), { said = it })
+        assertEquals(false, a.step())
+        assertTrue(said.contains("off"))
+    }
+
+    @Test fun cameraPictureComesBack() {
+        val r = PhoneRemote { m, _ -> assertEquals("back", m.getString("facing")); JSONObject().put("t", "phone_cam_ok").put("jpeg", java.util.Base64.getEncoder().encodeToString(byteArrayOf(9, 9))) }
+        assertEquals(2, r.camera("back").size)
+    }
+}

@@ -45,16 +45,22 @@ fun PhoneRemoteScreen(core: FazeCore, deviceId: String, onBack: () -> Unit) {
     var note by remember { mutableStateOf("Waiting for the phone…") }
     var box by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     var typed by remember { mutableStateOf("") }
+    var view by remember { mutableStateOf("screen") } // "screen", "front" or "back" camera
+    val micPlayer = remember(deviceId) { PhoneAudio("audio", { m -> core.linkClient.ask(deviceId, m, 15_000) }, AndroidSink(), { e -> note = e }) }
+    val soundPlayer = remember(deviceId) { PhoneAudio("sound", { m -> core.linkClient.ask(deviceId, m, 15_000) }, AndroidSink(), { e -> note = e }) }
+    var micOn by remember { mutableStateOf(false) }
+    var soundOn by remember { mutableStateOf(false) }
+    androidx.compose.runtime.DisposableEffect(deviceId) { onDispose { micPlayer.stop(); soundPlayer.stop(); Thread { remote.stopCamera() }.start() } }
 
     fun run(block: () -> Unit) {
         Thread { try { block() } catch (e: Exception) { note = e.message ?: "that did not work" } }.start()
     }
 
-    LaunchedEffect(deviceId) {
+    LaunchedEffect(deviceId, view) {
         while (isActive) {
             val t0 = System.currentTimeMillis()
             try {
-                val jpeg = withContext(Dispatchers.IO) { remote.screen() }
+                val jpeg = withContext(Dispatchers.IO) { if (view == "screen") remote.screen() else remote.camera(view) }
                 val bmp = withContext(Dispatchers.Default) { android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) }
                 if (bmp != null) { frame = bmp; note = "" }
             } catch (e: Exception) {
@@ -69,13 +75,15 @@ fun PhoneRemoteScreen(core: FazeCore, deviceId: String, onBack: () -> Unit) {
         PageHeader(name, onBack)
         Box(
             Modifier.weight(1f).fillMaxWidth().onSizeChanged { box = it }
-                .pointerInput(frame) {
+                .pointerInput(frame, view) {
+                    if (view != "screen") return@pointerInput
                     detectTapGestures(
                         onTap = { o -> val b = frame; if (b != null) FitMap.fraction(o.x, o.y, box.width.toFloat(), box.height.toFloat(), b.width, b.height)?.let { (x, y) -> run { remote.tap(x, y) } } },
                         onLongPress = { o -> val b = frame; if (b != null) FitMap.fraction(o.x, o.y, box.width.toFloat(), box.height.toFloat(), b.width, b.height)?.let { (x, y) -> run { remote.longPress(x, y) } } },
                     )
                 }
-                .pointerInput(frame) {
+                .pointerInput(frame, view) {
+                    if (view != "screen") return@pointerInput
                     var start = Offset.Zero
                     var end = Offset.Zero
                     detectDragGestures(
@@ -96,6 +104,17 @@ fun PhoneRemoteScreen(core: FazeCore, deviceId: String, onBack: () -> Unit) {
             val b = frame
             if (b != null) Image(b.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
             if (note.isNotEmpty()) Text(note, color = Palette.Dim, fontSize = 14.sp, modifier = Modifier.padding(24.dp))
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            fun chip(label: String, on: Boolean, click: () -> Unit) = @Composable {
+                Text(
+                    label, color = if (on) Palette.Accent else Palette.Text, fontSize = 13.sp,
+                    modifier = Modifier.clip(RoundedCornerShape(50)).background(Palette.Surface2).border(1.dp, if (on) Palette.Accent else Palette.Line, RoundedCornerShape(50)).clickable { click() }.padding(horizontal = 14.dp, vertical = 9.dp),
+                )
+            }
+            chip("Its mic", micOn) { micOn = !micOn; if (micOn) micPlayer.start() else micPlayer.stop() }()
+            chip("Its sound", soundOn) { soundOn = !soundOn; if (soundOn) soundPlayer.start() else soundPlayer.stop() }()
+            chip(when (view) { "front" -> "Front cam"; "back" -> "Back cam"; else -> "Camera" }, view != "screen") { view = when (view) { "screen" -> "front"; "front" -> "back"; else -> "screen" }; if (view == "screen") Thread { remote.stopCamera() }.start() }()
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for ((label, key) in listOf("Back" to "back", "Home" to "home", "Recents" to "recents", "Vol −" to "volume_down", "Vol +" to "volume_up")) {
