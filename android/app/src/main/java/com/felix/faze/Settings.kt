@@ -156,6 +156,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
     fun compatModel(id: String): String = text("${id}_model").ifBlank { OpenAiProviders.all[id]?.defaultModel.orEmpty() }
     fun setCompatModel(id: String, value: String) = put("${id}_model", value.trim())
 
+    /** Ask llama.cpp to use the GPU for the offline model. On by default; falls back to the CPU if it crashes. */
+    var offlineGpu: Boolean
+        get() = prefs.getBoolean("offline_gpu", true)
+        set(value) = prefs.edit().putBoolean("offline_gpu", value).apply()
+
     var offlineCtx: Int
         get() = OfflineLimits.ctx(text("offline_ctx").toIntOrNull())
         set(value) = put("offline_ctx", OfflineLimits.ctx(value).toString())
