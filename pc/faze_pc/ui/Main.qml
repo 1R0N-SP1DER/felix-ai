@@ -589,6 +589,20 @@ ApplicationWindow {
             spacing: 10
             Text { text: "Devices"; color: win.text; font.pixelSize: 18; font.bold: true }
             Text { text: "This PC and your phone work as one Faze. The phone is the hub."; color: win.muted; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Rectangle {
+                id: overview
+                Layout.fillWidth: true
+                implicitHeight: ovCol.implicitHeight + 24
+                radius: 16; color: win.surface2; border.width: 1; border.color: win.line
+                readonly property int total: win.devices.length
+                readonly property int live: win.devices.filter(function (d) { return d.state === "connected" }).length
+                ColumnLayout {
+                    id: ovCol
+                    anchors.fill: parent; anchors.margins: 12; spacing: 3
+                    Text { text: overview.total === 0 ? "No devices yet" : (overview.live === 0 ? "Nothing connected" : (overview.live === overview.total ? (overview.total === 1 ? "Your device is connected" : "All " + overview.total + " devices connected") : overview.live + " of " + overview.total + " devices connected")); color: win.text; font.pixelSize: 15; font.bold: true }
+                    Text { visible: overview.live > 0; text: "Mic, camera and sound can be used here. Files, text and links can be sent." + (win.phoneMic || win.phoneCam || win.phoneSound ? " In use now: " + [win.phoneMic ? "mic" : "", win.phoneCam ? "camera" : "", win.phoneSound ? "sound" : ""].filter(function (x) { return x !== "" }).join(", ") + "." : ""); color: win.muted; font.pixelSize: 11; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                }
+            }
             Repeater {
                 model: win.devices
                 delegate: Rectangle {

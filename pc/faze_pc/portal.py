@@ -12,7 +12,8 @@ PORTAL = "org.freedesktop.portal.Desktop"
 PATH = "/org/freedesktop/portal/desktop"
 
 
-ENCODERS = ("x264enc", "vah264enc", "nvh264enc")   # CPU first: it always works; the hardware ones can be chosen with FAZE_H264_ENCODER
+ENCODERS = ("x264enc", "vah264enc", "nvh264enc")
+HARDWARE = ("nvh264enc", "vah264enc")   # tried first when a quick test run shows they really work; x264 (the CPU) is the safe last choice. FAZE_H264_ENCODER=x264enc forces the CPU.
 
 
 def encoder_args(name, kbps, fps):
@@ -25,13 +26,23 @@ def encoder_args(name, kbps, fps):
     raise ValueError(name)
 
 
-def pick_encoder(have, preferred=""):
-    """The first usable H.264 encoder, or None. have(name) says whether GStreamer has that element."""
-    order = ([preferred] if preferred in ENCODERS else []) + list(ENCODERS)
+def pick_encoder(have, preferred="", works=None):
+    """The first usable H.264 encoder, or None. have(name) says whether GStreamer has that element. With works(name) (a real test run), hardware encoders come before the CPU one when they pass; without it the CPU one comes first."""
+    order = ([preferred] if preferred in ENCODERS else []) + (list(HARDWARE) + ["x264enc"] if works else list(ENCODERS))
     for name in order:
-        if have(name):
+        if have(name) and (works is None or name == "x264enc" or works(name)):
             return name
     return None
+
+
+def probe(name, run=subprocess.run):
+    """A few test frames through the encoder: a hardware encoder that is installed can still fail (no device, wrong driver), and then the CPU is used."""
+    try:
+        r = run(["gst-launch-1.0", "-q", "videotestsrc", "num-buffers=5", "!", "video/x-raw,width=640,height=480", "!", "videoconvert", "!", "video/x-raw,format=I420", "!"] + encoder_args(name, 2000, 30) + ["!", "fakesink"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def even_size(width, source):
@@ -88,7 +99,7 @@ def main(argv):
     if h264:
         import shutil as _sh
         have = (lambda n: subprocess.run(["gst-inspect-1.0", "--exists", n], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0) if _sh.which("gst-inspect-1.0") else (lambda n: False)
-        encoder = pick_encoder(have, os.environ.get("FAZE_H264_ENCODER", ""))
+        encoder = pick_encoder(have, os.environ.get("FAZE_H264_ENCODER", ""), probe)
         if encoder is None:
             fail(2, "No H.264 encoder for GStreamer. Install one: sudo apt install gstreamer1.0-plugins-ugly (fast video needs it)")
 
