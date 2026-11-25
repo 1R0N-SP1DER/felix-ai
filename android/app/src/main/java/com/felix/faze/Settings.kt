@@ -354,6 +354,11 @@ class AppSettings(context: Context) : ToolSettings, EngineConfig {
         get() = prefs.getString("remote_shape", "stretch") ?: "stretch"
         set(value) = prefs.edit().putString("remote_shape", value).apply()
 
+    /** Let a paired computer send files, text and links to this phone (they land in Downloads/Faze or in a notification). On: the computer is already paired and encrypted. */
+    var linkReceive: Boolean
+        get() = prefs.getBoolean("link_receive", true)
+        set(value) = prefs.edit().putBoolean("link_receive", value).apply()
+
     /** Let a connected computer use this phone's camera and microphone. Off by default: it is a privacy switch. */
     var linkMedia: Boolean
         get() = prefs.getBoolean("link_media", false)
