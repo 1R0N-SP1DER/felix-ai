@@ -399,7 +399,7 @@ class FazeCore(private val app: Application) : EngineListener {
         threads = { settings.offlineThreads },
         ctx = { settings.offlineCtx },
         gpu = { settings.offlineGpuLayers },
-        notice = { activity.add("model", it) },
+        notice = { activity.add("model", it); if (it.startsWith("GPU") || it.contains("CPU")) settings.offlineGpuStatus = it },
     )
 
     init {
