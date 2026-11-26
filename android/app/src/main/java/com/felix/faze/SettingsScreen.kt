@@ -329,7 +329,7 @@ private fun AgentTab(core: FazeCore) {
                 soundOn = true
             }
         }
-        SettingRow("Share this phone's sound with computers", "Lets a computer play what this phone is playing (music, videos, games) through its speakers. Android asks you to allow it once and shows a notification while it can; some apps block capture and stay silent. Also needs the camera and microphone switch above.") {
+        SettingRow("Allow screen capture (sound and live video)", "One permission Android asks you for once. It lets a computer or another phone hear what this phone plays and watch its screen as live video, without root. Android shows a notification while it is allowed. Some apps block capture. Sound also needs the camera and microphone switch above, and Android 14 may ask again after each session.") {
             ChoiceChip(if (soundOn) "Stop sharing" else "Allow", soundOn) {
                 if (soundOn) {
                     soundCtx.startService(Intent(soundCtx, SoundService::class.java).setAction(SoundService.ACTION_STOP)); soundOn = false

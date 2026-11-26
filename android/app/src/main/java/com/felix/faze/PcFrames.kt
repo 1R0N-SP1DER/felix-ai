@@ -32,12 +32,7 @@ class PcFrames {
                 if (msg.optString("codec") == "h264") {
                     val data = try { java.util.Base64.getDecoder().decode(msg.optString("data")) } catch (e: IllegalArgumentException) { return null }
                     if (data.isEmpty()) return null
-                    val key = msg.optBoolean("key")
-                    if (needKey && !key) return null
-                    if (key) needKey = false
-                    units.add(Unit(data, key))
-                    if (units.size > MAX_BACKLOG) { dropped += units.size; units.clear(); needKey = true }
-                    h264 = true
+                    if (!addUnit(data, msg.optBoolean("key"))) return null
                 } else {
                     val data = try { java.util.Base64.getDecoder().decode(msg.optString("jpeg")) } catch (e: IllegalArgumentException) { return null }
                     if (data.isEmpty()) return null
@@ -50,6 +45,22 @@ class PcFrames {
         }
         return null
     }
+
+    /** Queues one H.264 picture; false when it was skipped (until a keyframe has come, delta pictures are useless). */
+    private fun addUnit(data: ByteArray, key: Boolean): Boolean {
+        if (needKey && !key) return false
+        if (key) needKey = false
+        units.add(Unit(data, key))
+        if (units.size > MAX_BACKLOG) { dropped += units.size; units.clear(); needKey = true }
+        h264 = true
+        return true
+    }
+
+    /** A picture that was cut out of another phone's video stream (see PhoneVideoFeed). */
+    fun push(data: ByteArray, key: Boolean) { if (addUnit(data, key)) { error = ""; seq++ } }
+
+    /** The video source gave up: the message shows to the person. */
+    fun fail(message: String) { error = message }
 
     /** The newest JPEG picture and its number, or null when nothing has arrived. */
     fun latest(): Pair<Long, ByteArray>? = jpeg?.let { seq to it }
