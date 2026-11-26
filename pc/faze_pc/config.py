@@ -32,6 +32,7 @@ DEFAULTS = {
     "allow_remote": False,
     "clip_sync": True,
     "show_phone_notes": True,
+    "phone_backend": "auto",
     "share_all": False,
     "share_folders": "~/Documents, ~/Downloads, ~/Pictures",
 }

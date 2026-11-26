@@ -164,3 +164,27 @@ class DaemonAdbTest(unittest.TestCase):
         self.assertFalse(d._adb_instead("x"))
         d = self.daemon(serial=None)
         self.assertFalse(d._adb_instead("x"))
+
+
+class StatusTest(unittest.TestCase):
+    def test_status_lines(self):
+        import os
+        import tempfile
+        from faze_pc.daemon import Daemon
+        from faze_pc.config import Config
+        d = Daemon(Config(os.path.join(tempfile.mkdtemp(), "c.json")))
+        d.adb = Adb(which=lambda n: None)
+        self.assertIn("not installed", d.adb_status())
+        d.adb = Adb(which=lambda n: "adb", run=lambda cmd, **kw: R(b"List of devices attached\n"))
+        self.assertIn("no authorised", d.adb_status())
+        d.adb = Adb(which=lambda n: "adb", run=lambda cmd, **kw: R(b"List of devices attached\nABC\tdevice\n"))
+        self.assertEqual("adb sees ABC.", d.adb_status())
+
+    def test_backend_setting_is_known(self):
+        import os
+        import tempfile
+        from faze_pc.config import Config
+        c = Config(os.path.join(tempfile.mkdtemp(), "c.json"))
+        self.assertEqual("auto", c.data["phone_backend"])
+        c.set("phone_backend", "adb")
+        self.assertEqual("adb", c.data["phone_backend"])

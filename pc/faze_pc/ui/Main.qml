@@ -59,6 +59,7 @@ ApplicationWindow {
     }
     function closePhone() { phoneOpen = false; mirror.stop() }
     property string phoneMediaNote: ""
+    property string adbNote: ""
     property string sendNote: ""
     property real sendProgress: -1
     property var levels: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
@@ -109,6 +110,7 @@ ApplicationWindow {
         function onPhoneMediaChanged(mic, cam, sound, text) { win.phoneMic = mic; win.phoneCam = cam; win.phoneSound = sound; if (text !== "") win.phoneMediaNote = text }
         function onSendStatus(text, progress, done, ok) { win.sendNote = text; win.sendProgress = done ? -1 : progress }
         function onDevicesChanged(d) { win.devices = d; win.pairMsg = "" }
+        function onAdbStatus(t) { win.adbNote = t }
         function onPhonesFound(p) { win.found = p; if (p.length > 0) { addr.text = p[0].address; win.pairMsg = "Found " + p[0].name } else win.pairMsg = "No phone answered. Is Faze open on it with computers allowed?" }
         function onPairFailed(m) { win.pairMsg = m }
         function onConfigChanged(c) { win.cfg = c }
@@ -783,6 +785,11 @@ ApplicationWindow {
                             FazeSwitch { checked: win.cfg.share_all === true; onToggled: bridge.setSetting("share_all", checked ? "true" : "false") } }
                         SettingRow { label: "Folders shared with my phone"; sub: "Comma separated, read only."
                             FieldBox { shown: win.cfg.share_folders || ""; onSaved: function (v) { bridge.setSetting("share_folders", v) } } }
+                        SettingRow { label: "How to reach the phone"; sub: "Faze link needs the Faze app. adb needs only Wireless debugging (no root). Auto uses the Faze link and falls back to adb. " + win.adbNote
+                            RowLayout { spacing: 6
+                                FazeButton { text: "Auto"; checkable: true; checked: (win.cfg.phone_backend || "auto") === "auto"; onClicked: bridge.setSetting("phone_backend", "auto") }
+                                FazeButton { text: "Faze link"; checkable: true; checked: win.cfg.phone_backend === "link"; onClicked: bridge.setSetting("phone_backend", "link") }
+                                FazeButton { text: "adb"; checkable: true; checked: win.cfg.phone_backend === "adb"; onClicked: bridge.setSetting("phone_backend", "adb") } } }
                         SettingRow { label: "Devices"; sub: "Pair and manage your phone."; last: true
                             FazeButton { text: "Open"; onClicked: { settings.close(); bridge.refreshDevices(); devicesPopup.open() } } }
                     }

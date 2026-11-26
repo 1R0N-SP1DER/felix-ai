@@ -55,6 +55,7 @@ class Bridge(QObject):
     listeningChanged = Signal(bool)
     heard = Signal(str)
     devicesChanged = Signal("QVariantList")
+    adbStatus = Signal(str)
     phonesFound = Signal("QVariantList")
     pairFailed = Signal(str)
     levelChanged = Signal(float)
@@ -168,6 +169,7 @@ class Bridge(QObject):
                 self.heard.emit(ev["text"])
             elif t == "devices":
                 self.devicesChanged.emit(ev["devices"])
+                self.adbStatus.emit(ev.get("adb", ""))
             elif t == "found":
                 self.phonesFound.emit(ev["phones"])
             elif t == "approve":
