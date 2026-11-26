@@ -377,6 +377,8 @@ private fun AgentTab(core: FazeCore) {
         var ctxSize by remember { mutableStateOf(core.settings.offlineCtx.toString()) }
         SettingRow("Threads", "CPU cores the model uses. Fewer is gentler on the phone and its memory; more is faster") {}
         Seg(OfflineLimits.THREADS.map { it.toString() to it.toString() }, threads, small = true) { threads = it; core.settings.offlineThreads = it.toInt() }
+        val termuxCtx = androidx.compose.ui.platform.LocalContext.current
+        SettingRow("Offline models without root", "With root Faze starts llama-server itself. Without root it asks Termux to. Needs: Termux installed with llama.cpp built, the line allow-external-apps=true in Termux's ~/.termux/termux.properties, and Faze allowed to Run commands in Termux (Android Settings > Apps > Faze > Permissions). Status: " + (if (!TermuxRun.installed(termuxCtx)) "Termux not found" else if (!TermuxRun.allowed(termuxCtx)) "Faze is not allowed to run Termux commands yet" else "ready")) {}
         var gpu by remember { mutableStateOf(core.settings.offlineGpuLayers.toString()) }
         SettingRow("GPU share", "How much of the model the phone's graphics chip takes; the CPU runs the rest. Balanced puts about 16 layers on the GPU. Only helps if llama.cpp in Termux was built with OpenCL (Snapdragon) or Vulkan. A plain CPU build ignores it, and if the GPU makes the server crash Faze goes back to the CPU by itself") {}
         Seg(listOf("0" to "CPU only", "8" to "Light", "16" to "Balanced", "99" to "Max"), gpu, small = true) { gpu = it; core.settings.offlineGpuLayers = it.toInt() }

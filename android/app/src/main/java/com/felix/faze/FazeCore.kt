@@ -395,15 +395,31 @@ class FazeCore(private val app: Application) : EngineListener {
     private fun offlineNow(): Boolean = settings.provider == "offline" || !Online.available(app)
     private val router = FastRoute(learned, NeedleClient(transport), { settings.fastRoutes }, { settings.needleOn }, { PermissionPolicy.tier(it) == Tier.SAFE })
 
-    private val localServer: LocalServer = LocalServerControl(
+    private fun llamaAlive(): String? = try { transport.get("${LocalLlama.BASE}/models", emptyMap(), 1500).let { if (it.status == 200) LocalLlama.parseServed(it.body) else null } } catch (e: Exception) { null }
+    private val rootServer: LocalServer = LocalServerControl(
         run = { cmd, ms -> Su.run(cmd, ms) },
-        alive = { try { transport.get("${LocalLlama.BASE}/models", emptyMap(), 1500).let { if (it.status == 200) LocalLlama.parseServed(it.body) else null } } catch (e: Exception) { null } },
+        alive = { llamaAlive() },
         binary = { settings.offlineBinary.ifEmpty { LocalLlama.pickBinary(Su.run(LocalLlama.findBinaryCommand(), 15_000))?.also { settings.offlineBinary = it } } },
         threads = { settings.offlineThreads },
         ctx = { settings.offlineCtx },
         gpu = { settings.offlineGpuLayers },
         notice = { activity.add("model", it); if (it.startsWith("GPU") || it.contains("CPU")) settings.offlineGpuStatus = it },
     )
+    /** Without root the model server is started inside Termux through its run-command service. */
+    private val termuxServer: LocalServer = LocalServerControl(
+        run = { cmd, _ -> TermuxRun.run(app, cmd); "" },
+        alive = { llamaAlive() },
+        binary = { settings.offlineBinary.ifEmpty { LocalLlama.TERMUX_BINARY } },
+        threads = { settings.offlineThreads },
+        ctx = { settings.offlineCtx },
+        gpu = { settings.offlineGpuLayers },
+        notice = { activity.add("model", it); if (it.startsWith("GPU") || it.contains("CPU")) settings.offlineGpuStatus = it },
+        termux = true,
+    )
+    private val localServer: LocalServer = object : LocalServer {
+        override fun ensure(model: String, onWait: (String) -> Unit): String? = (if (rootNow) rootServer else termuxServer).ensure(model, onWait)
+        override fun stop() { try { if (rootNow) rootServer.stop() else termuxServer.stop() } catch (_: Exception) { } }
+    }
 
     init {
         clipboard.addPrimaryClipChangedListener { shareClipboard() }
@@ -674,8 +690,8 @@ class FazeCore(private val app: Application) : EngineListener {
         Thread {
             try {
                 val list = if (provider == "offline") {
-                    LocalLlama.parseModels(Su.run(LocalLlama.scanCommand(), 20_000)).ifEmpty {
-                        throw RemoteError("empty", "No .gguf models found in Termux's home, Download or models folder (offline models need root)")
+                    LocalLlama.parseModels(if (rootNow) Su.run(LocalLlama.scanCommand(), 20_000) else LocalLlama.plainScan()).ifEmpty {
+                        throw RemoteError("empty", if (rootNow) "No .gguf models found in Termux's home, Download or models folder" else "No .gguf models found in Download or models. From Termux copy one there: cp ~/yourmodel.gguf ~/storage/downloads/")
                     }
                 } else ModelCatalog(transport, { settings.customUrl }) { settings.keyFor(it) }.fetch(provider)
                 main.post { modelLists[provider] = list; modelLoading = "" }
