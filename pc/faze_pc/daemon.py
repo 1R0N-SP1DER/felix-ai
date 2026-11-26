@@ -25,6 +25,7 @@ from . import modelsheet
 from .modelcopy import ModelCopy, DropFolder
 from .edge import EdgeWatcher, KWinEdge
 from .h264 import H264Decoder
+from .adbphone import Adb, AdbError
 from .media import Media
 from .remote import RemoteControl
 from .draw import DrawRelay
@@ -53,6 +54,8 @@ class Daemon:
         self.mirror_proc = None
         self.h264 = None
         self.live_video = False
+        self.adb = Adb()
+        self.adb_active = None
         self.ping_gap = 3.0
         self.video_grace = 6.0  # seconds the live video gets to produce its first picture before we use screenshots instead
         self.spawn = spawn or subprocess.Popen
@@ -66,6 +69,63 @@ class Daemon:
         wanted = lambda: self.config.data.get("edge_open") is True and bool(self._phone())
         self.kwin_edge = KWinEdge(wanted, self.open_mirror_window, lambda m: self.store.log("link", m), switched=lambda: self.config.data.get("edge_open") is True)
         self.edge = EdgeWatcher(lambda: wanted() and not self.kwin_edge.ready, self.open_mirror_window, lambda m: self.store.log("link", m))
+
+    def _adb_serial(self):
+        """A phone adb can reach (wireless or USB debugging, authorised), or None. Only looked for when adb is installed."""
+        devs = self.adb.devices()
+        return devs[0] if devs else None
+
+    def _adb_instead(self, why):
+        """The Faze link could not show the screen: use adb when the settings allow it and a phone is reachable. True when it ran."""
+        if self.config.data.get("phone_backend", "auto") == "link":
+            return False
+        serial = self._adb_serial()
+        if not serial:
+            return False
+        self.broadcast({"t": "mirror_error", "message": why + " Using adb instead."})
+        self.adb_mirror_loop(serial)
+        return True
+
+    def adb_mirror_loop(self, serial):
+        """The phone's screen through adb: live H.264 from screenrecord, or one screencap after another when that does not produce a picture."""
+        stop = threading.Event()
+        dec = H264Decoder(lambda jpeg: self.broadcast({"t": "frame", "jpeg": jpeg}), lambda m: self.broadcast({"t": "mirror_error", "message": m}))
+        self.h264 = dec
+        self.adb_active = serial
+
+        def feed():
+            try:
+                self.adb.stream(serial, dec.feed, stop)
+            except AdbError as e:
+                self.broadcast({"t": "mirror_error", "message": str(e)})
+
+        worker = threading.Thread(target=feed, daemon=True)
+        worker.start()
+        began = time.time()
+        try:
+            while self.mirroring and worker.is_alive() and not (dec.frames == 0 and time.time() - began > self.video_grace):
+                time.sleep(0.4)
+            stop.set()
+            dec.stop()
+            self.h264 = None
+            if dec.frames == 0 and self.mirroring:
+                self.broadcast({"t": "mirror_error", "message": "adb video did not start. Showing slower pictures."})
+                while self.mirroring:
+                    t0 = time.time()
+                    try:
+                        png = self.adb.screenshot(serial)
+                    except AdbError as e:
+                        self.broadcast({"t": "mirror_error", "message": str(e)})
+                        return
+                    self.broadcast({"t": "frame", "jpeg": base64.b64encode(png).decode("ascii")})
+                    time.sleep(max(0.0, self.mirror_gap - (time.time() - t0)))
+        finally:
+            stop.set()
+            if self.h264 is not None:
+                self.h264.stop()
+                self.h264 = None
+            self.adb_active = None
+            self.mirroring = False
 
     def _phone(self):
         for d in self.links.list():
@@ -113,6 +173,15 @@ class Daemon:
     def mirror_loop(self):
         """Shows the phone's screen in the open windows until stopped. Live H.264 video when the phone offers it; otherwise it asks for one picture after another."""
         pid = self._phone()
+        backend = self.config.data.get("phone_backend", "auto")
+        if backend == "adb" or (backend == "auto" and not pid):
+            serial = self._adb_serial()
+            if serial:
+                return self.adb_mirror_loop(serial)
+            if backend == "adb":
+                self.broadcast({"t": "mirror_error", "message": "no phone reachable by adb. Turn on Wireless debugging (or USB debugging), run adb pair and adb connect, and allow this computer on the phone."})
+                self.mirroring = False
+                return
         if pid and self.start_live_video(pid):
             began = time.time()
             while self.mirroring and self.live_video:
@@ -146,10 +215,13 @@ class Daemon:
                 try:
                     r = self.links.request(pid, {"t": "screen_get"}, timeout=20)
                 except link.LinkError as e:
-                    self.broadcast({"t": "mirror_error", "message": str(e)})
+                    if not self._adb_instead(str(e)):
+                        self.broadcast({"t": "mirror_error", "message": str(e)})
                     return
                 if r.get("t") != "screen_ok":
-                    self.broadcast({"t": "mirror_error", "message": r.get("message", "the phone did not send its screen")})
+                    why = r.get("message", "the phone did not send its screen")
+                    if not self._adb_instead(why):
+                        self.broadcast({"t": "mirror_error", "message": why})
                     return
                 self.broadcast({"t": "frame", "jpeg": r["jpeg"]})
                 time.sleep(max(0.0, self.mirror_gap - (time.time() - t0)))
@@ -164,6 +236,24 @@ class Daemon:
                "swipe": {"t": "screen_swipe", "x1": req.get("x1"), "y1": req.get("y1"), "x2": req.get("x2"), "y2": req.get("y2")},
                "key": {"t": "screen_key", "key": str(req.get("key", ""))},
                "text": {"t": "screen_text", "text": str(req.get("text", ""))[:300]}}.get(kind)
+        if self.adb_active:
+            try:
+                x, y = req.get("x"), req.get("y")
+                if kind == "tap":
+                    self.adb.tap(self.adb_active, x, y)
+                elif kind == "long":
+                    self.adb.long_press(self.adb_active, x, y)
+                elif kind == "swipe":
+                    self.adb.swipe(self.adb_active, req.get("x1"), req.get("y1"), req.get("x2"), req.get("y2"))
+                elif kind == "key":
+                    self.adb.key(self.adb_active, req.get("key", ""))
+                elif kind == "text":
+                    self.adb.text(self.adb_active, str(req.get("text", "")))
+                else:
+                    return {"t": "mirror_error", "message": "unknown input"}
+            except AdbError as e:
+                return {"t": "mirror_error", "message": str(e)}
+            return None
         pid = self._phone()
         if not msg or not pid:
             return {"t": "mirror_error", "message": "no phone is connected" if not pid else "unknown input"}
