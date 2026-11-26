@@ -44,7 +44,7 @@ class FazeCore(private val app: Application) : EngineListener {
     /** Live video from another phone: screen_h264 notices fill this, the control screen plays it. */
     val phoneFrames = PcFrames()
     private val phoneVideo = PhoneVideoFeed(phoneFrames)
-    val linkClient: LinkClient = LinkClient(settings.linkId, { android.os.Build.MODEL ?: "Phone" }, linkRemotes, onChange = { main.post { linkTick++ } }, handler = { _, msg -> phoneVideo.handle(msg) })
+    val linkClient: LinkClient = LinkClient(settings.linkId, { android.os.Build.MODEL ?: "Phone" }, linkRemotes, onChange = { main.post { linkTick++; syncClipWatch() } }, handler = { _, msg -> phoneVideo.handle(msg) ?: phoneClip.handle(msg) })
     val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) ?: phoneModels.handle(msg) ?: phoneMedia.handle(msg) ?: phoneInbox.handle(msg) ?: phoneClip.handle(msg) ?: pcFrames.handle(msg) ?: screenStream.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = ""; syncClipWatch() } })
 
     fun setLink(on: Boolean) {
@@ -293,9 +293,18 @@ class FazeCore(private val app: Application) : EngineListener {
     val pcFrames = PcFrames()
 
     private val clipboard = app.getSystemService(android.content.ClipboardManager::class.java)
-    private val phoneClip = PhoneClip({ settings.linkClip && link.connected().isNotEmpty() },
+    private val phoneClip = PhoneClip({ settings.linkClip && clipLinked() },
         { text -> main.post { try { clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Faze", text)) } catch (_: Exception) { } } },
-        { text -> executor.execute { link.notify(JSONObject().put("t", "clip").put("text", text)) } })
+        { text ->
+            executor.execute {
+                val m = JSONObject().put("t", "clip").put("text", text)
+                link.notify(m)
+                for (id in linkClient.connected()) linkClient.notify(id, JSONObject(m.toString()))
+            }
+        })
+
+    /** Anything connected to this phone's clipboard: a computer or phone that paired with it, or a phone it paired with. */
+    private fun clipLinked() = link.connected().isNotEmpty() || linkClient.connected().isNotEmpty()
 
     private val clipWatch = ClipWatch(app.packageName) { m -> main.post { activity.add("link", m) } }
 
@@ -311,12 +320,12 @@ class FazeCore(private val app: Application) : EngineListener {
 
     /** The root clipboard watcher runs only while a computer is linked: with none, nothing is watched and the clipboard is never read. */
     fun syncClipWatch() {
-        if (settings.linkOn && settings.linkClip && settings.linkClipRoot && link.connected().isNotEmpty()) clipWatch.start() else clipWatch.stop()
+        if (settings.linkOn && settings.linkClip && settings.linkClipRoot && clipLinked()) clipWatch.start() else clipWatch.stop()
     }
 
     /** Sends the phone's clipboard to the computer. Android only lets an app read it while the app is in front, so this runs on a copy and when Faze opens. */
     fun shareClipboard() {
-        if (!settings.linkClip || link.connected().isEmpty()) return // not linked: do not even read it
+        if (!settings.linkClip || !clipLinked()) return // not linked: do not even read it
         try { phoneClip.changed(clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(app)?.toString()) } catch (_: Exception) { }
     }
 
