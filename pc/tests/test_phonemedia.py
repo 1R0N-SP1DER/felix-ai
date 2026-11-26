@@ -72,6 +72,23 @@ class PhoneMediaTest(unittest.TestCase):
         self.assertTrue(self.wait(lambda: not pm.mic))
         self.assertIn("sharing is off", self.said[-1][0])
 
+    def test_sound_plays_the_phones_audio_and_stops_cleanly(self):
+        pm = self.make(reply={"phone_sound_get": {"t": "phone_sound_ok", "data": base64.b64encode(b"wxyz").decode()}})
+        pm.sound_on()
+        self.assertTrue(pm.sound)
+        self.assertTrue(self.wait(lambda: self.pipes[0][1].data.startswith(b"wxyz")))
+        self.assertIn("--channels=2", self.pipes[0][0])
+        pm.sound_off()
+        self.assertFalse(pm.sound)
+        self.assertIn("phone_sound_stop", self.sent)
+
+    def test_sound_says_when_the_phone_has_not_allowed_it(self):
+        pm = self.make(reply={"phone_sound_get": {"t": "error", "message": "Phone sound is not allowed yet."}})
+        pm.sound_on()
+        self.assertTrue(self.wait(lambda: not pm.sound))
+        self.assertIn("not allowed yet", self.said[-1][0])
+        self.assertIn("Phone sound", self.said[-1][0])
+
     def test_camera_needs_a_virtual_webcam_and_ffmpeg(self):
         pm = self.make(loop=None)
         pm.cam_on()

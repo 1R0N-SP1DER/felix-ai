@@ -357,10 +357,10 @@ class Daemon:
         threading.Thread(target=job.go, daemon=True, name="model-copy").start()
 
     def phone_media(self, what, on, emit):
-        """Switches the phone's microphone or camera on or off for this PC (see phonemedia.py)."""
+        """Switches the phone's microphone, camera or sound on or off for this PC (see phonemedia.py)."""
         pid = self._phone()
         if on and not pid:
-            emit({"t": "phone_media", "mic": False, "cam": False, "text": "Your phone is not connected."})
+            emit({"t": "phone_media", "mic": False, "cam": False, "sound": False, "text": "Your phone is not connected."})
             return
         if getattr(self, "pm", None) is None or (pid and self.pm.phone != pid):
             if getattr(self, "pm", None) is not None:
@@ -368,11 +368,11 @@ class Daemon:
 
             def say(text, ok):
                 st = self.pm.status()
-                self.broadcast({"t": "phone_media", "mic": st["mic"], "cam": st["cam"], "text": text})
+                self.broadcast({"t": "phone_media", "mic": st["mic"], "cam": st["cam"], "sound": st["sound"], "text": text})
             self.pm = PhoneMedia(self.links.request, pid, say)
-        {("mic", True): self.pm.mic_on, ("mic", False): self.pm.mic_off, ("cam", True): self.pm.cam_on, ("cam", False): self.pm.cam_off}.get((what, bool(on)), lambda: None)()
+        {("mic", True): self.pm.mic_on, ("mic", False): self.pm.mic_off, ("cam", True): self.pm.cam_on, ("cam", False): self.pm.cam_off, ("sound", True): self.pm.sound_on, ("sound", False): self.pm.sound_off}.get((what, bool(on)), lambda: None)()
         st = self.pm.status()
-        emit({"t": "phone_media", "mic": st["mic"], "cam": st["cam"], "text": ""})
+        emit({"t": "phone_media", "mic": st["mic"], "cam": st["cam"], "sound": st["sound"], "text": ""})
 
     def watch_drop_folder(self):
         """Models dragged into ~/Downloads/faze are set up in Ollama and removed from there."""
