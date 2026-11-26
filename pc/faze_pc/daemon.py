@@ -75,6 +75,15 @@ class Daemon:
         devs = self.adb.devices()
         return devs[0] if devs else None
 
+    def adb_status(self):
+        """One line for the Devices window: whether adb is installed and sees a phone."""
+        if not self.adb.available():
+            return "adb is not installed (sudo apt install adb)."
+        devs = self.adb.devices()
+        if not devs:
+            return "adb is installed but sees no authorised phone. Turn on Wireless debugging on the phone, then adb pair and adb connect."
+        return "adb sees " + ", ".join(devs) + "."
+
     def _adb_instead(self, why):
         """The Faze link could not show the screen: use adb when the settings allow it and a phone is reachable. True when it ran."""
         if self.config.data.get("phone_backend", "auto") == "link":
@@ -621,7 +630,7 @@ class Daemon:
         elif op == "activity":
             emit({"t": "activity", "rows": self.store.activity()})
         elif op == "devices":
-            emit({"t": "devices", "devices": self.links.list(), "pc": self.links.devices.pc_name})
+            emit({"t": "devices", "devices": self.links.list(), "pc": self.links.devices.pc_name, "adb": self.adb_status()})
         elif op == "link_find":
             try:
                 emit({"t": "found", "phones": self.links.find()})
@@ -631,13 +640,13 @@ class Daemon:
             try:
                 phone = self.links.pair(req["address"].strip(), req["code"])
                 self.store.log("link", "paired with %s" % phone["name"])
-                emit({"t": "devices", "devices": self.links.list(), "pc": self.links.devices.pc_name})
+                emit({"t": "devices", "devices": self.links.list(), "pc": self.links.devices.pc_name, "adb": self.adb_status()})
             except (link.LinkError, OSError, KeyError, ValueError) as e:
                 emit({"t": "error", "message": "pairing failed: %s" % e})
         elif op == "link_forget":
             self.links.forget(req.get("id", ""))
             self.store.log("link", "forgot a phone")
-            emit({"t": "devices", "devices": self.links.list(), "pc": self.links.devices.pc_name})
+            emit({"t": "devices", "devices": self.links.list(), "pc": self.links.devices.pc_name, "adb": self.adb_status()})
         elif op == "ping":
             emit({"t": "pong"})
         else:
