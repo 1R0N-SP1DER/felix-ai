@@ -79,3 +79,19 @@ Phone to PC: `{"t":"pc_use_phone","what":"mic"|"cam"|"sound"|"status","on":bool}
 ### The PC sends things to the phone (phone_put)
 
 PC to phone: `{"t":"phone_put","kind":"text"|"link","text":...}` or, for a file, `{"t":"phone_put","kind":"file","name","size","offset","eof","data":<base64 piece>}` sent in order, 256 KB at a time. Reply `{"t":"phone_put_ok"}` or `{"t":"error","message"}` (receiving off, too big, a bad name). The phone saves files in Downloads/Faze (never overwriting: a number is added), puts text on the clipboard and shows a notification; a link opens when the notification is tapped.
+
+## Phone to phone, and control without root
+
+A phone can be the client too. It pairs with another phone exactly as a computer does (the other phone shows a code in Devices, the client sends `pair` with os "android"), reconnects with `hello`/`auth`, and then asks that phone for the same things a computer can: `screen_get`, `screen_tap`, `screen_long`, `screen_swipe`, `screen_key`, `screen_text`, `screen_stream_start/ping/stop` (live H.264 arrives as `screen_h264` notices), and `phone_audio_get`, `phone_sound_get`, `phone_cam_get` with their `_stop` messages. Discovery is the same UDP "FAZE?" broadcast.
+
+The controlled phone chooses how to carry these out (setting Control method: auto, root or non-root):
+
+- screen_get: root uses screencap. Without root it uses the accessibility screenshot (Android 11 and later); secure windows come out black.
+- screen_tap, screen_long, screen_swipe: root uses `input`. Without root it dispatches an accessibility gesture.
+- screen_key: root takes any key. Without root: back, home, recents, escape (as Back), enter (Android 11+), backspace/delete, left and right (cursor), up and down (scroll), volume and media keys. Tab and other raw keys need root.
+- screen_text: root uses `input text`. Without root it sets the text of the focused field.
+- screen_stream_*: root uses screenrecord. Without root it uses MediaProjection and a hardware H.264 encoder. The person allows screen capture once (the same permission as phone sound); Android 14 may ask again for each new session. If it is not allowed, `screen_stream_start` answers with an error naming what to do, and the client carries on with pictures.
+
+`screen_stream_ok` now also carries the video size as `w` and `h`.
+
+A computer can also reach a phone with no Faze app at all through adb (see adb.md).
