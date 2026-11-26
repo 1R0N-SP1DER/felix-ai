@@ -37,7 +37,10 @@ class FazeCore(private val app: Application) : EngineListener {
         private set
     val linkRemotes = LinkRemotes({ settings.linkRemotes }, { settings.linkRemotes = it })
     var foundPhones by mutableStateOf<List<LinkClient.Companion.Found>>(emptyList())
-    val linkClient: LinkClient = LinkClient(settings.linkId, { android.os.Build.MODEL ?: "Phone" }, linkRemotes, onChange = { main.post { linkTick++ } })
+    /** Live video from another phone: screen_h264 notices fill this, the control screen plays it. */
+    val phoneFrames = PcFrames()
+    private val phoneVideo = PhoneVideoFeed(phoneFrames)
+    val linkClient: LinkClient = LinkClient(settings.linkId, { android.os.Build.MODEL ?: "Phone" }, linkRemotes, onChange = { main.post { linkTick++ } }, handler = { _, msg -> phoneVideo.handle(msg) })
     val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) ?: phoneModels.handle(msg) ?: phoneMedia.handle(msg) ?: phoneInbox.handle(msg) ?: phoneClip.handle(msg) ?: pcFrames.handle(msg) ?: screenStream.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = ""; syncClipWatch() } })
 
     fun setLink(on: Boolean) {
@@ -262,11 +265,11 @@ class FazeCore(private val app: Application) : EngineListener {
         { settings.linkScreen }, { LockOverlayActivity.isLocked(app) }, { activity.add("link", it) },
     )
     private val screenStream = ScreenStream(
-        { w, h -> RootScreenSource(w, h) },
+        { w, h -> if (rootNow) RootScreenSource(w, h) else ProjectionSource(app, w, h) },
         { app.resources.displayMetrics.let { it.widthPixels to it.heightPixels } },
         { settings.linkScreen }, { LockOverlayActivity.isLocked(app) },
         { m -> link.notify(m) }, log = { activity.add("link", it) },
-        unavailable = { if (rootNow) "" else "Live video needs root on this phone for now. Pictures work without it." },
+        unavailable = { if (rootNow || ProjectionVideo.ready()) "" else "Live video without root needs screen capture allowed once on this phone (Faze > Settings > Devices > Allow screen capture). Pictures work without it." },
     )
     /** Copies of offline models staged for a computer to read (see PhoneModels). */
     private val phoneModels = PhoneModels({ settings.linkModels }, { cmd, ms -> try { Su.run(cmd, ms) } catch (_: Exception) { "" } }, { activity.add("link", it) }, rootOn = { rootNow })

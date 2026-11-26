@@ -51,7 +51,8 @@ class ScreenStream(
                 if (locked()) return error("The phone is locked.")
                 unavailable().let { if (it.isNotEmpty()) return error(it) }
                 start()
-                JSONObject().put("t", "screen_stream_ok")
+                val (tw, th) = size().let { target(it.first, it.second) }
+                JSONObject().put("t", "screen_stream_ok").put("w", tw).put("h", th)
             }
         }
     }
@@ -85,6 +86,7 @@ class ScreenStream(
                     }
                 } catch (e: Exception) {
                     if (!running) break
+                    lastError = e.message ?: e.javaClass.simpleName
                 } finally {
                     try { src?.close() } catch (_: Exception) { }
                     try { src?.let { lastError = it.error().ifEmpty { lastError } } } catch (_: Exception) { }
@@ -92,7 +94,7 @@ class ScreenStream(
                 if (!running) break
                 quick = if (now() - began < 3000) quick + 1 else 0 // a run of three minutes is normal; instant endings are not
                 if (quick >= 3) {
-                    send(JSONObject().put("t", "screen_stream_error").put("message", "The phone's screen recorder keeps stopping. It needs root (screenrecord)." + (if (lastError.isNotEmpty()) " It said: $lastError" else "")))
+                    send(JSONObject().put("t", "screen_stream_error").put("message", "The phone's screen recorder keeps stopping." + (if (lastError.isNotEmpty()) " It said: $lastError" else "")))
                     break
                 }
             }

@@ -48,16 +48,27 @@ fun PhoneRemoteScreen(core: FazeCore, deviceId: String, onBack: () -> Unit) {
     var view by remember { mutableStateOf("screen") } // "screen", "front" or "back" camera
     val micPlayer = remember(deviceId) { PhoneAudio("audio", { m -> core.linkClient.ask(deviceId, m, 15_000) }, AndroidSink(), { e -> note = e }) }
     val soundPlayer = remember(deviceId) { PhoneAudio("sound", { m -> core.linkClient.ask(deviceId, m, 15_000) }, AndroidSink(), { e -> note = e }) }
+    var live by remember { mutableStateOf(false) }
+    var liveSize by remember { mutableStateOf(720 to 1280) }
     var micOn by remember { mutableStateOf(false) }
     var soundOn by remember { mutableStateOf(false) }
-    androidx.compose.runtime.DisposableEffect(deviceId) { onDispose { micPlayer.stop(); soundPlayer.stop(); Thread { remote.stopCamera() }.start() } }
+    androidx.compose.runtime.DisposableEffect(deviceId) { onDispose { micPlayer.stop(); soundPlayer.stop(); Thread { remote.stopCamera(); remote.stopVideo() }.start() } }
 
     fun run(block: () -> Unit) {
         Thread { try { block() } catch (e: Exception) { note = e.message ?: "that did not work" } }.start()
     }
 
-    LaunchedEffect(deviceId, view) {
-        while (isActive) {
+    LaunchedEffect(live) {
+        while (isActive && live) {
+            withContext(Dispatchers.IO) { remote.pingVideo() }
+            val e = core.phoneFrames.error
+            if (e.isNotEmpty()) { note = e + " Using pictures."; live = false; Thread { remote.stopVideo() }.start() }
+            delay(2500)
+        }
+    }
+
+    LaunchedEffect(deviceId, view, live) {
+        while (isActive && !live) {
             val t0 = System.currentTimeMillis()
             try {
                 val jpeg = withContext(Dispatchers.IO) { if (view == "screen") remote.screen() else remote.camera(view) }
@@ -75,14 +86,14 @@ fun PhoneRemoteScreen(core: FazeCore, deviceId: String, onBack: () -> Unit) {
         PageHeader(name, onBack)
         Box(
             Modifier.weight(1f).fillMaxWidth().onSizeChanged { box = it }
-                .pointerInput(frame, view) {
+                .pointerInput(frame, view, live) {
                     if (view != "screen") return@pointerInput
                     detectTapGestures(
-                        onTap = { o -> val b = frame; if (b != null) FitMap.fraction(o.x, o.y, box.width.toFloat(), box.height.toFloat(), b.width, b.height)?.let { (x, y) -> run { remote.tap(x, y) } } },
-                        onLongPress = { o -> val b = frame; if (b != null) FitMap.fraction(o.x, o.y, box.width.toFloat(), box.height.toFloat(), b.width, b.height)?.let { (x, y) -> run { remote.longPress(x, y) } } },
+                        onTap = { o -> val sz = shownSize(live, liveSize, frame); if (sz != null) FitMap.fraction(o.x, o.y, box.width.toFloat(), box.height.toFloat(), sz.first, sz.second)?.let { (x, y) -> run { remote.tap(x, y) } } },
+                        onLongPress = { o -> val sz = shownSize(live, liveSize, frame); if (sz != null) FitMap.fraction(o.x, o.y, box.width.toFloat(), box.height.toFloat(), sz.first, sz.second)?.let { (x, y) -> run { remote.longPress(x, y) } } },
                     )
                 }
-                .pointerInput(frame, view) {
+                .pointerInput(frame, view, live) {
                     if (view != "screen") return@pointerInput
                     var start = Offset.Zero
                     var end = Offset.Zero
@@ -90,10 +101,10 @@ fun PhoneRemoteScreen(core: FazeCore, deviceId: String, onBack: () -> Unit) {
                         onDragStart = { start = it; end = it },
                         onDrag = { change, _ -> end = change.position },
                         onDragEnd = {
-                            val b = frame
+                            val b = shownSize(live, liveSize, frame)
                             if (b != null) {
-                                val a = FitMap.fraction(start.x, start.y, box.width.toFloat(), box.height.toFloat(), b.width, b.height)
-                                val z = FitMap.fraction(end.x, end.y, box.width.toFloat(), box.height.toFloat(), b.width, b.height)
+                                val a = FitMap.fraction(start.x, start.y, box.width.toFloat(), box.height.toFloat(), b.first, b.second)
+                                val z = FitMap.fraction(end.x, end.y, box.width.toFloat(), box.height.toFloat(), b.first, b.second)
                                 if (a != null && z != null) run { remote.swipe(a.first, a.second, z.first, z.second) }
                             }
                         },
@@ -102,7 +113,8 @@ fun PhoneRemoteScreen(core: FazeCore, deviceId: String, onBack: () -> Unit) {
             contentAlignment = Alignment.Center,
         ) {
             val b = frame
-            if (b != null) Image(b.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+            if (live) VideoSurface(core.phoneFrames, liveSize.first, liveSize.second, "fit", null) { m -> note = "Live video stopped: $m Using pictures."; live = false }
+            else if (b != null) Image(b.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
             if (note.isNotEmpty()) Text(note, color = Palette.Dim, fontSize = 14.sp, modifier = Modifier.padding(24.dp))
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -114,6 +126,10 @@ fun PhoneRemoteScreen(core: FazeCore, deviceId: String, onBack: () -> Unit) {
             }
             chip("Its mic", micOn) { micOn = !micOn; if (micOn) micPlayer.start() else micPlayer.stop() }()
             chip("Its sound", soundOn) { soundOn = !soundOn; if (soundOn) soundPlayer.start() else soundPlayer.stop() }()
+            chip(if (live) "Live video: on" else "Live video", live) {
+                if (live) { live = false; Thread { remote.stopVideo() }.start() }
+                else { view = "screen"; note = "Starting live video…"; core.phoneFrames.reset(); run { liveSize = remote.startVideo(); live = true; note = "" } }
+            }()
             chip(when (view) { "front" -> "Front cam"; "back" -> "Back cam"; else -> "Camera" }, view != "screen") { view = when (view) { "screen" -> "front"; "front" -> "back"; else -> "screen" }; if (view == "screen") Thread { remote.stopCamera() }.start() }()
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -133,3 +149,7 @@ fun PhoneRemoteScreen(core: FazeCore, deviceId: String, onBack: () -> Unit) {
         }
     }
 }
+
+/** The size of what is on screen, for mapping a touch back to the other phone: the live video's size or the latest picture's. */
+private fun shownSize(live: Boolean, liveSize: Pair<Int, Int>, frame: android.graphics.Bitmap?): Pair<Int, Int>? =
+    if (live) liveSize else frame?.let { it.width to it.height }

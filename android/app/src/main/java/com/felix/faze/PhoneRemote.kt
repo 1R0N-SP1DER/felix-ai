@@ -25,6 +25,18 @@ class PhoneRemote(private val ask: (JSONObject, Long) -> JSONObject) {
 
     fun stopCamera() { try { ask(JSONObject().put("t", "phone_cam_stop"), 5_000) } catch (_: Exception) { } }
 
+    /** Starts the other phone's live video (H.264 pieces then arrive as notices). Returns the video size. Throws with the phone's own words, for example when it has no root and screen capture is not allowed there yet. */
+    fun startVideo(): Pair<Int, Int> {
+        val r = ask(JSONObject().put("t", "screen_stream_start"), 30_000)
+        if (r.optString("t") != "screen_stream_ok") throw IOException(r.optString("message", "the phone could not start live video"))
+        return r.optInt("w", 720) to r.optInt("h", 1280)
+    }
+
+    /** Keeps the live video going; the phone stops a few seconds after the last ping. */
+    fun pingVideo() { try { ask(JSONObject().put("t", "screen_stream_ping"), 5_000) } catch (_: Exception) { } }
+
+    fun stopVideo() { try { ask(JSONObject().put("t", "screen_stream_stop"), 5_000) } catch (_: Exception) { } }
+
     private fun act(m: JSONObject): String {
         val r = ask(m, 15_000)
         if (r.optString("t") == "error") throw IOException(r.optString("message", "the phone refused"))

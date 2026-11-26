@@ -125,16 +125,17 @@ class SoundService : Service() {
             ServiceCompat.startForeground(this, 42, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
             val p = getSystemService(MediaProjectionManager::class.java).getMediaProjection(code, data)
             p.registerCallback(object : MediaProjection.Callback() {
-                override fun onStop() { SoundCapture.shutdown(); stopSelf() }
+                override fun onStop() { SoundCapture.shutdown(); ProjectionVideo.clear(); stopSelf() }
             }, Handler(Looper.getMainLooper()))
             SoundCapture.attach(p)
+            ProjectionVideo.attach(p)
             START_NOT_STICKY
         } catch (e: Exception) {
             stopSelf(); START_NOT_STICKY
         }
     }
 
-    override fun onDestroy() { SoundCapture.shutdown(); super.onDestroy() }
+    override fun onDestroy() { SoundCapture.shutdown(); ProjectionVideo.clear(); super.onDestroy() }
 
     companion object {
         const val CHANNEL = "faze_sound"
