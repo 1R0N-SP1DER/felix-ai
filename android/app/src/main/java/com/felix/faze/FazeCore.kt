@@ -35,6 +35,10 @@ class FazeCore(private val app: Application) : EngineListener {
         private set
     var linkCode by mutableStateOf("")
         private set
+    val btPad: BtGamepad by lazy {
+        val prefs = app.getSharedPreferences("faze_pad", android.content.Context.MODE_PRIVATE)
+        BtGamepad(app, { prefs.getString("bt_last", null) }, { prefs.edit().putString("bt_last", it).apply() })
+    }
     val linkRemotes = LinkRemotes({ settings.linkRemotes }, { settings.linkRemotes = it })
     var foundPhones by mutableStateOf<List<LinkClient.Companion.Found>>(emptyList())
     /** Live video from another phone: screen_h264 notices fill this, the control screen plays it. */

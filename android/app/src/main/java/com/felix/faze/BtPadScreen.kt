@@ -18,7 +18,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,9 +29,9 @@ import androidx.compose.ui.unit.sp
 
 /** Use this phone as a Bluetooth controller: pick the phone to play on, then the on-screen pad sends normal gamepad input to it. */
 @Composable
-fun BtPadScreen(onBack: () -> Unit) {
+fun BtPadScreen(core: FazeCore, onBack: () -> Unit) {
     val context = LocalContext.current
-    val pad = remember { BtGamepad(context.applicationContext) }
+    val pad = core.btPad
     var problem by remember { mutableStateOf<String?>(null) }
     var playing by remember { mutableStateOf(false) }
     var listVersion by remember { mutableStateOf(0) }
@@ -41,7 +40,6 @@ fun BtPadScreen(onBack: () -> Unit) {
         PadLayouts({ prefs.getString("layouts", null) }, { prefs.edit().putString("layouts", it).apply() })
     }
     val state = remember { PadState({ _, _ -> }, { pad.send(it) }) }
-    DisposableEffect(Unit) { onDispose { pad.stop() } }
 
     fun begin() { problem = pad.start(); listVersion++ }
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
@@ -81,6 +79,7 @@ fun BtPadScreen(onBack: () -> Unit) {
                 Text(label, color = Palette.Accent, fontSize = 15.sp, modifier = Modifier.fillMaxWidth().clickable { pad.connect(d) }.padding(vertical = 10.dp))
             }
             if (pad.host != null) WideButton("Open the controller", ghost = false) { playing = true }
+            if (pad.active) WideButton("Stop the controller") { pad.stop() }
         }
         WideButton("Back") { onBack() }
     }

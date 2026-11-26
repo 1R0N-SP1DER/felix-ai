@@ -15,7 +15,9 @@ import org.json.JSONObject
 
 /** This phone as a Bluetooth game controller. Another phone pairs with it in its Bluetooth settings like with any pad, and no app is needed there. Needs Android 9+ and a phone whose Bluetooth offers the HID device role; some makers leave it out. */
 @SuppressLint("MissingPermission")
-class BtGamepad(private val context: Context) {
+class BtGamepad(private val context: Context, private val lastHost: () -> String? = { null }, private val saveHost: (String) -> Unit = {}) {
+    /** True from start until stop, so a card can tell "never started" from "waiting for the other phone". */
+    val active get() = hid != null
     var status by mutableStateOf("Not started")
         private set
     var host by mutableStateOf<String?>(null)
@@ -27,11 +29,12 @@ class BtGamepad(private val context: Context) {
     private val callback = object : BluetoothHidDevice.Callback() {
         override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
             status = if (registered) "Ready. Pair from the other phone's Bluetooth settings, or pick it below." else "Controller role not active"
+            if (registered && target == null) reconnect()
         }
 
         override fun onConnectionStateChanged(device: BluetoothDevice?, state: Int) {
             when (state) {
-                BluetoothProfile.STATE_CONNECTED -> { target = device; host = device?.name ?: device?.address; status = "Connected to ${host}" }
+                BluetoothProfile.STATE_CONNECTED -> { target = device; host = device?.name ?: device?.address; device?.address?.let(saveHost); status = "Connected to ${host}" }
                 BluetoothProfile.STATE_CONNECTING -> status = "Connecting…"
                 BluetoothProfile.STATE_DISCONNECTED -> { if (device == target) { target = null; host = null }; status = "Disconnected. Ready." }
             }
@@ -72,6 +75,12 @@ class BtGamepad(private val context: Context) {
         val h = hid ?: run { status = "Not started"; return }
         status = "Connecting…"
         if (!h.connect(d)) status = "Could not connect. Pair in Bluetooth settings first."
+    }
+
+    /** Tries the phone used last time, if it is still paired. */
+    fun reconnect() {
+        val a = lastHost() ?: return
+        paired().firstOrNull { it.address == a }?.let { connect(it) }
     }
 
     fun send(state: JSONObject) {
