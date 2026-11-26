@@ -75,6 +75,7 @@ fun DevicesScreen(core: FazeCore, onBack: () -> Unit, onOpen: (String) -> Unit =
             Hint("Screen control and file access are in Settings > Advanced > Devices. This phone is the hub. Any number of computers can pair with it and work with it as one Faze.")
             if (rows.isEmpty()) Text("No devices yet.", color = Palette.Muted, fontSize = 14.sp, modifier = Modifier.padding(vertical = 8.dp))
             for (d in rows) DeviceCard(core, d, onOpen) { core.removeDevice(d.id) }
+            SetupCard()
             SettingsCard("Pair another phone") {
                 var host by remember { mutableStateOf("") }
                 var pcode by remember { mutableStateOf("") }
