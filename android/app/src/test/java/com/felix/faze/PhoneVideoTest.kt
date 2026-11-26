@@ -17,14 +17,15 @@ class PhoneVideoTest {
     @Test fun cutsPicturesAndFindsKeyframes() {
         val s = H264Splitter()
         val out = s.feed(sps + pps + idr + p1 + p2)
-        // the last picture is held until the next begins or the stream goes quiet
-        assertEquals(2, out.size)
+        // the newest pictures are held until the next one begins or the stream goes quiet
+        assertEquals(1, out.size)
         assertTrue(out[0].key)
         assertEquals((sps + pps + idr).toList(), out[0].data.toList())
-        assertFalse(out[1].key)
         val rest = s.flush()
-        assertEquals(1, rest.size)
-        assertEquals(p2.toList(), rest[0].data.toList())
+        assertEquals(2, rest.size)
+        assertFalse(rest[0].key)
+        assertEquals(p1.toList(), rest[0].data.toList())
+        assertEquals(p2.toList(), rest[1].data.toList())
     }
 
     @Test fun piecesCanArriveInAnySize() {
