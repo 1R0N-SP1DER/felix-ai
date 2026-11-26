@@ -78,6 +78,7 @@ fun DevicesScreen(core: FazeCore, onBack: () -> Unit, onOpen: (String) -> Unit =
             SetupCard()
             SettingsCard("Use this phone as a controller") {
                 Hint("Turns this phone into a Bluetooth game controller for another phone, like a normal pad. No app is needed on the other phone.")
+                if (core.btPad.active) Text(core.btPad.status, color = Palette.Accent, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
                 WideButton("Bluetooth controller") { onPad() }
             }
             SettingsCard("Pair another phone") {
