@@ -61,6 +61,8 @@ interface A11yPort {
     /** Puts text into the focused text field, after what is there. */
     fun typeInto(text: String): Boolean
     fun media(key: String): Boolean
+    /** A key that edits or moves inside the focused text box or list: "enter", "backspace", "delete", "left", "right", "up", "down". */
+    fun edit(key: String): Boolean
 }
 
 /** Touch, keys and text without root, through the accessibility service. Not every key exists this way: arrows, enter and tab need root. */
@@ -68,6 +70,8 @@ class NoRootHands(private val port: A11yPort) : Hands {
     companion object {
         val GLOBAL = mapOf("back" to "back", "home" to "home", "recents" to "recents", "notifications" to "notifications", "search" to "")
         val MEDIA = setOf("volume_up", "volume_down", "play_pause", "next", "previous")
+        /** Keys carried out inside the focused field or list through accessibility actions (Android 11 for enter). Escape is the Back button. */
+        val EDIT = setOf("enter", "return", "backspace", "delete", "left", "right", "up", "down")
     }
 
     private fun need(done: Boolean, what: String) { if (!done) throw ToolFailure("$what did not work. Turn on Faze's accessibility service in the phone's settings (it is how control works without root).") }
@@ -81,8 +85,10 @@ class NoRootHands(private val port: A11yPort) : Hands {
     override fun pressKey(key: String): String {
         val k = key.trim().lowercase()
         if (k in MEDIA) { need(port.media(k), "That key"); return "Pressed $k." }
+        if (k == "escape" || k == "esc") { need(port.global("back"), "That key"); return "Pressed $k." }
+        if (k in EDIT) { need(port.edit(when (k) { "return" -> "enter"; "delete" -> "backspace"; else -> k }), "That key (tap a text box or list first)"); return "Pressed $k." }
         val g = GLOBAL[k]
-        if (g.isNullOrEmpty()) throw ToolFailure("the key '$k' needs root. Without root these work: back, home, recents, notifications, volume_up, volume_down, play_pause, next, previous.")
+        if (g.isNullOrEmpty()) throw ToolFailure("the key '$k' needs root. Without root these work: back, home, recents, escape, enter, backspace, left, right, up, down, volume_up, volume_down, play_pause, next, previous.")
         need(port.global(g), "That key")
         return "Pressed $k."
     }
@@ -91,6 +97,21 @@ class NoRootHands(private val port: A11yPort) : Hands {
         InputCommands.checkText(text)
         need(port.typeInto(text), "Typing (tap a text box first)")
         return "Typed ${text.length} characters."
+    }
+}
+
+/** What backspace, delete, left and right do to a text and its cursor (start..end is the selection). Null for a key that does not edit. */
+object TextEdit {
+    fun apply(key: String, text: String, start: Int, end: Int): Pair<String, Int>? {
+        val a = start.coerceIn(0, text.length)
+        val z = end.coerceIn(a, text.length)
+        return when (key) {
+            "backspace" -> if (z > a) text.removeRange(a, z) to a else if (a > 0) text.removeRange(a - 1, a) to a - 1 else text to 0
+            "delete" -> if (z > a) text.removeRange(a, z) to a else if (a < text.length) text.removeRange(a, a + 1) to a else text to a
+            "left" -> text to (if (z > a) a else maxOf(0, a - 1))
+            "right" -> text to (if (z > a) z else minOf(text.length, z + 1))
+            else -> null
+        }
     }
 }
 
@@ -134,6 +155,36 @@ class AndroidA11y(private val context: Context) : A11yPort {
         val old = if (hint) "" else node.text?.toString().orEmpty()
         val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, old + text) }
         return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    override fun edit(key: String): Boolean {
+        val s = service ?: return false
+        val root = s.rootInActiveWindow ?: return false
+        if (key == "up" || key == "down") {
+            val list = findScrollable(root) ?: return false
+            return list.performAction(if (key == "down") AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+        }
+        val node = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
+        if (key == "enter") {
+            return if (Build.VERSION.SDK_INT >= 30) node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id) else false
+        }
+        val text = if (node.isShowingHintText) "" else node.text?.toString().orEmpty()
+        val a = node.textSelectionStart.let { if (it < 0) text.length else it }
+        val z = node.textSelectionEnd.let { if (it < 0) text.length else it }
+        val (newText, cursor) = TextEdit.apply(key, text, minOf(a, z), maxOf(a, z)) ?: return false
+        if (newText != text) {
+            val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText) }
+            if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) return false
+        }
+        val sel = Bundle().apply { putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor); putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor) }
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel)
+        return true
+    }
+
+    private fun findScrollable(n: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (n.isScrollable) return n
+        for (i in 0 until n.childCount) { val c = n.getChild(i) ?: continue; findScrollable(c)?.let { return it } }
+        return null
     }
 
     override fun media(key: String): Boolean {
