@@ -262,3 +262,30 @@ class LocalLlamaTest {
         assertEquals("", LocalLlama.gpuNote("nothing here"))
     }
 }
+
+class TermuxServerTest {
+    @Test fun termuxCommandHasNoRootPrefixAndItsOwnLog() {
+        val c = LocalLlama.serverCommand("llama-server", "/sdcard/Download/m.gguf", 4, 2048, 0, termux = true)
+        org.junit.Assert.assertTrue(!c.contains("LD_LIBRARY_PATH"))
+        org.junit.Assert.assertTrue(c.contains("/data/data/com.termux/files/home/faze_llama.log"))
+        val r = LocalLlama.serverCommand("/b/s", "/x/m.gguf", 4, 2048)
+        org.junit.Assert.assertTrue(r.startsWith("LD_LIBRARY_PATH="))
+        org.junit.Assert.assertTrue(r.contains("/data/local/tmp/faze_llama.log"))
+    }
+
+    @Test fun plainScanListsGgufInTheFolders() {
+        val d = java.nio.file.Files.createTempDirectory("m").toFile()
+        java.io.File(d, "a.gguf").writeText("x"); java.io.File(d, "b.txt").writeText("x"); java.io.File(d, "mmproj-c.gguf").writeText("x")
+        val models = LocalLlama.parseModels(LocalLlama.plainScan(listOf(d.path)))
+        org.junit.Assert.assertEquals(1, models.size)
+    }
+
+    @Test fun termuxStartIsNotTreatedAsGpuCrashWhenNothingCanBeAskedBack() {
+        val ran = ArrayList<String>()
+        var up: String? = null
+        val c = LocalServerControl({ cmd, _ -> ran.add(cmd); if (cmd.contains("nohup")) up = "m.gguf"; "" }, { up }, { "llama-server" }, { 4 }, { 2048 }, {}, 60_000, { 16 }, {}, termux = true)
+        org.junit.Assert.assertEquals(null, c.ensure("/sdcard/Download/m.gguf") {})
+        org.junit.Assert.assertEquals(1, ran.count { it.contains("nohup") })
+        org.junit.Assert.assertTrue(ran.none { it.startsWith("pgrep") })
+    }
+}

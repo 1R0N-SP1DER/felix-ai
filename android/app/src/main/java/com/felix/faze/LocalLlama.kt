@@ -24,6 +24,17 @@ object LocalLlama {
     const val LOG = "/data/local/tmp/faze_llama.log"
     const val KEEP_MESSAGES = 6
 
+    /** Started through Termux (no root): its own log, and the binary found by Termux itself when the person has not named one. */
+    const val TERMUX_LOG = "$TERMUX/home/faze_llama.log"
+    const val TERMUX_BINARY = "\$(command -v llama-server || echo \$HOME/llama.cpp/build/bin/llama-server)"
+    /** The folders Faze can read on its own, for listing models without root. */
+    val plainDirs = listOf("/sdcard/Download", "/sdcard/models")
+
+    /** .gguf files in [dirs], one path per line, like the root scan prints them. */
+    fun plainScan(dirs: List<String> = plainDirs): String = dirs.flatMap { d ->
+        try { File(d).walkTopDown().maxDepth(4).filter { it.isFile && it.name.endsWith(".gguf") }.map { it.path }.toList() } catch (e: Exception) { emptyList() }
+    }.joinToString("\n")
+
     /** Small on purpose: a slow phone reads every word of the prompt before it answers. */
     const val SYSTEM = "You are FAZE, a close, casual friend of the user, running offline on their phone. Talk relaxed and natural, match the length of their message, no lists or markdown (replies are read aloud). Use a tool only when clearly asked; never invent a tool result."
 
@@ -53,9 +64,9 @@ object LocalLlama {
     }
 
     /** Starts the server in the background. One slot and a small context keep the memory down. */
-    fun serverCommand(bin: String, model: String, threads: Int, ctx: Int, gpuLayers: Int = 0): String =
-        "LD_LIBRARY_PATH=$TERMUX/usr/lib nohup $bin -m $model -c ${ctx.coerceIn(512, 8192)} -t ${threads.coerceIn(1, 8)} -np 1" +
-            (if (gpuLayers > 0) " -ngl ${gpuLayers.coerceAtMost(99)}" else "") + " --jinja --host 127.0.0.1 --port $PORT >$LOG 2>&1 &"
+    fun serverCommand(bin: String, model: String, threads: Int, ctx: Int, gpuLayers: Int = 0, termux: Boolean = false): String =
+        (if (termux) "" else "LD_LIBRARY_PATH=$TERMUX/usr/lib ") + "nohup $bin -m $model -c ${ctx.coerceIn(512, 8192)} -t ${threads.coerceIn(1, 8)} -np 1" +
+            (if (gpuLayers > 0) " -ngl ${gpuLayers.coerceAtMost(99)}" else "") + " --jinja --host 127.0.0.1 --port $PORT >${if (termux) TERMUX_LOG else LOG} 2>&1 &"
 
     /** True while the server process is still running (pgrep prints a pid). */
     fun runningCommand() = "pgrep -f 'port $PORT'"
@@ -164,6 +175,8 @@ class LocalServerControl(
     /** How many layers to put on the GPU (-ngl); the rest stay on the CPU, 0 for CPU only. A build of llama.cpp without a GPU backend ignores it; one that crashes with it is retried on the CPU. */
     private val gpu: () -> Int = { 0 },
     private val notice: (String) -> Unit = {},
+    /** Started through Termux (no root): its own log, and nothing can be asked back about the process, so the early GPU crash check is skipped. */
+    private val termux: Boolean = false,
 ) : LocalServer {
     @Volatile private var started: String? = null
     @Volatile private var gpuBroken = false
@@ -199,9 +212,9 @@ class LocalServerControl(
     private fun launch(bin: String, model: String, layers: Int, onWait: (String) -> Unit): String? {
         val useGpu = layers > 0
         try {
-            run(LocalLlama.serverCommand(bin, model, threads(), ctx(), layers), 8000)
+            run(LocalLlama.serverCommand(bin, model, threads(), ctx(), layers, termux), 8000)
         } catch (e: Exception) {
-            return "could not start the model server: ${e.message ?: e.javaClass.simpleName} (is root granted?)"
+            return "could not start the model server: ${e.message ?: e.javaClass.simpleName}" + if (termux) "" else " (is root granted?)"
         }
         started = model
         var waited = 0L
@@ -209,7 +222,7 @@ class LocalServerControl(
             sleep(500)
             waited += 500
             if (alive() != null) return null
-            if (useGpu && waited % 5000 == 0L && waited >= 5000) {
+            if (useGpu && !termux && waited % 5000 == 0L && waited >= 5000) {
                 val pid = try { run(LocalLlama.runningCommand(), 3000).trim() } catch (e: Exception) { "x" }
                 if (pid.isEmpty()) { started = null; return tailOf("the server stopped while loading") }
             }
