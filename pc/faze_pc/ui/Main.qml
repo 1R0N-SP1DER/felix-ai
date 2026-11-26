@@ -49,6 +49,7 @@ ApplicationWindow {
     property var devices: []
     property bool phoneMic: false
     property bool phoneCam: false
+    property bool phoneSound: false
     property string phoneMediaNote: ""
     property var levels: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
     property var found: []
@@ -95,7 +96,7 @@ ApplicationWindow {
         function onChatsChanged(c) { win.chats = c }
         function onHeard(t) { if (t.trim() !== "") { input.text = (input.text ? input.text + " " : "") + t; input.forceActiveFocus() } else bridge.sayNothing() }
         function onLevelChanged(v) { win.levels = win.levels.slice(1).concat([v]) }
-        function onPhoneMediaChanged(mic, cam, text) { win.phoneMic = mic; win.phoneCam = cam; if (text !== "") win.phoneMediaNote = text }
+        function onPhoneMediaChanged(mic, cam, sound, text) { win.phoneMic = mic; win.phoneCam = cam; win.phoneSound = sound; if (text !== "") win.phoneMediaNote = text }
         function onDevicesChanged(d) { win.devices = d; win.pairMsg = "" }
         function onPhonesFound(p) { win.found = p; if (p.length > 0) { addr.text = p[0].address; win.pairMsg = "Found " + p[0].name } else win.pairMsg = "No phone answered. Is Faze open on it with computers allowed?" }
         function onPairFailed(m) { win.pairMsg = m }
@@ -568,6 +569,7 @@ ApplicationWindow {
                 Layout.fillWidth: true; spacing: 10
                 FazeButton { text: win.phoneMic ? "Phone microphone: on" : "Phone microphone"; checkable: true; checked: win.phoneMic; onClicked: bridge.phoneMedia("mic", !win.phoneMic) }
                 FazeButton { text: win.phoneCam ? "Phone camera: on" : "Phone camera"; checkable: true; checked: win.phoneCam; onClicked: bridge.phoneMedia("cam", !win.phoneCam) }
+                FazeButton { text: win.phoneSound ? "Phone sound: on" : "Phone sound"; checkable: true; checked: win.phoneSound; onClicked: bridge.phoneMedia("sound", !win.phoneSound) }
             }
             Text { visible: win.phoneMediaNote !== ""; text: win.phoneMediaNote; color: win.dim; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
             Rectangle { Layout.fillWidth: true; height: 1; color: win.line }

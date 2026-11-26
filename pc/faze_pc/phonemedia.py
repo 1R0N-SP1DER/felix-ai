@@ -37,12 +37,12 @@ class PhoneMedia:
     def __init__(self, request, phone, say, which=shutil.which, runner=run, popen=subprocess.Popen, sleep=time.sleep, loopback=loopback_device):
         self.request, self.phone, self.say = request, phone, say
         self.which, self.run, self.popen, self.sleep, self.loopback = which, runner, popen, sleep, loopback
-        self.mic = self.cam = False
+        self.mic = self.cam = self.sound = False
         self.modules = []
         self.procs = {}
 
     def status(self):
-        return {"mic": self.mic, "cam": self.cam}
+        return {"mic": self.mic, "cam": self.cam, "sound": self.sound}
 
     # --- microphone
     def mic_on(self):
@@ -108,6 +108,59 @@ class PhoneMedia:
             except Exception:
                 pass
 
+    # --- the phone's own sound (what it is playing), played on this PC's speakers
+    def sound_on(self):
+        if self.sound:
+            return
+        if not self.which("pacat"):
+            return self.say("Phone sound: pacat is needed (install pulseaudio-utils, or pipewire-pulse).", False)
+        try:
+            self.procs["sound"] = self.popen(["pacat", "--playback", "--rate=44100", "--format=s16le", "--channels=2", "--client-name=Faze-phone-sound", "--latency-msec=60"], stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except OSError as e:
+            return self.say("Phone sound: could not start the player: %s" % e, False)
+        self.sound = True
+        self.say("Phone sound is on: what the phone plays comes out of this PC.", True)
+        threading.Thread(target=self.pump_sound, daemon=True, name="phone-sound").start()
+
+    def pump_sound(self):
+        import base64
+        while self.sound:
+            try:
+                r = self.request(self.phone, {"t": "phone_sound_get"}, 10)
+            except Exception as e:
+                self.fail("sound", "The phone did not answer: %s" % e)
+                return
+            if r.get("t") != "phone_sound_ok":
+                self.fail("sound", r.get("message", "the phone sent no sound"))
+                return
+            data = base64.b64decode(r.get("data", ""))
+            if not data:
+                self.sleep(0.03)
+                continue
+            try:
+                p = self.procs.get("sound")
+                p.stdin.write(data)
+                p.stdin.flush()
+            except (OSError, ValueError, AttributeError):
+                self.fail("sound", "The sound player stopped.")
+                return
+
+    def sound_off(self):
+        was = self.sound
+        self.sound = False
+        p = self.procs.pop("sound", None)
+        if p is not None:
+            try:
+                p.stdin.close()
+                p.terminate()
+            except Exception:
+                pass
+        if was:
+            try:
+                self.request(self.phone, {"t": "phone_sound_stop"}, 5)
+            except Exception:
+                pass
+
     # --- camera
     def cam_on(self, facing="front"):
         if self.cam:
@@ -162,9 +215,10 @@ class PhoneMedia:
                 pass
 
     def fail(self, which, text):
-        (self.mic_off if which == "mic" else self.cam_off)()
-        self.say(("Microphone: " if which == "mic" else "Camera: ") + text, False)
+        {"mic": self.mic_off, "cam": self.cam_off, "sound": self.sound_off}[which]()
+        self.say({"mic": "Microphone: ", "cam": "Camera: ", "sound": "Phone sound: "}[which] + text, False)
 
     def stop_all(self):
         self.mic_off()
         self.cam_off()
+        self.sound_off()
