@@ -54,4 +54,13 @@ class PhoneClipTest {
         assertEquals(listOf("one", "two"), written)
         assertEquals(emptyList<String>(), sent)
     }
+
+    @Test fun twoPhonesPassingTheSameTextDoNotLoop() {
+        clip.handle(note("from the other phone"))
+        clip.changed("from the other phone") // this phone's clipboard listener fires after our own write
+        clip.changed("mine")
+        clip.handle(note("mine")) // an echo from the far side
+        assertEquals(listOf("mine"), sent)
+        assertEquals(listOf("from the other phone"), written)
+    }
 }
