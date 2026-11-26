@@ -65,7 +65,7 @@ fun PageHeader(title: String, onBack: () -> Unit, right: @Composable () -> Unit 
 
 /** Every device linked to this phone: the platform as the big picture, then the name and how it is connected. */
 @Composable
-fun DevicesScreen(core: FazeCore, onBack: () -> Unit, onOpen: (String) -> Unit = {}) {
+fun DevicesScreen(core: FazeCore, onBack: () -> Unit, onOpen: (String) -> Unit = {}, onPad: () -> Unit = {}) {
     val rows = core.deviceRows()
     val on = core.settings.linkOn
     Column(modifier = Modifier.fillMaxSize().background(Palette.Bg)) {
@@ -76,6 +76,10 @@ fun DevicesScreen(core: FazeCore, onBack: () -> Unit, onOpen: (String) -> Unit =
             if (rows.isEmpty()) Text("No devices yet.", color = Palette.Muted, fontSize = 14.sp, modifier = Modifier.padding(vertical = 8.dp))
             for (d in rows) DeviceCard(core, d, onOpen) { core.removeDevice(d.id) }
             SetupCard()
+            SettingsCard("Use this phone as a controller") {
+                Hint("Turns this phone into a Bluetooth game controller for another phone, like a normal pad. No app is needed on the other phone.")
+                WideButton("Bluetooth controller") { onPad() }
+            }
             SettingsCard("Pair another phone") {
                 var host by remember { mutableStateOf("") }
                 var pcode by remember { mutableStateOf("") }
