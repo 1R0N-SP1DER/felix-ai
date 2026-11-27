@@ -18,4 +18,19 @@ object Su {
         reader.join(1000)
         return String(out.toByteArray(), Charsets.UTF_8)
     }
+
+    /** Like [run] but the output as raw bytes (a picture), with the error text left out of it. */
+    fun runBytes(command: String, timeoutMs: Long): ByteArray {
+        val pb = ProcessBuilder("su", "-c", command)
+        pb.redirectError(java.io.File("/dev/null"))
+        pb.environment().remove("LD_PRELOAD")
+        pb.environment().remove("LD_LIBRARY_PATH")
+        val p = try { pb.start() } catch (e: Exception) { throw RemoteError("model", "root is not available") }
+        p.outputStream.close()
+        val out = ByteArrayOutputStream()
+        val reader = Thread { try { p.inputStream.copyTo(out) } catch (_: Exception) {} }.also { it.start() }
+        if (!p.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) { p.destroyForcibly(); reader.join(500); throw RemoteError("model", "the screenshot timed out") }
+        reader.join(1000)
+        return out.toByteArray()
+    }
 }
