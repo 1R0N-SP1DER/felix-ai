@@ -63,7 +63,7 @@ fun BtPadScreen(core: FazeCore, onBack: () -> Unit) {
         val sensor = sm.getDefaultSensor(android.hardware.Sensor.TYPE_ACCELEROMETER)
         val rot = { @Suppress("DEPRECATION") (context.getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager).defaultDisplay.rotation }
         val l = object : android.hardware.SensorEventListener {
-            override fun onSensorChanged(e: android.hardware.SensorEvent) { pad.tilted(Tilt.steer(e.values, rot(), tiltInvert)) }
+            override fun onSensorChanged(e: android.hardware.SensorEvent) { pad.tilted(WheelTilt.steer(e.values, rot(), tiltInvert)) }
             override fun onAccuracyChanged(s: android.hardware.Sensor?, a: Int) {}
         }
         if (sensor != null) sm.registerListener(l, sensor, android.hardware.SensorManager.SENSOR_DELAY_GAME)

@@ -77,7 +77,7 @@ object HidReport {
 }
 
 /** Steering by tilting the phone like a wheel: the lean of the screen's left and right edges, turned into a left stick position. Pure maths, so it is tested without a phone. */
-object Tilt {
+object WheelTilt {
     private const val G = 9.81f
 
     /**
