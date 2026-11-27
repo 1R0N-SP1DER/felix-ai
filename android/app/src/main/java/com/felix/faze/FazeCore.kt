@@ -44,8 +44,12 @@ class FazeCore(private val app: Application) : EngineListener {
     /** Live video from another phone: screen_h264 notices fill this, the control screen plays it. */
     val phoneFrames = PcFrames()
     private val phoneVideo = PhoneVideoFeed(phoneFrames)
-    val linkClient: LinkClient = LinkClient(settings.linkId, { android.os.Build.MODEL ?: "Phone" }, linkRemotes, onChange = { main.post { linkTick++; syncClipWatch() } }, handler = { _, msg -> phoneVideo.handle(msg) ?: phoneClip.handle(msg) })
-    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) ?: phoneModels.handle(msg) ?: phoneMedia.handle(msg) ?: phoneInbox.handle(msg) ?: phoneClip.handle(msg) ?: pcFrames.handle(msg) ?: screenStream.handle(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = ""; syncClipWatch() } })
+    val linkClient: LinkClient = LinkClient(settings.linkId, { android.os.Build.MODEL ?: "Phone" }, linkRemotes, onChange = { main.post { linkTick++; syncClipWatch() } }, handler = { _, msg -> serve(msg) })
+    val link: LinkServer = LinkServer(linkPeers, settings.linkId, { android.os.Build.MODEL ?: "Phone" }, handler = { _, msg -> serve(msg) }, onChange = { main.post { linkTick++; if (!link.pairingOpen()) linkCode = ""; syncClipWatch() } })
+
+    /** Everything either side may ask of this phone: the same services for a computer or a phone, and for a phone that connected to this one or that this one connected to. */
+    private fun serve(msg: JSONObject): JSONObject? =
+        sync.handle(msg) ?: peerTasks.handle(msg) ?: screenShare.handle(msg) ?: phoneFiles.handle(msg) ?: phoneModels.handle(msg) ?: phoneMedia.handle(msg) ?: phoneInbox.handle(msg) ?: phoneClip.handle(msg) ?: phoneVideo.handle(msg) ?: pcFrames.handle(msg) ?: screenStream.handle(msg)
 
     fun setLink(on: Boolean) {
         settings.linkOn = on
@@ -61,15 +65,31 @@ class FazeCore(private val app: Application) : EngineListener {
     var pcModelsError by mutableStateOf("")
         private set
 
-    val pcConnected: Boolean get() { linkTick; return link.connected().isNotEmpty() }
+    /** The computers connected to this phone. A phone that paired with this one connects the same way but is not a computer. */
+    fun pcIds(): List<String> = link.connected().filter { linkPeers.get(it)?.os != "android" }
+
+    /** Phones this phone can look at and control: the ones it paired with and the ones that paired with it. */
+    fun isPhone(id: String): Boolean = linkRemotes.get(id) != null || linkPeers.get(id)?.os == "android"
+
+    /** Asks a connected phone something, whichever side started the connection. */
+    fun phoneAsk(id: String, msg: JSONObject, timeoutMs: Long): JSONObject =
+        if (linkRemotes.get(id) != null) linkClient.ask(id, msg, timeoutMs) else link.ask(id, msg, timeoutMs)
+
+    /** A notice for everything connected to this phone, whichever side started the connection. */
+    private fun pushAll(m: JSONObject) {
+        link.notify(m)
+        for (id in linkClient.connected()) try { linkClient.notify(id, JSONObject(m.toString())) } catch (_: Exception) { }
+    }
+
+    val pcConnected: Boolean get() { linkTick; return pcIds().isNotEmpty() }
 
     fun loadPcModels() {
-        if (pcModelsLoading || link.connected().isEmpty()) return
+        if (pcModelsLoading || pcIds().isEmpty()) return
         pcModelsLoading = true
         pcModelsError = ""
         Thread {
             try {
-                val r = link.ask(link.connected().first(), JSONObject().put("t", "pc_models"), 8000)
+                val r = link.ask(pcIds().first(), JSONObject().put("t", "pc_models"), 8000)
                 val names = PcModels.parse(r)
                 main.post { pcModels = names; pcModelsError = if (names.isEmpty()) r.optString("message", "Ollama on the PC has no models. Is it running?") else ""; pcModelsLoading = false }
             } catch (e: Exception) {
@@ -86,7 +106,7 @@ class FazeCore(private val app: Application) : EngineListener {
     fun stopPairing() { link.closePairing(); linkCode = ""; linkTick++ }
 
     /** Asks the connected computer something; throws IOException when there is none. */
-    fun pcAsk(msg: JSONObject, timeoutMs: Long): JSONObject = link.ask(link.connected().firstOrNull() ?: throw java.io.IOException("no computer is connected"), msg, timeoutMs)
+    fun pcAsk(msg: JSONObject, timeoutMs: Long): JSONObject = link.ask(pcIds().firstOrNull() ?: throw java.io.IOException("no computer is connected"), msg, timeoutMs)
 
     private val remoteWorker = Executors.newSingleThreadExecutor()
 
@@ -100,7 +120,7 @@ class FazeCore(private val app: Application) : EngineListener {
 
     /** Asks the connected computer to open a window showing this phone's screen (it needs Allow screen view and control to be on). */
     fun showPhoneOnPc() {
-        val id = link.connected().firstOrNull() ?: run { status = "No computer is connected."; return }
+        val id = pcIds().firstOrNull() ?: run { status = "No computer is connected."; return }
         executor.execute {
             val msg = try {
                 val r = link.ask(id, JSONObject().put("t", "mirror_open"), 15_000)
@@ -210,7 +230,7 @@ class FazeCore(private val app: Application) : EngineListener {
             task, Online.available(app), keys, { limits.isResting(it) }, { settings.modelFor(it) },
             AutoMode.offlineFor(Task.CASUAL, settings.autoCasualModel, settings.autoDeepModel, scanned, settings.offlineModel),
             AutoMode.offlineFor(task.let { if (it == Task.CASUAL) Task.DEEP else it }, settings.autoCasualModel, settings.autoDeepModel, scanned, settings.offlineModel),
-            pc = link.connected().isNotEmpty(),
+            pc = pcIds().isNotEmpty(),
         )
         val ordered = plan.sortedBy { it.provider == avoid } // after a thumbs down, retry starts with a different model (stable: the rest keep their order)
         activity.add("auto", "${task.name.lowercase()} request: ${ordered.take(3).joinToString(", ") { it.provider }}")
@@ -302,7 +322,7 @@ class FazeCore(private val app: Application) : EngineListener {
         { w, h -> if (rootNow) RootScreenSource(w, h) else ProjectionSource(app, w, h) },
         { app.resources.displayMetrics.let { it.widthPixels to it.heightPixels } },
         { settings.linkScreen }, { LockOverlayActivity.isLocked(app) },
-        { m -> link.notify(m) }, log = { activity.add("link", it) },
+        { m -> pushAll(m) }, log = { activity.add("link", it) },
         unavailable = { if (rootNow || ProjectionVideo.ready()) "" else "Live video without root needs screen capture allowed once on this phone (Faze > Settings > Devices > Allow screen capture). Pictures work without it." },
     )
     /** Copies of offline models staged for a computer to read (see PhoneModels). */
@@ -361,9 +381,9 @@ class FazeCore(private val app: Application) : EngineListener {
 
     private val peerTasks = PeerTasks({ busy || voiceOn || liveOn }, { task -> main.post { newChat(); send("(From your computer) $task") } })
     private val computers = object : Computers {
-        override fun available() = link.connected().isNotEmpty()
+        override fun available() = pcIds().isNotEmpty()
         override fun ask(task: String): Pair<Boolean, String> = try {
-            val r = link.ask(link.connected().first(), JSONObject().put("t", "pc_task").put("task", task), 300_000)
+            val r = link.ask(pcIds().first(), JSONObject().put("t", "pc_task").put("task", task), 300_000)
             if (r.optString("t") == "pc_task_ok") true to r.optString("text").ifBlank { "Done." } else false to r.optString("message", "the computer could not do it")
         } catch (e: Exception) {
             false to "the computer could not be reached: ${e.message ?: ""}"
@@ -477,7 +497,7 @@ class FazeCore(private val app: Application) : EngineListener {
                     localServer, { settings.offlineModel }, { text -> main.post { status = text } },
                 ),
                 *OpenAiProviders.all.values.map { info -> info.id to (RemoteClient(transport, info.base, { settings.compatKey(info.id) }, info.label) as ChatApi) }.toTypedArray(),
-                "pc" to PcChat({ msg, ms, cancelled -> link.ask(link.connected().first(), msg, ms, cancelled) }),
+                "pc" to PcChat({ msg, ms, cancelled -> link.ask(pcIds().first(), msg, ms, cancelled) }),
                 "openrouter" to OpenRouterChat(
                     RemoteClient(transport, OpenRouter.BASE, { settings.openrouterKey }, "OpenRouter"),
                     { transport.get("${OpenRouter.BASE}/models", emptyMap(), 15000).body },

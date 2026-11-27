@@ -112,6 +112,11 @@ class AndroidMic(private val context: Context) : MicSource {
     }
 }
 
+/** Which way a picture must be turned to stand upright with the phone held upright: the sensor's own mounting angle (usually 270 for the front camera and 90 for the back one, so one fixed number is upside down on one of them). */
+object CameraTurn {
+    fun jpeg(sensor: Int?): Int = (((sensor ?: 90) % 360) + 360) % 360
+}
+
 /** One still picture per request through Camera2, with the camera kept open for a few seconds so repeated requests are quick. */
 class AndroidCam(private val context: Context) : CamSource {
     private val thread = HandlerThread("faze-cam").also { it.start() }
@@ -130,6 +135,7 @@ class AndroidCam(private val context: Context) : CamSource {
         val mgr = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         val want = if (facing == "back") CameraCharacteristics.LENS_FACING_BACK else CameraCharacteristics.LENS_FACING_FRONT
         val id = mgr.cameraIdList.firstOrNull { mgr.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == want } ?: throw IllegalStateException("This phone has no $facing camera.")
+        val turn = CameraTurn.jpeg(mgr.getCameraCharacteristics(id).get(CameraCharacteristics.SENSOR_ORIENTATION))
         val opened = CountDownLatch(1)
         var failure: String? = null
         mgr.openCamera(id, object : CameraDevice.StateCallback() {
@@ -157,7 +163,7 @@ class AndroidCam(private val context: Context) : CamSource {
             rd.acquireLatestImage()?.use { img -> val b = img.planes[0].buffer; bytes = ByteArray(b.remaining()).also { b.get(it) } }
             got.countDown()
         }, handler)
-        val req = device!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(r.surface); set(CaptureRequest.JPEG_ORIENTATION, 270) }.build()
+        val req = device!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(r.surface); set(CaptureRequest.JPEG_ORIENTATION, turn) }.build()
         session!!.capture(req, null, handler)
         if (!got.await(4, TimeUnit.SECONDS) || bytes == null) throw IllegalStateException("No picture came from the camera.")
         handler.removeCallbacks(closer)
