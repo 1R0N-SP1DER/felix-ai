@@ -101,10 +101,19 @@ class BtGamepad(private val context: Context, private val lastHost: () -> String
         paired().firstOrNull { it.address == a }?.let { connect(it) }
     }
 
+    /** Steering from the phone's tilt, -1..1, replaces the left stick's sideways value while it is on. */
+    @Volatile var tilt: Float? = null
+    private var lastState = JSONObject()
+
+    /** Tilt moved: send the last pad state again with the new steering. */
+    fun tilted(v: Float) { tilt = v; send(lastState) }
+
     fun send(state: JSONObject) {
+        lastState = state
+        val t = tilt
         val h = hid ?: return
         val d = target ?: return
-        try { h.sendReport(d, HidReport.ID, HidReport.fromState(state)) } catch (_: Exception) { /* dropped link: the next state heals it */ }
+        try { h.sendReport(d, HidReport.ID, HidReport.fromState(if (t == null) state else JSONObject(state.toString()).put("lx", t.toDouble()))) } catch (_: Exception) { /* dropped link: the next state heals it */ }
     }
 
     fun stop() {
@@ -112,6 +121,6 @@ class BtGamepad(private val context: Context, private val lastHost: () -> String
         try { BluetoothAdapter.getDefaultAdapter()?.closeProfileProxy(BluetoothProfile.HID_DEVICE, hid) } catch (_: Exception) { }
         try { bondWatch?.let { context.unregisterReceiver(it) } } catch (_: Exception) { }
         bondWatch = null
-        hid = null; target = null; host = null; status = "Not started"
+        hid = null; target = null; host = null; tilt = null; status = "Not started"
     }
 }

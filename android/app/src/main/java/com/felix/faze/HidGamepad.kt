@@ -67,3 +67,23 @@ object HidReport {
 
     private fun Float.orZero() = if (isNaN()) 0f else this
 }
+
+/** Steering by tilting the phone like a wheel: the lean of the screen's left and right edges, turned into a left stick position. Pure maths, so it is tested without a phone. */
+object Tilt {
+    private const val G = 9.81f
+
+    /**
+     * [accel] is the accelerometer (x right, y up the phone, z out of the screen) and [rotation] the display rotation 0..3 (0 upright, 1 turned left, 2 upside down, 3 turned right).
+     * Returns -1 (full left) to 1 (full right). A few degrees around level do nothing, and about 35 degrees is full lock.
+     */
+    fun steer(accel: FloatArray, rotation: Int, invert: Boolean = false, dead: Float = 3f, full: Float = 35f): Float {
+        if (accel.size < 2) return 0f
+        // the reading along the screen's right direction is negative when the phone leans clockwise (the right edge goes down)
+        val along = when (rotation) { 1 -> -accel[1]; 2 -> -accel[0]; 3 -> accel[1]; else -> accel[0] }
+        val lean = -along // positive = leaning clockwise = steer right
+        val deg = Math.toDegrees(Math.asin((lean / G).coerceIn(-1f, 1f)).toDouble()).toFloat()
+        val mag = ((Math.abs(deg) - dead) / (full - dead)).coerceIn(0f, 1f)
+        val v = if (deg < 0) -mag else mag
+        return if (invert) -v else v
+    }
+}

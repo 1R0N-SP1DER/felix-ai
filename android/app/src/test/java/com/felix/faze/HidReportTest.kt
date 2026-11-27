@@ -60,3 +60,27 @@ class HidReportTest {
         assertTrue(HidReport.SIZE == 2 + 1 + 4 + 2)
     }
 }
+
+class TiltTest {
+    @Test fun levelPhoneDoesNotSteer() {
+        assertEquals(0f, Tilt.steer(floatArrayOf(0f, 0.2f, 9.8f), 1), 0.001f)
+    }
+
+    @Test fun clockwiseLeanSteersRightWhenTurnedLeft() {
+        val v = Tilt.steer(floatArrayOf(0f, 4.9f, 8.5f), 1)
+        assertTrue(v > 0.8f && v < 0.9f)
+        assertEquals(-v, Tilt.steer(floatArrayOf(0f, -4.9f, 8.5f), 1), 0.001f)
+    }
+
+    @Test fun sidesAgreeAcrossRotations() {
+        val right = Tilt.steer(floatArrayOf(0f, -4.9f, 8.5f), 3)
+        assertTrue(right > 0.8f)
+        assertTrue(Tilt.steer(floatArrayOf(-4.9f, 0f, 8.5f), 0) > 0.8f)
+        assertTrue(Tilt.steer(floatArrayOf(4.9f, 0f, 8.5f), 2) > 0.8f)
+    }
+
+    @Test fun fullLockAndReverse() {
+        assertEquals(1f, Tilt.steer(floatArrayOf(0f, 9f, 3f), 1), 0.001f)
+        assertEquals(-1f, Tilt.steer(floatArrayOf(0f, 9f, 3f), 1, invert = true), 0.001f)
+    }
+}

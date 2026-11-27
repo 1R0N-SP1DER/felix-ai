@@ -53,6 +53,23 @@ fun BtPadScreen(core: FazeCore, onBack: () -> Unit) {
         else begin()
     }
 
+    // Tilt steering: the phone's lean drives the left stick, for racing games.
+    val prefs = remember { context.getSharedPreferences("faze_pad", android.content.Context.MODE_PRIVATE) }
+    var tiltOn by remember { mutableStateOf(prefs.getBoolean("bt_tilt", false)) }
+    var tiltInvert by remember { mutableStateOf(prefs.getBoolean("bt_tilt_invert", false)) }
+    androidx.compose.runtime.DisposableEffect(tiltOn, tiltInvert, playing) {
+        if (!tiltOn || !playing) { pad.tilt = null; return@DisposableEffect onDispose { } }
+        val sm = context.getSystemService(android.content.Context.SENSOR_SERVICE) as android.hardware.SensorManager
+        val sensor = sm.getDefaultSensor(android.hardware.Sensor.TYPE_ACCELEROMETER)
+        val rot = { @Suppress("DEPRECATION") (context.getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager).defaultDisplay.rotation }
+        val l = object : android.hardware.SensorEventListener {
+            override fun onSensorChanged(e: android.hardware.SensorEvent) { pad.tilted(Tilt.steer(e.values, rot(), tiltInvert)) }
+            override fun onAccuracyChanged(s: android.hardware.Sensor?, a: Int) {}
+        }
+        if (sensor != null) sm.registerListener(l, sensor, android.hardware.SensorManager.SENSOR_DELAY_GAME)
+        onDispose { sm.unregisterListener(l); pad.tilt = null }
+    }
+
     // Opening this screen starts everything: the controller role, visibility, and (once the other phone is paired in Bluetooth settings) the connection and the pad itself.
     androidx.compose.runtime.LaunchedEffect(Unit) { if (!pad.active) go() else pad.reconnect() }
     androidx.compose.runtime.LaunchedEffect(pad.host) { if (pad.host != null) playing = true }
@@ -60,6 +77,7 @@ fun BtPadScreen(core: FazeCore, onBack: () -> Unit) {
     if (playing && pad.host != null) {
         Box(Modifier.fillMaxSize().background(Palette.Bg)) {
             GamepadOverlay(state, layouts, false, onDone = {})
+            Text(if (tiltOn) "Tilt: on" else "Tilt: off", color = if (tiltOn) Palette.Accent else Palette.Dim, fontSize = 14.sp, modifier = Modifier.align(androidx.compose.ui.Alignment.TopEnd).padding(12.dp).clickable { tiltOn = !tiltOn; prefs.edit().putBoolean("bt_tilt", tiltOn).apply() })
             Text("Close", color = Palette.Dim, fontSize = 14.sp, modifier = Modifier.padding(12.dp).clickable { state.releaseAll(); playing = false })
         }
         return
@@ -84,6 +102,11 @@ fun BtPadScreen(core: FazeCore, onBack: () -> Unit) {
             }
             if (pad.host != null) WideButton("Open the controller", ghost = false) { playing = true }
             if (pad.active) WideButton("Stop the controller") { pad.stop() }
+        }
+        SettingsCard("Tilt steering") {
+            Hint("Steer racing games by tilting this phone like a wheel. It replaces the left stick's sideways movement while it is on. You can also switch it on in the pad with the Tilt button in the corner. If it steers the wrong way, turn on Reverse.")
+            WideButton(if (tiltOn) "Tilt steering: on" else "Tilt steering: off", ghost = !tiltOn) { tiltOn = !tiltOn; prefs.edit().putBoolean("bt_tilt", tiltOn).apply() }
+            WideButton(if (tiltInvert) "Reverse: on" else "Reverse: off", ghost = !tiltInvert) { tiltInvert = !tiltInvert; prefs.edit().putBoolean("bt_tilt_invert", tiltInvert).apply() }
         }
         WideButton("Back") { onBack() }
     }
