@@ -65,7 +65,7 @@ import kotlinx.coroutines.withContext
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.graphics.asAndroidBitmap
 
-private fun Context.findActivity(): Activity? {
+fun Context.findActivity(): Activity? {
     var c: Context = this
     while (c is ContextWrapper) {
         if (c is Activity) return c

@@ -39,15 +39,14 @@ import kotlinx.coroutines.withContext
 /** Another phone's screen, live-ish (a picture after picture, as fast as it can send them) with touch relayed to it. Works whether that phone uses root or the accessibility way. */
 @Composable
 fun PhoneRemoteScreen(core: FazeCore, deviceId: String, onBack: () -> Unit) {
-    val name = core.deviceRows().firstOrNull { it.id == deviceId }?.name ?: "Phone"
-    val remote = remember(deviceId) { PhoneRemote { m, ms -> core.linkClient.ask(deviceId, m, ms) } }
+    val remote = remember(deviceId) { PhoneRemote { m, ms -> core.phoneAsk(deviceId, m, ms) } }
     var frame by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var note by remember { mutableStateOf("Waiting for the phone…") }
     var box by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     var typed by remember { mutableStateOf("") }
     var view by remember { mutableStateOf("screen") } // "screen", "front" or "back" camera
-    val micPlayer = remember(deviceId) { PhoneAudio("audio", { m -> core.linkClient.ask(deviceId, m, 15_000) }, AndroidSink(), { e -> note = e }) }
-    val soundPlayer = remember(deviceId) { PhoneAudio("sound", { m -> core.linkClient.ask(deviceId, m, 15_000) }, AndroidSink(), { e -> note = e }) }
+    val micPlayer = remember(deviceId) { PhoneAudio("audio", { m -> core.phoneAsk(deviceId, m, 15_000) }, AndroidSink(), { e -> note = e }) }
+    val soundPlayer = remember(deviceId) { PhoneAudio("sound", { m -> core.phoneAsk(deviceId, m, 15_000) }, AndroidSink(), { e -> note = e }) }
     var live by remember { mutableStateOf(false) }
     var liveSize by remember { mutableStateOf(720 to 1280) }
     var micOn by remember { mutableStateOf(false) }
@@ -82,10 +81,21 @@ fun PhoneRemoteScreen(core: FazeCore, deviceId: String, onBack: () -> Unit) {
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Palette.Bg)) {
-        PageHeader(name, onBack)
+    // Full screen, like the computer's screen: no bars (a swipe from the edge shows them), and the controls come from the button in the corner.
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val act = remember(ctx) { ctx.findActivity() }
+    androidx.compose.runtime.DisposableEffect(act) {
+        val controller = act?.let { androidx.core.view.WindowCompat.getInsetsController(it.window, it.window.decorView) }
+        controller?.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller?.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        onDispose { controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars()) }
+    }
+    var menuOpen by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler { if (menuOpen) menuOpen = false else onBack() }
+
+    Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black)) {
         Box(
-            Modifier.weight(1f).fillMaxWidth().onSizeChanged { box = it }
+            Modifier.fillMaxSize().onSizeChanged { box = it }
                 .pointerInput(frame, view, live) {
                     if (view != "screen") return@pointerInput
                     detectTapGestures(
@@ -117,6 +127,11 @@ fun PhoneRemoteScreen(core: FazeCore, deviceId: String, onBack: () -> Unit) {
             else if (b != null) Image(b.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
             if (note.isNotEmpty()) Text(note, color = Palette.Dim, fontSize = 14.sp, modifier = Modifier.padding(24.dp))
         }
+        Text(
+            if (menuOpen) "✕" else "⋯", color = Palette.Text, fontSize = 18.sp,
+            modifier = Modifier.align(Alignment.TopEnd).padding(10.dp).clip(RoundedCornerShape(50)).background(androidx.compose.ui.graphics.Color(0x99000000)).clickable { menuOpen = !menuOpen }.padding(horizontal = 14.dp, vertical = 6.dp),
+        )
+        if (menuOpen) Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Palette.Bg.copy(alpha = 0.94f)).padding(bottom = 8.dp)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             fun chip(label: String, on: Boolean, click: () -> Unit) = @Composable {
                 Text(
@@ -146,6 +161,8 @@ fun PhoneRemoteScreen(core: FazeCore, deviceId: String, onBack: () -> Unit) {
                 "Type", color = Palette.Accent, fontSize = 14.sp,
                 modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { val t = typed; if (t.isNotBlank()) { typed = ""; run { remote.text(t) } } }.padding(10.dp),
             )
+        }
+        Text("Leave", color = Palette.Bad, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp).clip(RoundedCornerShape(10.dp)).clickable { onBack() }.padding(8.dp))
         }
     }
 }

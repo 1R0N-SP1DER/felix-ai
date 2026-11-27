@@ -35,7 +35,7 @@ class ShareActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val core = (application as FazeApp).core
-        val pc = core.link.connected().firstOrNull()
+        val pc = core.pcIds().firstOrNull()
         val items = shared(intent)
         if (pc == null) { toast("No computer is connected. Open Faze and check Devices."); finish(); return }
         if (items.isEmpty()) { toast("Nothing to send."); finish(); return }

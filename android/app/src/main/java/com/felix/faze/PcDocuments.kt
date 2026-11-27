@@ -22,7 +22,7 @@ class PcDocuments : DocumentsProvider() {
     override fun queryRoots(projection: Array<out String>?): Cursor {
         val c = MatrixCursor(projection ?: arrayOf(Root.COLUMN_ROOT_ID, Root.COLUMN_FLAGS, Root.COLUMN_TITLE, Root.COLUMN_DOCUMENT_ID, Root.COLUMN_ICON))
         try {
-            val on = core.link.connected()
+            val on = core.pcIds()
             for (p in core.linkPeers.all().filter { it.id in on }) {
                 c.newRow().add(Root.COLUMN_ROOT_ID, p.id).add(Root.COLUMN_FLAGS, 0).add(Root.COLUMN_TITLE, "Your PC (${p.name})")
                     .add(Root.COLUMN_DOCUMENT_ID, PcFiles.id(p.id)).add(Root.COLUMN_ICON, context!!.applicationInfo.icon)
