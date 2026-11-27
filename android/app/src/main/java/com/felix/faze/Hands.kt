@@ -61,7 +61,7 @@ object InputCommands {
 }
 
 /** Root `input` commands on the real phone. Reached only through [GatedTools], which asks the person first. */
-class AndroidHands(private val context: Context) : Hands {
+class AndroidHands(private val context: Context, private val fast: RootInputClient? = null) : Hands {
     private fun run(command: String): String {
         val pb = ProcessBuilder("su", "-c", command)
         pb.redirectErrorStream(true)
@@ -77,18 +77,25 @@ class AndroidHands(private val context: Context) : Hands {
         return ""
     }
 
-    override fun tap(x: Int, y: Int): String { run(InputCommands.tap(x, y)); return "Tapped at $x,$y." }
+    /** The quick helper when it is running, otherwise (or when it fails) the slow `input` command. */
+    private fun quickOr(line: String, slow: () -> String) { if (fast?.call(line) == null) run(slow()) }
 
-    override fun longPress(x: Int, y: Int): String { run(InputCommands.longPress(x, y)); return "Long-pressed at $x,$y." }
+    override fun tap(x: Int, y: Int): String { InputCommands.tap(x, y); quickOr("tap $x $y") { InputCommands.tap(x, y) }; return "Tapped at $x,$y." }
 
-    override fun swipe(x1: Int, y1: Int, x2: Int, y2: Int): String { run(InputCommands.swipe(x1, y1, x2, y2)); return "Swiped from $x1,$y1 to $x2,$y2." }
+    override fun longPress(x: Int, y: Int): String { InputCommands.longPress(x, y); quickOr("swipe $x $y $x $y 800") { InputCommands.longPress(x, y) }; return "Long-pressed at $x,$y." }
 
-    override fun pressKey(key: String): String { run(InputCommands.key(key)); return "Pressed ${key.trim().lowercase()}." }
+    override fun swipe(x1: Int, y1: Int, x2: Int, y2: Int): String { InputCommands.swipe(x1, y1, x2, y2); quickOr("swipe $x1 $y1 $x2 $y2 300") { InputCommands.swipe(x1, y1, x2, y2) }; return "Swiped from $x1,$y1 to $x2,$y2." }
+
+    override fun pressKey(key: String): String {
+        val slow = InputCommands.key(key)
+        quickOr("key " + InputCommands.KEYS[key.trim().lowercase()]) { slow }
+        return "Pressed ${key.trim().lowercase()}."
+    }
 
     override fun typeText(text: String): String {
         InputCommands.checkText(text)
         if (InputCommands.isPlain(text)) {
-            run(InputCommands.typeCommand(text))
+            quickOr("text $text") { InputCommands.typeCommand(text) }
         } else {
             val cm = context.getSystemService(ClipboardManager::class.java) ?: throw ToolFailure("the clipboard is not available")
             cm.setPrimaryClip(ClipData.newPlainText("faze", text))
