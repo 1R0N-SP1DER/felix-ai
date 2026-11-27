@@ -60,3 +60,39 @@ class HidReportTest {
         assertTrue(HidReport.SIZE == 2 + 1 + 4 + 2)
     }
 }
+
+class WheelTiltTest {
+    @Test fun levelPhoneDoesNotSteer() {
+        assertEquals(0f, WheelTilt.steer(floatArrayOf(0f, 0.2f, 9.8f), 1), 0.001f)
+    }
+
+    @Test fun clockwiseLeanSteersRightWhenTurnedLeft() {
+        val v = WheelTilt.steer(floatArrayOf(0f, 4.9f, 8.5f), 1)
+        assertTrue(v > 0.8f && v < 0.9f)
+        assertEquals(-v, WheelTilt.steer(floatArrayOf(0f, -4.9f, 8.5f), 1), 0.001f)
+    }
+
+    @Test fun sidesAgreeAcrossRotations() {
+        val right = WheelTilt.steer(floatArrayOf(0f, -4.9f, 8.5f), 3)
+        assertTrue(right > 0.8f)
+        assertTrue(WheelTilt.steer(floatArrayOf(-4.9f, 0f, 8.5f), 0) > 0.8f)
+        assertTrue(WheelTilt.steer(floatArrayOf(4.9f, 0f, 8.5f), 2) > 0.8f)
+    }
+
+    @Test fun fullLockAndReverse() {
+        assertEquals(1f, WheelTilt.steer(floatArrayOf(0f, 9f, 3f), 1), 0.001f)
+        assertEquals(-1f, WheelTilt.steer(floatArrayOf(0f, 9f, 3f), 1, invert = true), 0.001f)
+    }
+}
+
+class RumbleTest {
+    @Test fun readsTheStrongerMotor() {
+        assertEquals(200, HidReport.rumble(2, byteArrayOf(200.toByte(), 40)))
+        assertEquals(0, HidReport.rumble(2, byteArrayOf(0, 0)))
+    }
+
+    @Test fun ignoresOtherReports() {
+        assertEquals(null, HidReport.rumble(1, byteArrayOf(9, 9)))
+        assertEquals(null, HidReport.rumble(2, byteArrayOf()))
+    }
+}

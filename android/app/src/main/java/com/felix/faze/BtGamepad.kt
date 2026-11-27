@@ -40,6 +40,10 @@ class BtGamepad(private val context: Context, private val lastHost: () -> String
             }
         }
 
+        override fun onSetReport(device: BluetoothDevice?, type: Byte, id: Byte, data: ByteArray?) = shake(id.toInt(), data)
+
+        override fun onInterruptData(device: BluetoothDevice?, reportId: Byte, data: ByteArray?) = shake(reportId.toInt(), data)
+
         override fun onGetReport(device: BluetoothDevice?, type: Byte, id: Byte, bufferSize: Int) {
             if (device != null) hid?.replyReport(device, type, id, HidReport.build(emptySet(), 0f, 0f, 0f, 0f))
         }
@@ -60,6 +64,15 @@ class BtGamepad(private val context: Context, private val lastHost: () -> String
         }
         bondWatch = r
         try { context.registerReceiver(r, android.content.IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED)) } catch (_: Exception) { bondWatch = null }
+    }
+
+    /** The host phone asked the pad to rumble: shake this phone for a moment, as hard as asked. */
+    private fun shake(id: Int, data: ByteArray?) {
+        val level = HidReport.rumble(id, data ?: return) ?: return
+        try {
+            val v = context.getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+            if (level == 0) v.cancel() else v.vibrate(android.os.VibrationEffect.createOneShot(60, level.coerceIn(1, 255)))
+        } catch (_: Exception) { }
     }
 
     private val listener = object : BluetoothProfile.ServiceListener {
@@ -101,10 +114,19 @@ class BtGamepad(private val context: Context, private val lastHost: () -> String
         paired().firstOrNull { it.address == a }?.let { connect(it) }
     }
 
+    /** Steering from the phone's tilt, -1..1, replaces the left stick's sideways value while it is on. */
+    @Volatile var tilt: Float? = null
+    private var lastState = JSONObject()
+
+    /** Tilt moved: send the last pad state again with the new steering. */
+    fun tilted(v: Float) { tilt = v; send(lastState) }
+
     fun send(state: JSONObject) {
+        lastState = state
+        val t = tilt
         val h = hid ?: return
         val d = target ?: return
-        try { h.sendReport(d, HidReport.ID, HidReport.fromState(state)) } catch (_: Exception) { /* dropped link: the next state heals it */ }
+        try { h.sendReport(d, HidReport.ID, HidReport.fromState(if (t == null) state else JSONObject(state.toString()).put("lx", t.toDouble()))) } catch (_: Exception) { /* dropped link: the next state heals it */ }
     }
 
     fun stop() {
@@ -112,6 +134,6 @@ class BtGamepad(private val context: Context, private val lastHost: () -> String
         try { BluetoothAdapter.getDefaultAdapter()?.closeProfileProxy(BluetoothProfile.HID_DEVICE, hid) } catch (_: Exception) { }
         try { bondWatch?.let { context.unregisterReceiver(it) } } catch (_: Exception) { }
         bondWatch = null
-        hid = null; target = null; host = null; status = "Not started"
+        hid = null; target = null; host = null; tilt = null; status = "Not started"
     }
 }
