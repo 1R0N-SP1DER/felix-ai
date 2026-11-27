@@ -45,6 +45,23 @@ class BtGamepad(private val context: Context, private val lastHost: () -> String
         }
     }
 
+    private var bondWatch: android.content.BroadcastReceiver? = null
+
+    /** Pairing is done in Android's own Bluetooth settings. The moment it finishes, connect to that phone, so nothing has to be picked here. */
+    private fun watchBonds() {
+        if (bondWatch != null) return
+        val r = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: Context, i: android.content.Intent) {
+                if (i.action != BluetoothDevice.ACTION_BOND_STATE_CHANGED) return
+                if (i.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1) != BluetoothDevice.BOND_BONDED) return
+                val d = if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java) else @Suppress("DEPRECATION") i.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                if (d != null && target == null) connect(d)
+            }
+        }
+        bondWatch = r
+        try { context.registerReceiver(r, android.content.IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED)) } catch (_: Exception) { bondWatch = null }
+    }
+
     private val listener = object : BluetoothProfile.ServiceListener {
         override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
             val h = proxy as BluetoothHidDevice
@@ -66,6 +83,7 @@ class BtGamepad(private val context: Context, private val lastHost: () -> String
         val got = try { adapter.getProfileProxy(context, listener, BluetoothProfile.HID_DEVICE) } catch (e: Exception) { false }
         if (!got) { status = "This phone's Bluetooth has no controller (HID device) role."; return status }
         status = "Starting…"
+        watchBonds()
         return null
     }
 
@@ -92,6 +110,8 @@ class BtGamepad(private val context: Context, private val lastHost: () -> String
     fun stop() {
         try { target?.let { hid?.disconnect(it) }; hid?.unregisterApp() } catch (_: Exception) { }
         try { BluetoothAdapter.getDefaultAdapter()?.closeProfileProxy(BluetoothProfile.HID_DEVICE, hid) } catch (_: Exception) { }
+        try { bondWatch?.let { context.unregisterReceiver(it) } } catch (_: Exception) { }
+        bondWatch = null
         hid = null; target = null; host = null; status = "Not started"
     }
 }
