@@ -262,7 +262,7 @@ class FazeCore(private val app: Application) : EngineListener {
     private val a11yShot = A11yShot()
     /** A screenshot the way the control mode says: root screencap or the accessibility screenshot. */
     private fun screenJpeg(): ByteArray = if (rootNow) AndroidScreenCapture().jpeg() else a11yShot.jpeg()
-    private val hands: Hands = ChoosingHands(AndroidHands(app), NoRootHands(AndroidA11y(app)), { settings.controlMode }) { rootCheck.available() }
+    private val hands: Hands = ChoosingHands(AndroidHands(app, RootInputClient.forApk(app.applicationInfo.sourceDir)), NoRootHands(AndroidA11y(app)), { settings.controlMode }) { rootCheck.available() }
     private val screenShare = ScreenShare(
         { screenJpeg() }, hands,
         { app.resources.displayMetrics.let { it.widthPixels to it.heightPixels } },
