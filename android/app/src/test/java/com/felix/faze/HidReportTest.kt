@@ -84,3 +84,15 @@ class TiltTest {
         assertEquals(-1f, Tilt.steer(floatArrayOf(0f, 9f, 3f), 1, invert = true), 0.001f)
     }
 }
+
+class RumbleTest {
+    @Test fun readsTheStrongerMotor() {
+        assertEquals(200, HidReport.rumble(2, byteArrayOf(200.toByte(), 40)))
+        assertEquals(0, HidReport.rumble(2, byteArrayOf(0, 0)))
+    }
+
+    @Test fun ignoresOtherReports() {
+        assertEquals(null, HidReport.rumble(1, byteArrayOf(9, 9)))
+        assertEquals(null, HidReport.rumble(2, byteArrayOf()))
+    }
+}

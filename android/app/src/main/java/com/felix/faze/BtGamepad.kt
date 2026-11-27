@@ -40,6 +40,10 @@ class BtGamepad(private val context: Context, private val lastHost: () -> String
             }
         }
 
+        override fun onSetReport(device: BluetoothDevice?, type: Byte, id: Byte, data: ByteArray?) = shake(id.toInt(), data)
+
+        override fun onInterruptData(device: BluetoothDevice?, reportId: Byte, data: ByteArray?) = shake(reportId.toInt(), data)
+
         override fun onGetReport(device: BluetoothDevice?, type: Byte, id: Byte, bufferSize: Int) {
             if (device != null) hid?.replyReport(device, type, id, HidReport.build(emptySet(), 0f, 0f, 0f, 0f))
         }
@@ -60,6 +64,15 @@ class BtGamepad(private val context: Context, private val lastHost: () -> String
         }
         bondWatch = r
         try { context.registerReceiver(r, android.content.IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED)) } catch (_: Exception) { bondWatch = null }
+    }
+
+    /** The host phone asked the pad to rumble: shake this phone for a moment, as hard as asked. */
+    private fun shake(id: Int, data: ByteArray?) {
+        val level = HidReport.rumble(id, data ?: return) ?: return
+        try {
+            val v = context.getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+            if (level == 0) v.cancel() else v.vibrate(android.os.VibrationEffect.createOneShot(60, level.coerceIn(1, 255)))
+        } catch (_: Exception) { }
     }
 
     private val listener = object : BluetoothProfile.ServiceListener {

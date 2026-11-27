@@ -6,6 +6,7 @@ import org.json.JSONObject
 object HidReport {
     const val ID = 1
     const val SIZE = 9
+    const val RUMBLE_ID = 2
 
     private fun b(vararg v: Int) = ByteArray(v.size) { v[it].toByte() }
 
@@ -22,6 +23,9 @@ object HidReport {
         0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x04, 0x81, 0x02,
         0x05, 0x02, 0x09, 0xC5, 0x09, 0xC4,         // Brake, Accelerator (the triggers)
         0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x02, 0x81, 0x02,
+        0x85, RUMBLE_ID,                            // Output report 2: rumble strength, strong motor then weak motor
+        0x06, 0x00, 0xFF, 0x09, 0x01,
+        0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x02, 0x91, 0x02,
         0xC0,
     )
 
@@ -57,6 +61,10 @@ object HidReport {
         out[7] = (if ("LT" in held) 255 else 0).toByte(); out[8] = (if ("RT" in held) 255 else 0).toByte()
         return out
     }
+
+    /** How hard the host wants this pad to vibrate, 0..255, from an output report; null when the report is not a rumble one. */
+    fun rumble(id: Int, data: ByteArray): Int? =
+        if (id != RUMBLE_ID || data.isEmpty()) null else data.maxOf { it.toInt() and 0xFF }
 
     /** The state the on-screen controller sends (axes lx, ly, rx, ry and a buttons list) as a report. */
     fun fromState(o: JSONObject): ByteArray {
