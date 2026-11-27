@@ -121,6 +121,7 @@ object CameraTurn {
 class AndroidCam(private val context: Context) : CamSource {
     private val thread = HandlerThread("faze-cam").also { it.start() }
     private val handler = Handler(thread.looper)
+    private var turn = 90
     private var device: CameraDevice? = null
     private var openFacing = ""
     private var reader: ImageReader? = null
@@ -135,7 +136,7 @@ class AndroidCam(private val context: Context) : CamSource {
         val mgr = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         val want = if (facing == "back") CameraCharacteristics.LENS_FACING_BACK else CameraCharacteristics.LENS_FACING_FRONT
         val id = mgr.cameraIdList.firstOrNull { mgr.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == want } ?: throw IllegalStateException("This phone has no $facing camera.")
-        val turn = CameraTurn.jpeg(mgr.getCameraCharacteristics(id).get(CameraCharacteristics.SENSOR_ORIENTATION))
+        turn = CameraTurn.jpeg(mgr.getCameraCharacteristics(id).get(CameraCharacteristics.SENSOR_ORIENTATION))
         val opened = CountDownLatch(1)
         var failure: String? = null
         mgr.openCamera(id, object : CameraDevice.StateCallback() {
