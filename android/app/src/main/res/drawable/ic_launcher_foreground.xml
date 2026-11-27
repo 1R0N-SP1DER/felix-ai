@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- the Faze core: a soft glow, the living outline and a bright centre, inside the 66 dp safe circle -->
+    <path android:pathData="M54,54m-26,0a26,26 0,1 1,52 0a26,26 0,1 1,-52 0">
+        <aapt:attr name="android:fillColor" xmlns:aapt="http://schemas.android.com/aapt">
+            <gradient android:type="radial" android:centerX="54" android:centerY="54" android:gradientRadius="26"
+                android:startColor="#665CC8FF" android:endColor="#005CC8FF" />
+        </aapt:attr>
+    </path>
+    <path
+        android:strokeWidth="3.2"
+        android:strokeLineJoin="round"
+        android:pathData="M54,31C64,30 77,40 77,54C77,67 66,78 54,77C41,76 31,67 31,54C31,41 43,32 54,31Z">
+        <aapt:attr name="android:strokeColor" xmlns:aapt="http://schemas.android.com/aapt">
+            <gradient android:type="linear" android:startX="32" android:startY="32" android:endX="76" android:endY="76"
+                android:startColor="#FF5CC8FF" android:endColor="#FF3D7BFF" />
+        </aapt:attr>
+    </path>
+    <path android:fillColor="#FFE9F6FF" android:pathData="M54,54m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0" />
+</vector>

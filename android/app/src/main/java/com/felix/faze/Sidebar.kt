@@ -58,7 +58,7 @@ private fun startOfToday(): Long = Calendar.getInstance().apply {
 
 /**
  * The chats sidebar of the web UI (#sidebar): the brand with its little core, a collapse button, New chat, a search box, the
- * collapsible Tools and Actions sections, chats grouped by age, and Settings with the profile at the bottom.
+ * chats grouped by age, and Settings with the profile at the bottom.
  * Width is min(86% of the screen, 330 dp), as on the page for phones.
  */
 @Composable
@@ -66,11 +66,8 @@ fun ChatDrawer(core: FazeCore, onNew: () -> Unit, onOpen: (String) -> Unit, onSe
     val context = LocalContext.current
     val cfg = LocalConfiguration.current
     var query by remember { mutableStateOf("") }
-    var toolsOpen by remember { mutableStateOf(false) }
-    var actionsOpen by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf<ChatRecord?>(null) }
     var deleting by remember { mutableStateOf<ChatRecord?>(null) }
-    val tools = PermissionPolicy.all()
     val groups = ChatGroups.group(core.chats.toList(), startOfToday(), query)
     val name = core.settings.user.ifEmpty { "You" }
 
@@ -116,19 +113,6 @@ fun ChatDrawer(core: FazeCore, onNew: () -> Unit, onOpen: (String) -> Unit, onSe
                     textStyle = TextStyle(color = Palette.Text, fontSize = 16.sp), cursorBrush = SolidColor(Palette.Accent),
                     modifier = Modifier.fillMaxWidth(),
                 )
-            }
-
-            // Tools and Actions
-            SideSection("Tools", tools.size, toolsOpen, { toolsOpen = !toolsOpen }) {
-                for ((tool, tier) in tools) {
-                    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(tool, color = Palette.Dim, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                        if (tier == Tier.CONFIRM) Text("!", color = Palette.Warn, fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 6.dp))
-                    }
-                }
-            }
-            SideSection("Actions", 3, actionsOpen, { actionsOpen = !actionsOpen }) {
-                QuickActions(listOf("Open app", "Play on YouTube", "Open link")) { soonToast(context) }
             }
 
             // chats
@@ -200,36 +184,7 @@ private fun IconButtonText(glyph: String, onClick: () -> Unit) {
 }
 
 /** A collapsible group in the sidebar (.side-sec): uppercase label, a count badge and a chevron that turns when open. */
-@Composable
-private fun SideSection(label: String, count: Int, open: Boolean, onToggle: () -> Unit, body: @Composable () -> Unit) {
-    val turn by animateFloatAsState(if (open) 90f else 0f, label = "chevron")
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onToggle() }.padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(label.uppercase(), color = Palette.Dim, fontSize = 10.9.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.5.sp, modifier = Modifier.weight(1f))
-            Text(count.toString(), color = Palette.Muted, fontSize = 11.8.sp, modifier = Modifier.clip(RoundedCornerShape(50)).border(1.dp, Palette.Line, RoundedCornerShape(50)).padding(horizontal = 8.dp))
-            Text("▸", color = Palette.Muted, fontSize = 12.8.sp, modifier = Modifier.rotate(turn))
-        }
-        if (open) Column(modifier = Modifier.padding(top = 2.dp, bottom = 6.dp).rise(0, label)) { body() }
-    }
-}
-
 @OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun QuickActions(labels: List<String>, onClick: (String) -> Unit) {
-    FlowRow(modifier = Modifier.padding(start = 6.dp, end = 6.dp, top = 4.dp, bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        for (l in labels) {
-            Text(
-                l, color = Palette.Dim, fontSize = 12.5.sp,
-                modifier = Modifier.clip(RoundedCornerShape(50)).background(Palette.Faint).border(1.dp, Palette.Line, RoundedCornerShape(50)).clickable { onClick(l) }.padding(horizontal = 11.dp, vertical = 5.dp),
-            )
-        }
-    }
-}
-
 @Composable
 private fun ChatRow(chat: ChatRecord, on: Boolean, onOpen: () -> Unit, onRename: () -> Unit, onMove: () -> Unit, onDelete: () -> Unit) {
     Row(
