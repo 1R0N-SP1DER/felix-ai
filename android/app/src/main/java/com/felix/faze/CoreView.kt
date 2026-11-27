@@ -86,11 +86,14 @@ private fun DrawScope.drawCore(m: CoreMorph, accent: Color, partner: Color, redu
 
     // soft light behind the form
     val haloAlpha = (0.20f * glow).coerceIn(0f, 1f)
-    drawRect(
+    // It must fade to nothing before the edge of the canvas, or the square shows as a faint box on screens with high contrast.
+    val haloRadius = min(r * 2.3f, min(size.width, size.height) / 2f)
+    drawCircle(
         brush = Brush.radialGradient(
             0f to accent.copy(alpha = haloAlpha), 0.087f to accent.copy(alpha = haloAlpha), 1f to accent.copy(alpha = 0f),
-            center = Offset(cx, cy), radius = r * 2.3f,
+            center = Offset(cx, cy), radius = haloRadius,
         ),
+        radius = haloRadius, center = Offset(cx, cy),
     )
 
     // orbiting rings and sparks while it works
