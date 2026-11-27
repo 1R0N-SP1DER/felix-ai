@@ -59,9 +59,9 @@ fun saveToGallery(context: Context, bitmap: Bitmap, name: String): Boolean = try
 
 private val INK = listOf(Color(0xFFFF5A5A), Color(0xFFFFD166), Color(0xFF6BE675), Color(0xFF5AB8FF), Color.White)
 
-/** Draw on top of the PC's picture with a finger: marks stay until cleared. The picture below is not touched. */
+/** Draw on the PC with a finger: marks stay until cleared. The marks are drawn only on the PC, so the live picture of the PC shows them once, as one image. [showHere] also draws them on this phone, which doubles them over a live picture. */
 @Composable
-fun DrawLayer(onDone: () -> Unit, modifier: Modifier = Modifier, onDraw: (String, String, Float, Float) -> Unit = { _, _, _, _ -> }) {
+fun DrawLayer(onDone: () -> Unit, modifier: Modifier = Modifier, showHere: Boolean = false, onDraw: (String, String, Float, Float) -> Unit = { _, _, _, _ -> }) {
     val strokes = remember { mutableStateListOf<Pair<Color, List<Offset>>>() }
     var ink by remember { mutableStateOf(INK[0]) }
     var live by remember { mutableStateOf<List<Offset>>(emptyList()) }
@@ -82,8 +82,10 @@ fun DrawLayer(onDone: () -> Unit, modifier: Modifier = Modifier, onDraw: (String
                 val p = Path().apply { moveTo(pts[0].x, pts[0].y); pts.drop(1).forEach { lineTo(it.x, it.y) } }
                 drawPath(p, c, style = Stroke(width = 6.dp.toPx(), cap = StrokeCap.Round))
             }
-            strokes.forEach { draw(it.first, it.second) }
-            draw(ink, live)
+            if (showHere) {
+                strokes.forEach { draw(it.first, it.second) }
+                draw(ink, live)
+            }
         }
         Row(
             Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp).clip(RoundedCornerShape(20.dp)).background(Palette.Glass).border(1.dp, Palette.Glow.copy(alpha = 0.5f), RoundedCornerShape(20.dp)).padding(8.dp),
