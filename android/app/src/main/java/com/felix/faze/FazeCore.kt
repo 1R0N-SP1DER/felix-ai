@@ -260,9 +260,39 @@ class FazeCore(private val app: Application) : EngineListener {
     private val rootCheck = RootCheck({ Su.run("id", 3000).contains("uid=0") })
     private val rootNow: Boolean get() = ControlMode.useRoot(settings.controlMode) { rootCheck.available() }
     private val a11yShot = A11yShot()
+    private val fastInput = RootInputClient.forApk(app.applicationInfo.sourceDir)
+
+    /** Tries each step of showing this phone's screen as it really runs and says what happened. Takes a few seconds: call it off the main thread. */
+    fun screenCheck(): List<String> {
+        val root = rootCheck.available()
+        if (!root) return ScreenCheck.report(ScreenProbe(false, null, "", 0, "", false))
+        var shot: Pair<Int, Double>? = null; var shotError = ""
+        try {
+            val png = Su.runBytes("screencap -p", 15_000)
+            val bmp = android.graphics.BitmapFactory.decodeByteArray(png, 0, png.size)
+            if (bmp == null) shotError = "The picture could not be read (${png.size} bytes)."
+            else {
+                var sum = 0.0; var n = 0
+                val stepX = maxOf(1, bmp.width / 24); val stepY = maxOf(1, bmp.height / 24)
+                var y = 0
+                while (y < bmp.height) { var x = 0; while (x < bmp.width) { val c = bmp.getPixel(x, y); sum += ((c shr 16 and 255) + (c shr 8 and 255) + (c and 255)) / 765.0; n++; x += stepX }; y += stepY }
+                shot = png.size to (if (n == 0) 0.0 else sum / n); bmp.recycle()
+            }
+        } catch (e: Exception) { shotError = e.message ?: "" }
+        var bytes = 0; var videoError = ""
+        try {
+            val src = RootScreenSource(360, 640)
+            val buf = ByteArray(16 * 1024)
+            val reader = Thread { try { while (true) { val n = src.input.read(buf); if (n < 0) break; bytes += n } } catch (_: Exception) { } }.also { it.isDaemon = true; it.start() }
+            reader.join(2500)
+            src.close(); reader.join(500)
+            videoError = src.error()
+        } catch (e: Exception) { videoError = e.message ?: "" }
+        return ScreenCheck.report(ScreenProbe(true, shot, shotError, bytes, videoError, fastInput.call("ping") != null))
+    }
     /** A screenshot the way the control mode says: root screencap or the accessibility screenshot. */
     private fun screenJpeg(): ByteArray = if (rootNow) AndroidScreenCapture().jpeg() else a11yShot.jpeg()
-    private val hands: Hands = ChoosingHands(AndroidHands(app, RootInputClient.forApk(app.applicationInfo.sourceDir)), NoRootHands(AndroidA11y(app)), { settings.controlMode }) { rootCheck.available() }
+    private val hands: Hands = ChoosingHands(AndroidHands(app, fastInput), NoRootHands(AndroidA11y(app)), { settings.controlMode }) { rootCheck.available() }
     private val screenShare = ScreenShare(
         { screenJpeg() }, hands,
         { app.resources.displayMetrics.let { it.widthPixels to it.heightPixels } },

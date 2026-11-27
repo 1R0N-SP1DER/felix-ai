@@ -76,6 +76,15 @@ fun DevicesScreen(core: FazeCore, onBack: () -> Unit, onOpen: (String) -> Unit =
             if (rows.isEmpty()) Text("No devices yet.", color = Palette.Muted, fontSize = 14.sp, modifier = Modifier.padding(vertical = 8.dp))
             for (d in rows) DeviceCard(core, d, onOpen) { core.removeDevice(d.id) }
             SetupCard()
+            SettingsCard("Check screen sharing") {
+                var lines by remember { mutableStateOf<List<String>>(emptyList()) }
+                var busy by remember { mutableStateOf(false) }
+                Hint("Tries a screenshot, live video and fast touch exactly as a computer would, and says which step fails. Takes a few seconds. Leave a normal app open on the phone.")
+                WideButton(if (busy) "Checking…" else "Check now") {
+                    if (!busy) { busy = true; Thread { val r = try { core.screenCheck() } catch (e: Exception) { listOf("The check failed: " + (e.message ?: "")) }; lines = r; busy = false }.start() }
+                }
+                for (l in lines) Text(l, color = Palette.Dim, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+            }
             SettingsCard("Use this phone as a controller") {
                 Hint("Turns this phone into a Bluetooth game controller for another phone, like a normal pad. No app is needed on the other phone.")
                 if (core.btPad.active) Text(core.btPad.status, color = Palette.Accent, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
